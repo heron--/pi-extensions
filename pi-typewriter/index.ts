@@ -138,6 +138,20 @@ function hasBacklog(): boolean {
 	return false;
 }
 
+/**
+ * Force every in-flight "assistant-thinking" entry to fully revealed. Called
+ * the moment the model moves on to text or a tool call: once that happens,
+ * thinking is done for good — there is no provider that resumes thinking
+ * after starting to answer or call a tool — so any remaining backlog in the
+ * (now finalizing) thinking block should snap to complete instead of
+ * continuing to trickle out while the model has already moved on.
+ */
+function completeThinkingReveal(): void {
+	const list = revealLists.get("assistant-thinking");
+	if (!list) return;
+	for (const entry of list) entry.revealed = entry.source.length;
+}
+
 /** Length of the longest common prefix shared by two strings. */
 function sharedPrefixLength(a: string, b: string): number {
 	const max = Math.min(a.length, b.length);
@@ -324,7 +338,12 @@ export default function typewriterExtension(pi: ExtensionAPI): void {
 
 	// Every real delta both feeds typewriterTransform directly AND is a good
 	// moment to make sure the tick loop is running (idempotent if already on).
-	pi.on("message_update", async (_event, ctx) => {
+	pi.on("message_update", async (event, ctx) => {
+		// The model has moved on to text or a tool call: thinking for this
+		// message is done for good, so stop letting it lag behind at the
+		// typewriter's pace and snap it to fully revealed immediately.
+		const eventType = event.assistantMessageEvent.type;
+		if (eventType === "text_start" || eventType === "toolcall_start") completeThinkingReveal();
 		ensureTicking(ctx);
 	});
 
