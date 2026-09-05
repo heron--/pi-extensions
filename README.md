@@ -8,6 +8,9 @@ extension a single typechecker.
 
 ## Extensions
 
+- **[pi-context-footer](pi-context-footer/README.md)** — puts model, thinking,
+  path, context, git, cost, token, and extension status information directly
+  into the prompt editor's top and bottom border rows.
 - **[pi-model-picker](pi-model-picker/README.md)** — takes over `/model` with a
   two-stage picker that sets the model and its thinking level in one flow, with
   type-to-filter, capability icons, and a pricing column.
@@ -65,6 +68,7 @@ pi-extensions/
 │   └── link-extensions.mjs
 ├── lib/                   # shared helpers, imported as "../lib/x.ts"
 │   └── pricing.ts
+├── pi-context-footer/     # inline prompt-border status display
 ├── pi-model-picker/       # an extension
 │   ├── package.json       # has the "pi" key
 │   ├── index.ts
@@ -99,6 +103,7 @@ with no flags loads whatever is linked there, and `/reload` hot-reloads it:
 ```
 .pi/extensions/
 ├── lib                -> ../../lib                 # REQUIRED, see below
+├── pi-context-footer  -> ../../pi-context-footer
 ├── pi-model-picker    -> ../../pi-model-picker
 ├── pi-typewriter      -> ../../pi-typewriter
 └── pi-write-lock      -> ../../pi-write-lock

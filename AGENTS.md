@@ -22,6 +22,7 @@ pi-extensions/
 │                             # discovery locations (by convention, not a list)
 ├── lib/
 │   └── pricing.ts            # shared helper, imported as "../lib/pricing.ts"
+├── pi-context-footer/        # extension: prompt-border session/status display
 ├── pi-model-picker/          # extension: /model-picker, and takes over /model
 │   ├── index.ts
 │   ├── package.json          # name: pi-model-picker
@@ -85,8 +86,8 @@ otherwise a rename can leave a symlink pointing at nothing, and pi errors on
 next launch (this happened during the `pi-throttle-stream` → `pi-typewriter`
 rename).
 
-Currently symlinked, both locations: `pi-model-picker`, `pi-typewriter`,
-`pi-write-lock`, `lib`.
+Currently symlinked, both locations: `pi-context-footer`, `pi-model-picker`,
+`pi-typewriter`, `pi-write-lock`, `lib`.
 
 ## The `lib` symlink rule
 

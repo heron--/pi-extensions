@@ -1,0 +1,20 @@
+{
+  "name": "pi-context-footer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pi extension: a two-line footer focused on session state — directory, git branch, model, a context-usage gauge, and running cost — styled after the frontier-funds theme.",
+  "type": "module",
+  "main": "index.ts",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "keywords": [
+    "pi",
+    "pi-package",
+    "footer",
+    "statusline",
+    "context"
+  ]
+}
