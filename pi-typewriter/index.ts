@@ -88,6 +88,7 @@ const state = {
 	cps: parseCps(process.env.PI_TYPEWRITER_CPS) ?? DEFAULT_CPS,
 };
 
+
 /**
  * When true, the CURRENT assistant message renders at full speed regardless
  * of `state.enabled`/`state.cps`. Set by the Escape hatch; cleared on the
@@ -138,11 +139,61 @@ function hasBacklog(): boolean {
 }
 
 /**
- * Find the RevealState this markdown belongs to (by prefix match against
- * previously seen text for this messageType), or create a new one when
+ * Force every in-flight "assistant-thinking" entry to fully revealed. Called
+ * the moment the model moves on to text or a tool call: once that happens,
+ * thinking is done for good — there is no provider that resumes thinking
+ * after starting to answer or call a tool — so any remaining backlog in the
+ * (now finalizing) thinking block should snap to complete instead of
+ * continuing to trickle out while the model has already moved on.
+ */
+function completeThinkingReveal(): void {
+	const list = revealLists.get("assistant-thinking");
+	if (!list) return;
+	for (const entry of list) entry.revealed = entry.source.length;
+}
+
+/** Length of the longest common prefix shared by two strings. */
+function sharedPrefixLength(a: string, b: string): number {
+	const max = Math.min(a.length, b.length);
+	let i = 0;
+	while (i < max && a[i] === b[i]) i++;
+	return i;
+}
+
+/**
+ * A fuzzy continuation match must cover at least this fraction of whichever
+ * string (old source or new markdown) is shorter. Real resegmentation keeps
+ * nearly all previously streamed text intact, so this stays high — it's
+ * meant to tolerate minor rewrites at the tail, not treat two blocks that
+ * merely start the same way as one continuation.
+ */
+const CONTINUATION_OVERLAP_RATIO = 0.8;
+
+/**
+ * Absolute floor (characters) for a fuzzy continuation match, so the ratio
+ * check alone can't match on a handful of coincidentally shared characters
+ * when both strings are very short.
+ */
+const MIN_CONTINUATION_OVERLAP_FLOOR = 24;
+
+/**
+ * Find the RevealState this markdown belongs to, or create a new one when
  * `markdown` is new streaming content. Returns undefined for content that
  * was never seen while streaming (restored/static messages) — those are
  * passed through untouched, never typed out.
+ *
+ * Matching used to require a strict prefix relationship (old text is an
+ * exact prefix of the new, or vice versa). That holds for plain
+ * character-by-character streaming, but some providers (Claude's extended
+ * thinking in particular) periodically RE-SEGMENT already-streamed thinking
+ * text as more of the underlying reasoning arrives — a later snapshot is
+ * not always a strict superstring of an earlier one, even though most of
+ * the text is unchanged. A strict-prefix miss used to fall through to
+ * creating a fresh entry with `revealed = 0`, discarding all reveal
+ * progress and visibly restarting the typewriter effect from the top —
+ * many times a second during a single thinking stream. Instead, match on
+ * the longest shared prefix and clamp (never reset) `revealed` to it, so
+ * genuine resegmentation keeps most of its progress instead of blanking.
  */
 function findOrCreate(messageType: string, markdown: string, isStreaming: boolean): RevealState | undefined {
 	let list = revealLists.get(messageType);
@@ -151,7 +202,8 @@ function findOrCreate(messageType: string, markdown: string, isStreaming: boolea
 		revealLists.set(messageType, list);
 	}
 
-	// Exact match or growth of a previously seen block: keep its progress.
+	// Exact match or growth of a previously seen block: keep its progress
+	// (fast path — avoids the shared-prefix scan below for the common case).
 	for (const entry of list) {
 		if (markdown === entry.source || markdown.startsWith(entry.source) || entry.source.startsWith(markdown)) {
 			entry.source = markdown;
@@ -159,7 +211,37 @@ function findOrCreate(messageType: string, markdown: string, isStreaming: boolea
 		}
 	}
 
-	if (!isStreaming) return undefined; // static/restored content: never apply the effect
+	// Static/restored content never enters the fuzzy-match path or creates
+	// entries: it must never get matched against (and corrupt) a live
+	// streaming entry just because it happens to share a common opening
+	// phrase ("Let me", "I need to", ...). Only isStreaming content below
+	// this point can match or create.
+	if (!isStreaming) return undefined;
+
+	// No strict prefix relationship: look for a *live* entry with a long
+	// shared prefix — most of both strings, not just a coincidental common
+	// opener — instead of immediately treating this as a new block. Real
+	// resegmentation keeps the vast majority of the previously streamed text
+	// unchanged, so require the overlap to cover most of whichever string is
+	// shorter, plus a floor so tiny snippets never match on ratio alone.
+	let bestEntry: RevealState | undefined;
+	let bestOverlap = 0;
+	for (const entry of list) {
+		const overlap = sharedPrefixLength(markdown, entry.source);
+		const shorterLength = Math.min(markdown.length, entry.source.length);
+		const required = Math.max(MIN_CONTINUATION_OVERLAP_FLOOR, Math.ceil(shorterLength * CONTINUATION_OVERLAP_RATIO));
+		if (overlap >= required && overlap > bestOverlap) {
+			bestOverlap = overlap;
+			bestEntry = entry;
+		}
+	}
+	if (bestEntry) {
+		bestEntry.source = markdown;
+		// Never let revealed exceed the text that's actually still valid at
+		// this position; never reset it to 0 for a real continuation either.
+		bestEntry.revealed = Math.min(bestEntry.revealed, bestOverlap, markdown.length);
+		return bestEntry;
+	}
 
 	// New block (e.g. a second thinking run later in the same message).
 	const entry: RevealState = { source: markdown, revealed: 0, carry: 0, lastTickAt: performance.now() };
@@ -256,7 +338,12 @@ export default function typewriterExtension(pi: ExtensionAPI): void {
 
 	// Every real delta both feeds typewriterTransform directly AND is a good
 	// moment to make sure the tick loop is running (idempotent if already on).
-	pi.on("message_update", async (_event, ctx) => {
+	pi.on("message_update", async (event, ctx) => {
+		// The model has moved on to text or a tool call: thinking for this
+		// message is done for good, so stop letting it lag behind at the
+		// typewriter's pace and snap it to fully revealed immediately.
+		const eventType = event.assistantMessageEvent.type;
+		if (eventType === "text_start" || eventType === "toolcall_start") completeThinkingReveal();
 		ensureTicking(ctx);
 	});
 
