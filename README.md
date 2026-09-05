@@ -6,6 +6,18 @@ Each subdirectory is an independent pi package (its own `package.json` with a
 `pi` key). This root is **not** a pi package — it exists only to give every
 extension a single typechecker.
 
+## Extensions
+
+- **[pi-model-picker](pi-model-picker/README.md)** — takes over `/model` with a
+  two-stage picker that sets the model and its thinking level in one flow, with
+  type-to-filter, capability icons, and a pricing column.
+- **[pi-typewriter](pi-typewriter/README.md)** — reveals streamed assistant
+  output at a steady typewriter pace instead of whatever has arrived so far.
+  Escape skips the effect for the current message.
+- **[pi-write-lock](pi-write-lock/README.md)** — adds a session-scoped
+  read-only mode that removes write tools, injects a read-only instruction, and
+  blocks common mutating shell commands while the lock is on.
+
 ## Typechecking
 
 ```
@@ -49,13 +61,16 @@ pi-extensions/
 ├── tsconfig.json          # shared strict config, globs all extensions
 ├── tsconfig.paths.json    # GENERATED, gitignored
 ├── scripts/
-│   └── sync-pi-types.mjs
+│   ├── sync-pi-types.mjs
+│   └── link-extensions.mjs
 ├── lib/                   # shared helpers, imported as "../lib/x.ts"
 │   └── pricing.ts
-└── pi-model-picker/       # an extension
-    ├── package.json       # has the "pi" key
-    ├── index.ts
-    └── README.md
+├── pi-model-picker/       # an extension
+│   ├── package.json       # has the "pi" key
+│   ├── index.ts
+│   └── README.md
+├── pi-typewriter/         # an extension (same shape)
+└── pi-write-lock/         # an extension (same shape)
 ```
 
 ## Shared helpers (`lib/`)
@@ -85,11 +100,14 @@ with no flags loads whatever is linked there, and `/reload` hot-reloads it:
 .pi/extensions/
 ├── lib                -> ../../lib                 # REQUIRED, see below
 ├── pi-model-picker    -> ../../pi-model-picker
-└── pi-typewriter -> ../../pi-typewriter
+├── pi-typewriter      -> ../../pi-typewriter
+└── pi-write-lock      -> ../../pi-write-lock
 ```
 
 Add or remove links freely — `.pi/` is gitignored, so it never shows up in
-`git status`. For a one-off experiment, drop a plain `.ts` file in there (that
+`git status`. On a fresh checkout, `node scripts/link-extensions.mjs`
+creates all of these (and their global counterparts) idempotently — it
+discovers extensions by convention, so it never needs an edit per extension. For a one-off experiment, drop a plain `.ts` file in there (that
 path is discovered too) and delete it when done; or skip the directory entirely
 and use `pi -e ./pi-thing/index.ts`.
 
