@@ -16,14 +16,21 @@ pi-extensions/
 ├── package.json             # dev toolchain only: typescript, sync-pi-types
 ├── tsconfig.json             # shared strict config, globs **/*.ts
 ├── tsconfig.paths.json       # GENERATED, gitignored — do not hand-edit
-├── scripts/sync-pi-types.mjs # points tsconfig at the LIVE pi install
+├── scripts/
+│   ├── sync-pi-types.mjs    # points tsconfig at the LIVE pi install
+│   └── link-extensions.mjs  # idempotently links every extension into both
+│                             # discovery locations (by convention, not a list)
 ├── lib/
 │   └── pricing.ts            # shared helper, imported as "../lib/pricing.ts"
 ├── pi-model-picker/          # extension: /model-picker, and takes over /model
 │   ├── index.ts
 │   ├── package.json          # name: pi-model-picker
 │   └── README.md
-└── pi-typewriter/            # extension: /typewriter
+├── pi-typewriter/            # extension: /typewriter
+│   ├── index.ts
+│   ├── package.json
+│   └── README.md
+└── pi-write-lock/            # extension: /write-lock
     ├── index.ts
     ├── package.json
     └── README.md
@@ -46,7 +53,13 @@ locations**, and both are required for different reasons:
 **Neither symlink set updates itself.** Renaming an extension directory, or
 adding a new one, means manually fixing both. There is no discovery of nested
 directories and no way to point either location at a whole parent folder of
-extensions — confirmed by testing, not assumed. (A single `package.json` with
+extensions — confirmed by testing, not assumed. The routine fix is
+`node scripts/link-extensions.mjs` — idempotent, discovers extensions by
+convention (any root directory whose `package.json` has a `pi` key, so no
+edit is needed per extension), links `lib` alongside, and is called from the
+dotfiles install script rather than every shell init (a link broken between
+runs stays broken until the next run). The manual checklist below is the
+fallback and the explanation of *why* the script does what it does. (A single `package.json` with
 a `"pi": { "extensions": [...] }` array *can* bundle several extensions behind
 one `pi install`, but that trades away installing/removing them one at a time,
 which is the current preference here — do not switch to it without asking.)
@@ -72,7 +85,8 @@ otherwise a rename can leave a symlink pointing at nothing, and pi errors on
 next launch (this happened during the `pi-throttle-stream` → `pi-typewriter`
 rename).
 
-Currently symlinked, both locations: `pi-model-picker`, `pi-typewriter`, `lib`.
+Currently symlinked, both locations: `pi-model-picker`, `pi-typewriter`,
+`pi-write-lock`, `lib`.
 
 ## The `lib` symlink rule
 
