@@ -21,11 +21,26 @@ const ICON_GAUGE = "\uf1c0";
 const GAUGE_WIDTH = 8;
 const GAUGE_FILLED = "█";
 const GAUGE_EMPTY = "░";
-const BORDER_RULE = "─";
 const GAUGE_WARN_PERCENT = 60;
 const GAUGE_ALERT_PERCENT = 85;
-const SEGMENT_SEPARATOR = "  ";
 const STATUS_KEYS = new Set(["background-tasks"]);
+
+const RULE = "─";
+const RAIL = "│";
+const CORNER_TOP_LEFT = "╭";
+const CORNER_TOP_RIGHT = "╮";
+const CORNER_BOTTOM_LEFT = "╰";
+const CORNER_BOTTOM_RIGHT = "╯";
+const TEE_LEFT = "├";
+const TEE_RIGHT = "┤";
+
+/** Width of the two rails the frame steals from the editor's own render width. */
+const FRAME_WIDTH = 2;
+/** Below this the frame cannot hold a rule plus a segment, so it is skipped. */
+const MIN_FRAMED_WIDTH = 24;
+/** `╭── ` on the left, ` ──╮` on the right. */
+const LEAD_WIDTH = 4;
+const TRAIL_WIDTH = 4;
 
 const THINKING_COLOR: Record<string, ThemeColor> = {
 	minimal: "thinkingMinimal",
@@ -39,6 +54,8 @@ const RAINBOW_COLORS = [
 	"#b281d6", "#d787af", "#febc38", "#e4c00f",
 	"#89d281", "#00afaf", "#178fb9", "#b281d6",
 ];
+
+type Paint = (text: string) => string;
 
 function hexToAnsi(hex: string): string {
 	const value = hex.slice(1);
@@ -135,12 +152,8 @@ function renderGauge(theme: Theme, percent: number | null): string {
 		+ theme.fg("dim", GAUGE_EMPTY.repeat(GAUGE_WIDTH - filledCount));
 }
 
-function joinSegments(theme: Theme, segments: string[]): string {
-	return segments.join(theme.fg("borderAccent", SEGMENT_SEPARATOR));
-}
-
 /** The upper border carries identity and current context health. */
-function buildTopContent(ctx: ExtensionContext, theme: Theme): string {
+function buildTopSegments(ctx: ExtensionContext, theme: Theme): string[] {
 	const model = ctx.model?.name || ctx.model?.id || "no-model";
 	const sessionCwd = ctx.sessionManager.getCwd();
 	const cwd = basename(sessionCwd) || sessionCwd;
@@ -158,18 +171,23 @@ function buildTopContent(ctx: ExtensionContext, theme: Theme): string {
 	segments.push(
 		`${theme.fg(gaugeTone, ICON_GAUGE)} ${renderGauge(theme, percent)} ${theme.fg("text", `${percentLabel}/${formatTokens(contextWindow)}`)}`,
 	);
-	return joinSegments(theme, segments);
+	return segments;
 }
 
 /** The lower border carries branch, calculated cost, token totals, and task state. */
-function buildBottomContent(ctx: ExtensionContext, theme: Theme, footerData: ReadonlyFooterDataProvider | undefined): string {
+function buildBottomSegments(
+	ctx: ExtensionContext,
+	theme: Theme,
+	footerData: ReadonlyFooterDataProvider | undefined,
+): string[] {
 	const totals = computeCostTotals(ctx);
 	const segments: string[] = [];
 	const branch = footerData?.getGitBranch() ?? null;
 	if (branch) segments.push(theme.fg("success", `${ICON_BRANCH} ${branch}`));
 
 	if (totals.hasCost) {
-		segments.push(theme.fg("warning", `${ICON_COST} ${formatDollars(totals.cost).slice(1)}`));
+		const amount = formatDollars(totals.cost).slice(1);
+		segments.push(theme.fg("warning", `${ICON_COST} ${totals.estimated ? "~" : ""}${amount}`));
 	}
 	if (totals.input || totals.output) {
 		segments.push(theme.fg("syntaxNumber", `⇡${formatTokens(totals.input)} ⇣${formatTokens(totals.output)}`));
@@ -178,44 +196,131 @@ function buildBottomContent(ctx: ExtensionContext, theme: Theme, footerData: Rea
 	for (const [key, status] of footerData?.getExtensionStatuses() ?? []) {
 		if (STATUS_KEYS.has(key) && status.trim()) segments.push(status);
 	}
-	return joinSegments(theme, segments);
+	return segments;
+}
+
+const ANSI_PATTERN =
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: terminal escapes are the input here
+	/\x1b\[[0-9;?]*[a-zA-Z]|\x1b[\]_][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+
+function stripAnsi(text: string): string {
+	return text.replace(ANSI_PATTERN, "");
 }
 
 /**
- * Replaces an editor rule with a visible framed border containing status
- * content. This is deliberately not a widget: these labels are part of the
- * prompt's own top and bottom borders.
+ * Pi's editor emits a full-width horizontal rule as its first and last row,
+ * swapping in a `─── ↑ N more ───` marker when the input itself is scrolled.
+ * Those two rows are the ones this extension turns into a framed border.
  */
-function decorateBorderLine(
-	content: string,
+function isRuleRow(line: string, width: number): boolean {
+	const stripped = stripAnsi(line);
+	if (visibleWidth(stripped) !== width) return false;
+	if (!stripped.startsWith(RULE)) return false;
+	return /^─+$/.test(stripped) || /[↑↓]/.test(stripped);
+}
+
+/** Pull `↑ 3 more` out of a scroll marker so the frame can carry it as a segment. */
+function scrollNotice(theme: Theme, line: string): string | null {
+	const match = /([↑↓])\s+(\d+)\s+more/.exec(stripAnsi(line));
+	if (!match) return null;
+	return theme.fg("dim", `${match[1]} ${match[2]} more`);
+}
+
+/**
+ * One horizontal run of the frame: a continuous rule broken only by the
+ * segments handed in. The result is always exactly `width` cells wide, which is
+ * what keeps pi's render-width assertion from tearing the screen down.
+ */
+function buildBorderRow(
 	width: number,
-	position: "top" | "bottom",
-	borderColor: (text: string) => string,
+	paint: Paint,
+	leftCorner: string,
+	rightCorner: string,
+	segments: string[],
 ): string {
 	if (width <= 0) return "";
-	if (!content || width < 8) return borderColor(BORDER_RULE.repeat(width));
+	if (width < FRAME_WIDTH) return paint(RULE.repeat(width));
 
-	const leftRule = position === "top" ? "╭─ " : "╰─ ";
-	const rightRule = position === "top" ? " ─╮" : " ─╯";
-	const fixedWidth = visibleWidth(leftRule) + visibleWidth(rightRule);
-	const availableWidth = Math.max(0, width - fixedWidth);
-	// Avoid passing supplementary-plane Nerd Font glyphs through truncation
-	// when the content already fits: older terminal-width libraries can mangle them.
-	const paddedContent = `${content} `;
-	const body = visibleWidth(paddedContent) <= availableWidth
-		? paddedContent
-		: truncateToWidth(paddedContent, availableWidth, "");
-	const fillWidth = Math.max(0, availableWidth - visibleWidth(body));
-	return `${borderColor(leftRule)}${body}${borderColor(BORDER_RULE.repeat(fillWidth) + rightRule)}`;
+	const present = segments.filter((segment) => segment.trim().length > 0);
+	if (present.length === 0 || width < MIN_FRAMED_WIDTH) {
+		return paint(leftCorner + RULE.repeat(width - FRAME_WIDTH) + rightCorner);
+	}
+
+	const lead = `${paint(leftCorner + RULE.repeat(2))} `;
+	const budget = width - LEAD_WIDTH - TRAIL_WIDTH;
+	let body = present.join(paint(` ${RULE.repeat(2)} `));
+	if (visibleWidth(body) > budget) body = truncateToWidth(body, budget, "…");
+
+	const fill = Math.max(0, width - LEAD_WIDTH - visibleWidth(body) - 2);
+	return `${lead}${body}${paint(` ${RULE.repeat(fill)}${rightCorner}`)}`;
 }
 
-/** Add the requested left rail without changing Pi's cursor marker in the line. */
-function decoratePromptLine(line: string, borderColor: (text: string) => string): string {
-	return `${borderColor("│ ")}${line}`;
+/** Close a rule row pi still owns (a scroll marker) without reflowing it. */
+function railRow(line: string, paint: Paint): string {
+	return `${paint(RAIL)}${line}${paint(RAIL)}`;
 }
 
-function isScrollIndicatorRow(line: string): boolean {
-	return line.includes("↑") || line.includes("↓");
+/**
+ * Draws a continuous border around pi's prompt editor, with status items set
+ * into the top and bottom runs of the rule. This is deliberately not a widget:
+ * the labels are part of the prompt's own frame.
+ *
+ * The editor is rendered two columns narrow so the rails have somewhere to
+ * live. Prefixing full-width rows instead overflows the terminal, and pi
+ * responds to an over-wide row by throwing out of `TuiMainScreen.doRender`.
+ */
+function frameEditor(
+	baseRender: (width: number) => string[],
+	width: number,
+	theme: Theme,
+	paint: Paint,
+	topSegments: string[],
+	bottomSegments: string[],
+): string[] {
+	if (width < MIN_FRAMED_WIDTH) return baseRender(width);
+
+	const innerWidth = width - FRAME_WIDTH;
+	const lines = baseRender(innerWidth);
+	if (lines.length < 2) return lines;
+
+	// Pi appends its autocomplete rows after the editor's lower rule, so the
+	// lower rule is the last rule row rather than the last row.
+	let lowerRuleIndex = lines.length - 1;
+	while (lowerRuleIndex > 0 && !isRuleRow(lines[lowerRuleIndex]!, innerWidth)) lowerRuleIndex--;
+	if (lowerRuleIndex === 0) return lines;
+
+	const hasUpperRule = isRuleRow(lines[0]!, innerWidth);
+	const framed: string[] = [];
+
+	const upperNotice = hasUpperRule ? scrollNotice(theme, lines[0]!) : null;
+	framed.push(
+		buildBorderRow(width, paint, CORNER_TOP_LEFT, CORNER_TOP_RIGHT, [
+			...(upperNotice ? [upperNotice] : []),
+			...topSegments,
+		]),
+	);
+	if (!hasUpperRule) framed.push(railRow(lines[0]!, paint));
+
+	for (let index = 1; index < lowerRuleIndex; index++) framed.push(railRow(lines[index]!, paint));
+
+	const lowerNotice = scrollNotice(theme, lines[lowerRuleIndex]!);
+	const trailing = lines.slice(lowerRuleIndex + 1);
+	if (trailing.length > 0) {
+		// Keep the completion list inside the frame: the lower rule becomes a
+		// divider and the status run moves below the list.
+		framed.push(
+			buildBorderRow(width, paint, TEE_LEFT, TEE_RIGHT, lowerNotice ? [lowerNotice] : []),
+		);
+		for (const line of trailing) framed.push(railRow(line, paint));
+	}
+
+	framed.push(
+		buildBorderRow(width, paint, CORNER_BOTTOM_LEFT, CORNER_BOTTOM_RIGHT, [
+			...(trailing.length === 0 && lowerNotice ? [lowerNotice] : []),
+			...bottomSegments,
+		]),
+	);
+	return framed;
 }
 
 export default function contextFooterExtension(pi: ExtensionAPI): void {
@@ -243,32 +348,21 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 			const baseRender = editor.render.bind(editor);
 
 			editor.render = (width: number): string[] => {
-				const lines = baseRender(width);
-				if (!enabled || lines.length === 0) return lines;
-
-				// Pi appends completion rows after the editor. Leave that transient
-				// surface entirely to Pi rather than mistaking its final row for our
-				// lower prompt border.
-				if (Reflect.get(editor as object, "autocompleteState") !== null) return lines;
+				if (!enabled) return baseRender(width);
 
 				const theme = ctx.ui.theme;
-				const borderColor = (text: string) => theme.fg("borderAccent", text);
-				if (!isScrollIndicatorRow(lines[0]!)) {
-					lines[0] = decorateBorderLine(buildTopContent(ctx, theme), width, "top", borderColor);
-					// Full blank rows add vertical breathing room without touching input.
-					lines.splice(1, 0, "");
-				}
+				// Track the editor's own border color so the frame follows pi's
+				// bash-mode and thinking-level tinting instead of fighting it.
+				const paint: Paint = editor.borderColor ?? ((text: string) => theme.fg("border", text));
 
-				const bottomIndex = lines.length - 1;
-				if (bottomIndex > 0 && !isScrollIndicatorRow(lines[bottomIndex]!)) {
-					for (let index = 2; index < bottomIndex; index++) {
-						lines[index] = decoratePromptLine(lines[index]!, borderColor);
-					}
-					lines[bottomIndex] = decorateBorderLine(buildBottomContent(ctx, theme, footerData), width, "bottom", borderColor);
-					lines.splice(bottomIndex, 0, "");
-				}
-
-				return lines;
+				return frameEditor(
+					baseRender,
+					width,
+					theme,
+					paint,
+					buildTopSegments(ctx, theme),
+					buildBottomSegments(ctx, theme, footerData),
+				);
 			};
 
 			return editor as CustomEditorType;
