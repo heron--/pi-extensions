@@ -1,0 +1,20 @@
+{
+  "name": "pi-model-picker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pi extension: replaces /model with a grouped two-stage picker that sets the model and its reasoning level together, with pricing estimates.",
+  "type": "module",
+  "main": "index.ts",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "keywords": [
+    "model",
+    "pi",
+    "pi-package",
+    "picker",
+    "reasoning"
+  ]
+}

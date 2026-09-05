@@ -1,0 +1,20 @@
+{
+	"name": "pi-extensions-workspace",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Dev-only workspace for pi extensions: shared TypeScript toolchain. Not a pi package itself.",
+	"type": "module",
+	"scripts": {
+		"sync-types": "node scripts/sync-pi-types.mjs",
+		"typecheck": "npm run sync-types && tsc -p tsconfig.json",
+		"check": "npm run typecheck",
+		"watch": "npm run sync-types && tsc -p tsconfig.json --watch --preserveWatchOutput",
+		"postinstall": "node scripts/sync-pi-types.mjs || true"
+	},
+	"devDependencies": {
+		"typescript": "^5.9.3"
+	},
+	"dependencies": {
+		"@pydantic/genai-prices": "^0.1.6"
+	}
+}
