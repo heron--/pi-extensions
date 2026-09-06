@@ -63,7 +63,8 @@ those double-width, which would pull the hanging indents out of alignment.
 The text is italic against the theme's muted grey rather than the main text
 color, so it reads as an aside and not as something the agent just said.
 
-Two sentences, then a `Next:` line for what is wanted from you and what is
+The recap carries the work and where it stands; the `Next:` line is only what
+happens after — what is wanted from you and what is
 coming up. Set in italic against the theme's muted grey rather than the main
 text color, so it reads as an aside and not as something the agent just said.
 The clock marks the recap once, at the start.
