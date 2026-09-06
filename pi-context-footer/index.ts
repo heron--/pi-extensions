@@ -57,6 +57,21 @@ const RAINBOW_COLORS = [
 
 type Paint = (text: string) => string;
 
+/**
+ * How many blank rail rows separate the input from the rule.
+ *
+ * A terminal row is atomic, so "half" is one row rather than two rather than a
+ * shorter row. It buys air below the input, where new lines arrive and the
+ * cursor rests, and lets the first line sit against the upper run.
+ *
+ * Hugging the rule to a cell edge with `▔`/`▁` would free vertical space
+ * without spending a row, but box-drawing `─` is inked at text height, which is
+ * what lets a status item read as a break in the line. Move the ink to the top
+ * of the cell and the label no longer interrupts the rule, it sits beneath it.
+ */
+type Padding = "full" | "half" | "none";
+const PADDINGS = new Set<Padding>(["full", "half", "none"]);
+
 function hexToAnsi(hex: string): string {
 	const value = hex.slice(1);
 	const red = Number.parseInt(value.slice(0, 2), 16);
@@ -277,6 +292,7 @@ function frameEditor(
 	width: number,
 	theme: Theme,
 	paint: Paint,
+	padding: Padding,
 	topSegments: string[],
 	bottomSegments: string[],
 ): string[] {
@@ -304,11 +320,11 @@ function frameEditor(
 		]),
 	);
 
-	framed.push(gutter);
+	if (padding === "full") framed.push(gutter);
 	for (let index = hasUpperRule ? 1 : 0; index < lowerRuleIndex; index++) {
 		framed.push(railRow(lines[index]!, paint));
 	}
-	framed.push(gutter);
+	if (padding !== "none") framed.push(gutter);
 
 	const lowerNotice = scrollNotice(theme, lines[lowerRuleIndex]!);
 	const trailing = lines.slice(lowerRuleIndex + 1);
@@ -332,6 +348,7 @@ function frameEditor(
 
 export default function contextFooterExtension(pi: ExtensionAPI): void {
 	let enabled = true;
+	let padding: Padding = "half";
 	let footerData: ReadonlyFooterDataProvider | undefined;
 
 	function install(ctx: ExtensionContext): void {
@@ -367,6 +384,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 					width,
 					theme,
 					paint,
+					padding,
 					buildTopSegments(ctx, theme),
 					buildBottomSegments(ctx, theme, footerData),
 				);
@@ -381,9 +399,26 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("context-footer", {
-		description: "Toggle the context-footer border decoration",
+		description: "Toggle the context-footer border, or set its padding",
 		handler: async (args, ctx) => {
 			const arg = (args ?? "").trim().toLowerCase();
+
+			const padMatch = /^pad(?:ding)?(?:\s+(\S+))?$/.exec(arg);
+			if (padMatch) {
+				const requested = padMatch[1];
+				if (requested === undefined) {
+					ctx.ui.notify(`Context footer padding is ${padding}`, "info");
+					return;
+				}
+				if (!PADDINGS.has(requested as Padding)) {
+					ctx.ui.notify(`Padding must be one of: ${[...PADDINGS].join(", ")}`, "warning");
+					return;
+				}
+				padding = requested as Padding;
+				ctx.ui.notify(`Context footer padding set to ${padding}`, "info");
+				return;
+			}
+
 			const nextEnabled = arg === "off" ? false : arg === "on" ? true : !enabled;
 			if (nextEnabled === enabled) {
 				ctx.ui.notify(`Context footer is already ${enabled ? "on" : "off"}`, "info");

@@ -19,8 +19,26 @@ interrupted only where a status item sits in the rule:
 ╰──  devin.marsh/context-footer ──  $0.04 ── ⇡47k ⇣5 ── bg 1 running · Shift↓ ───╯
 ```
 
-A blank rail row sits above and below the input so the text is not cramped
-against the rule.
+## Padding
+
+A blank rail row separates the input from the rule so the text is not cramped
+against it. `half` — the default — spends one row rather than two, putting the
+air below the input where new lines arrive and the cursor rests, and letting
+the first line sit against the upper run.
+
+```text
+/context-footer pad         report the current padding
+/context-footer pad full    a blank row above and below the input
+/context-footer pad half    one blank row, below the input
+/context-footer pad none    no blank row
+```
+
+A terminal row is atomic, so `half` means one row, not a shorter row. Hugging
+the rule to a cell edge with `▔`/`▁` would free vertical space without spending
+a row, but box-drawing `─` is inked at text height, and that is exactly what
+lets a status item read as a break in the line — move the ink to the top of the
+cell and the label no longer interrupts the rule, it sits beneath it. So the
+number of rows is the only lever.
 
 The **top run** carries identity and context health: model, thinking level,
 working directory, context gauge and window. The **bottom run** carries the
@@ -80,9 +98,10 @@ The extension activates automatically when it is linked into a pi extension
 discovery directory.
 
 ```text
-/context-footer       toggle the decoration
-/context-footer on    enable it
-/context-footer off   disable it
+/context-footer            toggle the decoration
+/context-footer on         enable it
+/context-footer off        disable it
+/context-footer pad half   set the padding (see above)
 ```
 
 `off` leaves the editor wrapper installed but inert. This avoids removing a
