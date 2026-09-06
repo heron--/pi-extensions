@@ -60,6 +60,15 @@ const RAINBOW_COLORS = [
 type Paint = (text: string) => string;
 
 /**
+ * Which end of a run the items sit at.
+ *
+ * The top run is left-aligned and the bottom run right-aligned, so the long
+ * unbroken stretch of each rule falls on the opposite corner from the other's.
+ * That reads as more room around the input than packing both runs left does.
+ */
+type Align = "left" | "right";
+
+/**
  * Whether a blank rail row separates the input from the rule.
  *
  * A terminal row is atomic, so this is a row or nothing. Hugging the rule to a
@@ -264,6 +273,7 @@ function buildBorderRow(
 	paint: Paint,
 	leftCorner: string,
 	rightCorner: string,
+	align: Align,
 	segments: string[],
 ): string {
 	const present = segments.filter((segment) => segment.trim().length > 0);
@@ -275,9 +285,11 @@ function buildBorderRow(
 	let body = present.join(paint(` ${RULE.repeat(RULE_RUN)} `));
 	if (visibleWidth(body) > budget) body = truncateToWidth(body, budget, "…");
 
-	// The trailing rule run stretches to fill whatever the items left over.
+	// One rule run is fixed at the item end; the other absorbs the remainder.
 	const fill = width - LEAD_WIDTH - visibleWidth(body) - (TRAIL_WIDTH - RULE_RUN);
-	return `${paint(leftCorner + RULE.repeat(RULE_RUN))} ${body}${paint(` ${RULE.repeat(fill)}${rightCorner}`)}`;
+	const leadRun = align === "left" ? RULE_RUN : fill;
+	const trailRun = align === "left" ? fill : RULE_RUN;
+	return `${paint(leftCorner + RULE.repeat(leadRun))} ${body}${paint(` ${RULE.repeat(trailRun)}${rightCorner}`)}`;
 }
 
 /** Close a rule row pi still owns (a scroll marker) without reflowing it. */
@@ -319,7 +331,7 @@ function frameEditor(
 
 	const upperNotice = hasUpperRule ? scrollNotice(theme, lines[0]!) : null;
 	framed.push(
-		buildBorderRow(width, paint, CORNER_TOP_LEFT, CORNER_TOP_RIGHT, [
+		buildBorderRow(width, paint, CORNER_TOP_LEFT, CORNER_TOP_RIGHT, "left", [
 			...(upperNotice ? [upperNotice] : []),
 			...topSegments,
 		]),
@@ -337,13 +349,13 @@ function frameEditor(
 		// Keep the completion list inside the frame: the lower rule becomes a
 		// divider and the status run moves below the list.
 		framed.push(
-			buildBorderRow(width, paint, TEE_LEFT, TEE_RIGHT, lowerNotice ? [lowerNotice] : []),
+			buildBorderRow(width, paint, TEE_LEFT, TEE_RIGHT, "right", lowerNotice ? [lowerNotice] : []),
 		);
 		for (const line of trailing) framed.push(railRow(line, paint));
 	}
 
 	framed.push(
-		buildBorderRow(width, paint, CORNER_BOTTOM_LEFT, CORNER_BOTTOM_RIGHT, [
+		buildBorderRow(width, paint, CORNER_BOTTOM_LEFT, CORNER_BOTTOM_RIGHT, "right", [
 			...(trailing.length === 0 && lowerNotice ? [lowerNotice] : []),
 			...bottomSegments,
 		]),

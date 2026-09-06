@@ -16,7 +16,7 @@ interrupted only where a status item sits in the rule:
 │                                                                                 │
 │ what shape should the border take?                                              │
 │                                                                                 │
-╰──  devin.marsh/context-footer ──  $0.04 ── ⇡47k ⇣5 ── bg 1 running · Shift↓ ───╯
+╰────────────  devin.marsh/context-footer ──  $0.04 ── ⇡47k ⇣5 ── bg 1 running ──╯
 ```
 
 ## Padding
@@ -43,8 +43,11 @@ token totals, and background-task state when active.
 
 Items are separated by short rule segments, so the border reads as continuous
 line broken by labels rather than as a line with a separate status bar attached.
-When a run is wider than the terminal, its content is truncated with `…` and the
-frame still closes.
+The top run is left-aligned and the bottom run right-aligned, so the long
+unbroken stretch of each rule falls on the opposite corner from the other's —
+which gives the input more apparent room than packing both runs left. When a
+run is wider than the terminal, its content is truncated with `…` and the frame
+still closes.
 
 ### Cases the frame absorbs
 
