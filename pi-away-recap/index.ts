@@ -6,17 +6,32 @@ import type {
 	Theme,
 } from "@earendil-works/pi-coding-agent";
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 
-const WIDGET_KEY = "away-recap";
 /**
  * Nerd Font's filled and hollow circle: what happened, and what has not
  * happened yet. A designed pair from one family, so they stay the same optical
  * size as each other whatever the terminal does with them.
+ *
+ * Overridable, and the override persists — see `loadConfig`. Pick a pair from
+ * one Nerd Font family for the same reason: two glyphs from different sets
+ * rarely agree on optical size.
  */
-const MARKER_RECAP = "\uf111";
-const MARKER_NEXT = "\uf10c";
+const DEFAULT_MARKER_RECAP = "\uf111";
+const DEFAULT_MARKER_NEXT = "\uf10c";
+
+/** Everything `loadConfig` restores and `saveConfig` writes back. */
+const config = {
+	markers: { recap: DEFAULT_MARKER_RECAP, next: DEFAULT_MARKER_NEXT },
+	style: "frame" as Style,
+};
+
+/** Custom entry type: the key pi renders this extension's transcript entries by. */
+const ENTRY_TYPE = "away-recap";
 const LABEL_RECAP = "Recap";
 const LABEL_NEXT = "Next:";
 
@@ -47,6 +62,66 @@ const NEXT_MAX_CHARS = 100;
 /** `frame` draws the box; `clean` sets the same content flush left. */
 type Style = "frame" | "clean";
 const STYLES = new Set<Style>(["frame", "clean"]);
+
+/**
+ * Where the marker override lives.
+ *
+ * Not under `<agent dir>/extensions/pi-away-recap/`, the convention
+ * `pi-tool-display` uses, because this extension is installed by symlink: that
+ * path resolves into the git checkout, and config would land in the repo.
+ */
+function configFile(): string {
+	const configured = process.env.PI_AGENT_DIR;
+	const agentDir = configured
+		? configured.replace(/^~(?=$|\/)/, homedir())
+		: join(homedir(), ".pi", "agent");
+	return join(agentDir, "pi-away-recap", "config.json");
+}
+
+interface StoredConfig {
+	markers?: { recap?: string; next?: string };
+	style?: string;
+}
+
+function loadConfig(): void {
+	try {
+		const stored = JSON.parse(readFileSync(configFile(), "utf8")) as StoredConfig;
+		const recap = stored.markers?.recap;
+		const next = stored.markers?.next;
+		if (typeof recap === "string" && recap) config.markers.recap = recap;
+		if (typeof next === "string" && next) config.markers.next = next;
+		if (typeof stored.style === "string" && STYLES.has(stored.style as Style)) config.style = stored.style as Style;
+	} catch {
+		// No config, or an unreadable one. Defaults are not worth an error.
+	}
+}
+
+function saveConfig(): boolean {
+	try {
+		const file = configFile();
+		mkdirSync(dirname(file), { recursive: true });
+		const body: StoredConfig = {
+			markers: { recap: config.markers.recap, next: config.markers.next },
+			style: config.style,
+		};
+		writeFileSync(file, `${JSON.stringify(body, null, 2)}\n`, "utf8");
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/** A literal glyph, or a codepoint written `U+F11EA` / `f11ea`. */
+function parseGlyph(token: string): string | null {
+	const hex = /^(?:u\+)?([0-9a-f]{2,6})$/i.exec(token);
+	if (hex) {
+		const code = Number.parseInt(hex[1]!, 16);
+		if (code > 0 && code <= 0x10ffff) return String.fromCodePoint(code);
+		return null;
+	}
+	const first = [...token][0];
+	return first ?? null;
+}
 
 const MONTHS = [
 	"January", "February", "March", "April", "May", "June",
@@ -333,7 +408,7 @@ function renderFrame(theme: Theme, recap: RecapResult, width: number): string[] 
 		return filled(`${rule(RAIL)}${pad}${text}${gap}${pad}${rule(RAIL)}`);
 	};
 
-	const title = ` ${label(`${MARKER_RECAP} ${LABEL_RECAP}`)} `;
+	const title = ` ${label(`${config.markers.recap} ${LABEL_RECAP}`)} `;
 	const titleFill = RULE.repeat(Math.max(0, inner - visibleWidth(title)));
 	const rows = [filled(`${rule(CORNER_TL)}${title}${rule(`${titleFill}${CORNER_TR}`)}`), row("")];
 
@@ -345,11 +420,11 @@ function renderFrame(theme: Theme, recap: RecapResult, width: number): string[] 
 
 		// Marker and label sit flush left; the block's wrapped lines hang
 		// under where its own text began.
-		const head = `${MARKER_NEXT} ${LABEL_NEXT} `;
+		const head = `${config.markers.next} ${LABEL_NEXT} `;
 		const indent = " ".repeat(visibleWidth(head));
 		for (const [index, line] of wrap(next, Math.max(1, content - visibleWidth(head))).entries()) {
 			rows.push(
-				row(index === 0 ? `${label(`${MARKER_NEXT} ${LABEL_NEXT}`)} ${prose(line)}` : `${indent}${prose(line)}`),
+				row(index === 0 ? `${label(`${config.markers.next} ${LABEL_NEXT}`)} ${prose(line)}` : `${indent}${prose(line)}`),
 			);
 		}
 	}
@@ -389,8 +464,8 @@ function renderClean(theme: Theme, recap: RecapResult, width: number): string[] 
 	};
 
 	return [
-		...block(MARKER_RECAP, `${LABEL_RECAP}:`, body),
-		...(next ? ["", ...block(MARKER_NEXT, LABEL_NEXT, next)] : []),
+		...block(config.markers.recap, `${LABEL_RECAP}:`, body),
+		...(next ? ["", ...block(config.markers.next, LABEL_NEXT, next)] : []),
 		theme.italic(theme.fg("dim", `generated by ${recap.modelName} at ${recap.stamp}`)),
 	];
 }
@@ -399,7 +474,6 @@ export default function awayRecapExtension(pi: ExtensionAPI): void {
 	let enabled = true;
 	let installed = false;
 	let thresholdMinutes = DEFAULT_THRESHOLD_MINUTES;
-	let style: Style = "frame";
 	let rotationIndex = 0;
 	let generating = false;
 	/** Keystrokes are the only presence signal pi hands an extension. */
@@ -448,31 +522,17 @@ export default function awayRecapExtension(pi: ExtensionAPI): void {
 		}
 	}
 
-	function showRecap(ctx: ExtensionContext, recap: RecapResult): void {
-		ctx.ui.setWidget(
-			WIDGET_KEY,
-			(_tui: TUI, theme: Theme): Component => ({
-				invalidate() {},
-				render(width: number): string[] {
-					// Read at render time, so switching style redraws what is already up.
-					return style === "frame" ? renderFrame(theme, recap, width) : renderClean(theme, recap, width);
-				},
-			}),
-			{ placement: "aboveEditor" },
-		);
-	}
-
 	/**
-	 * A recap stays up until the next one replaces it, or until it is dismissed.
+	 * Append the recap to the session, rather than pinning it above the prompt.
 	 *
-	 * Claude Code appends its recap to the transcript, so it scrolls up into
-	 * history like any other message. pi gives extensions no way to write to the
-	 * transcript — only widgets, which are pinned rather than scrolled — so
-	 * clearing it when the next turn starts is the one option that loses the
-	 * text outright. Better to leave it and let it be replaced.
+	 * A widget is fixed to the bottom of the screen: it either sits there
+	 * permanently or has to be cleared, and neither is what a message does. A
+	 * custom entry takes its place in the transcript and scrolls away with
+	 * everything else, and `CustomEntry` is explicitly outside LLM context, so
+	 * the agent is never handed a recap of itself.
 	 */
-	function clearRecap(ctx: ExtensionContext): void {
-		ctx.ui.setWidget(WIDGET_KEY, undefined);
+	function showRecap(recap: RecapResult): void {
+		pi.appendEntry<RecapResult>(ENTRY_TYPE, recap);
 	}
 
 	/** Resolves true when a recap was actually produced and shown. */
@@ -482,7 +542,7 @@ export default function awayRecapExtension(pi: ExtensionAPI): void {
 		try {
 			const recap = await generateRecap(ctx, since);
 			if (recap) {
-				showRecap(ctx, recap);
+				showRecap(recap);
 				return true;
 			}
 			if (announce) ctx.ui.notify("Nothing happened worth recapping", "info");
@@ -568,6 +628,21 @@ export default function awayRecapExtension(pi: ExtensionAPI): void {
 		});
 	}
 
+	loadConfig();
+
+	pi.registerEntryRenderer<RecapResult>(ENTRY_TYPE, (entry, _options, theme): Component | undefined => {
+		const recap = entry.data;
+		if (!recap?.text) return undefined;
+		return {
+			invalidate() {},
+			render(width: number): string[] {
+				// Read at render time, so a style change redraws recaps already in
+				// the transcript rather than only the next one.
+				return config.style === "frame" ? renderFrame(theme, recap, width) : renderClean(theme, recap, width);
+			},
+		};
+	});
+
 	pi.on("session_start", async (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
 		install(ctx);
@@ -583,26 +658,59 @@ export default function awayRecapExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("away-recap", {
-		description: "Recap what happened while you were away (on|off|now|clear|style|after <minutes>|models)",
+		description: "Recap what happened while you were away (on|off|now|style|icons|after <minutes>|models)",
 		handler: async (args, ctx) => {
 			const [verb, value, ...extra] = (args ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
 
+			if (verb === "icons" || verb === "markers") {
+				if (value === undefined) {
+					ctx.ui.notify(
+						`Icons: ${config.markers.recap} recap, ${config.markers.next} next. Set with /away-recap icons <recap> <next>`,
+						"info",
+					);
+					return;
+				}
+				if (value === "reset") {
+					config.markers.recap = DEFAULT_MARKER_RECAP;
+					config.markers.next = DEFAULT_MARKER_NEXT;
+					ctx.ui.notify(saveConfig() ? "Icons reset" : "Icons reset, but could not be saved", "warning");
+					return;
+				}
+
+				const recapGlyph = parseGlyph(value);
+				const nextGlyph = extra[0] === undefined ? null : parseGlyph(extra[0]);
+				if (!recapGlyph || !nextGlyph || extra.length > 1) {
+					ctx.ui.notify("Usage: /away-recap icons <recap> <next>  (a glyph, or U+F11EA)", "warning");
+					return;
+				}
+
+				config.markers.recap = recapGlyph;
+				config.markers.next = nextGlyph;
+				const saved = saveConfig();
+				ctx.ui.notify(
+					saved
+						? `Icons set to ${config.markers.recap} and ${config.markers.next}, saved`
+						: `Icons set to ${config.markers.recap} and ${config.markers.next}, but could not be saved`,
+					saved ? "info" : "warning",
+				);
+				return;
+			}
+
 			if (verb === "style") {
 				if (value === undefined) {
-					ctx.ui.notify(`Recap style is ${style}`, "info");
+					ctx.ui.notify(`Recap style is ${config.style}`, "info");
 					return;
 				}
 				if (extra.length > 0 || !STYLES.has(value as Style)) {
 					ctx.ui.notify(`Style must be one of: ${[...STYLES].join(", ")}`, "warning");
 					return;
 				}
-				style = value as Style;
-				ctx.ui.notify(`Recap style set to ${style}`, "info");
-				return;
-			}
-
-			if (verb === "clear" || verb === "dismiss") {
-				clearRecap(ctx);
+				config.style = value as Style;
+				const saved = saveConfig();
+				ctx.ui.notify(
+					saved ? `Recap style set to ${config.style}, saved` : `Recap style set to ${config.style}, but could not be saved`,
+					saved ? "info" : "warning",
+				);
 				return;
 			}
 
@@ -634,7 +742,10 @@ export default function awayRecapExtension(pi: ExtensionAPI): void {
 			}
 
 			if (value !== undefined || (verb !== undefined && verb !== "on" && verb !== "off")) {
-				ctx.ui.notify("Usage: /away-recap [on|off|now|clear|style frame|clean|after <minutes>|models]", "warning");
+				ctx.ui.notify(
+					"Usage: /away-recap [on|off|now|style frame|clean|icons <recap> <next>|after <minutes>|models]",
+					"warning",
+				);
 				return;
 			}
 
@@ -645,7 +756,6 @@ export default function awayRecapExtension(pi: ExtensionAPI): void {
 			}
 
 			enabled = nextEnabled;
-			if (!enabled) clearRecap(ctx);
 			ctx.ui.notify(
 				enabled ? `Away recap enabled (after ${formatMinutes(thresholdMinutes)})` : "Away recap disabled",
 				"info",
