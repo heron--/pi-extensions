@@ -22,6 +22,7 @@ pi-extensions/
 │                             # discovery locations (by convention, not a list)
 ├── lib/
 │   └── pricing.ts            # shared helper, imported as "../lib/pricing.ts"
+├── pi-context-footer/        # extension: continuous prompt border + status items
 ├── pi-model-picker/          # extension: /model-picker, and takes over /model
 │   ├── index.ts
 │   ├── package.json          # name: pi-model-picker
@@ -85,8 +86,8 @@ otherwise a rename can leave a symlink pointing at nothing, and pi errors on
 next launch (this happened during the `pi-throttle-stream` → `pi-typewriter`
 rename).
 
-Currently symlinked, both locations: `pi-model-picker`, `pi-typewriter`,
-`pi-write-lock`, `lib`.
+Currently symlinked, both locations: `pi-context-footer`, `pi-model-picker`,
+`pi-typewriter`, `pi-write-lock`, `lib`.
 
 ## The `lib` symlink rule
 
@@ -165,6 +166,39 @@ If `/model` ever silently stops opening the picker again: check
 `setEditorComponent`, and confirm interactively — screen content, not string
 guesses — that the wrapper is the one actually installed.
 
+## Decorating the editor: pi's render-width assertion
+
+`TuiMainScreen.doRender` throws if any rendered row's `visibleWidth()` exceeds
+the terminal width — it tears the whole TUI down with
+`Rendered line N exceeds terminal width`, which reads as "pi crashes on
+opening". An earlier `pi-context-footer` did exactly that by prefixing a `│ `
+rail onto the editor's content rows.
+
+The reason it is a trap: `CustomEditor.render(width)` returns rows that are
+**already exactly `width` cells wide** — a full-width rule, then
+`leftPad + text + pad + rightPad` per line, then a second full-width rule, then
+the autocomplete rows. Default `editorPaddingX` is `0`, so there is no slack to
+borrow. Anything added to a row has to be paid for.
+
+So a wrapper that wants a border does not prefix — it **renders the inner editor
+narrow** (`baseRender(width - 2)`) and wraps each returned row. Other things
+worth knowing before touching that seam:
+
+- The lower rule is **not** the last row. Pi appends completion rows after it
+  when autocomplete is open, so find it by scanning backwards for a rule row
+  rather than taking `lines.length - 1`.
+- The cursor position is recovered by `indexOf(CURSOR_MARKER)` plus
+  `visibleWidth()` of everything before it, so prefixing a rail shifts the
+  hardware cursor correctly and needs no extra bookkeeping. `visibleWidth()`
+  does understand the marker's APC escape, so it does not distort widths.
+- Paint the border with `editor.borderColor`, not a fixed theme color. Pi
+  reassigns that property on the *active* editor to signal bash mode and
+  thinking level (`updateEditorBorderColor`), so reading it per render keeps a
+  custom frame in step instead of overriding pi's own signalling.
+- `autocompleteState` and the row layout are private; do not reach for them.
+  Structure detection off the returned rows is enough and does not break when
+  pi's internals move.
+
 ## Typechecking
 
 ```bash
@@ -191,3 +225,9 @@ to be wrong under that standard: symlinks resolving `../lib/` (they don't),
 composer discards the result), and a builtin-vs-extension check that read the
 wrong reference string. Prefer the same standard for new claims: launch pi
 for real, type the thing, look at the screen.
+
+A `pty`-plus-`pyte` harness is the cheap way to do that: fork pi under a pty at
+a fixed winsize, feed it keystrokes, and read the decoded screen back. It is
+what confirmed the prompt frame closes at 100, 60, 40, and 26 columns, steps
+aside at 22, survives an open completion list and a scrolled input, and toggles
+off and on — none of which is visible from reading pi's source.

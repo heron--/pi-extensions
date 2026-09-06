@@ -9,9 +9,9 @@
  * price dataset that ships bundled (no network call at render time).
  *
  * These are ESTIMATES. They're matched by model id against public list prices,
- * so they ignore your gateway's actual contract, negotiated discounts, cache
- * rates, and batch pricing. Good enough to compare models while working; not a
- * billing source. Estimated values are marked with a leading "~" by
+ * so they ignore your gateway's actual contract, negotiated discounts, and batch
+ * pricing. Where public model data includes cache rates, session-cost calculation
+ * uses them. Estimated values are marked with a leading "~" by
  * formatPricing() — keep that marker in any UI you build.
  *
  * Usage:
@@ -25,7 +25,9 @@
  * missing, estimates degrade to null rather than throwing.
  */
 
+import { realpathSync } from "node:fs";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 
 /** Where a price came from. "pi" is authoritative; "estimate" is a guess. */
 export type PriceSource = "pi" | "estimate";
@@ -61,7 +63,25 @@ type CalcPrice = (
 	usage: Record<string, number | undefined>,
 	modelId: string,
 	options?: { providerId?: string },
-) => { input_price?: number; output_price?: number; model?: { id?: string } } | null;
+) => {
+	input_price?: number;
+	output_price?: number;
+	total_price?: number;
+	model?: { id?: string };
+} | null;
+
+/** Usage fields pi records for one completed assistant response. */
+export interface PriceableUsage {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+}
+
+export interface UsageCostEstimate {
+	total: number;
+	matchedId: string;
+}
 
 let calcPriceFn: CalcPrice | null | undefined;
 
@@ -75,7 +95,9 @@ let calcPriceFn: CalcPrice | null | undefined;
 function getCalcPrice(): CalcPrice | null {
 	if (calcPriceFn !== undefined) return calcPriceFn;
 	try {
-		const require = createRequire(import.meta.url);
+		// Extensions can be discovered through ~/.pi symlinks. Resolve the real
+		// shared-library path first so Node can find this repository's dependency.
+		const require = createRequire(realpathSync(fileURLToPath(import.meta.url)));
 		const mod = require("@pydantic/genai-prices") as { calcPrice?: CalcPrice };
 		calcPriceFn = typeof mod.calcPrice === "function" ? mod.calcPrice : null;
 	} catch {
@@ -159,6 +181,38 @@ export function estimatePricing(modelId: string): Pricing | null {
 
 	estimateCache.set(modelId, result);
 	return result;
+}
+
+/**
+ * Estimate one response using the same bundled price dataset as the picker.
+ *
+ * pi stores uncached input separately from cache reads and writes. The price
+ * calculator expects `input_tokens` to include all three, then applies cache
+ * rates to the corresponding portions. Calls must stay per response because
+ * long-context price tiers apply per request, not per session.
+ */
+export function estimateUsageCost(modelId: string, usage: PriceableUsage): UsageCostEstimate | null {
+	const calcPrice = getCalcPrice();
+	if (!calcPrice) return null;
+
+	const inputTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+	if (!inputTokens && !usage.output) return { total: 0, matchedId: modelId };
+
+	for (const candidate of idCandidates(modelId)) {
+		try {
+			const result = calcPrice({
+				input_tokens: inputTokens,
+				output_tokens: usage.output,
+				cache_read_tokens: usage.cacheRead,
+				cache_write_tokens: usage.cacheWrite,
+			}, candidate);
+			if (typeof result?.total_price !== "number" || !Number.isFinite(result.total_price)) continue;
+			return { total: result.total_price, matchedId: result.model?.id ?? candidate };
+		} catch {
+			// An unknown model or an unsupported usage shape tries the next id.
+		}
+	}
+	return null;
 }
 
 function round4(n: number): number {
