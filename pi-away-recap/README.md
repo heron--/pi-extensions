@@ -50,24 +50,9 @@ Colors come from the theme's custom-message set: `customMessageLabel` for the
 bold labels, `customMessageText` for the prose, `customMessageBg` behind the
 frame.
 
-A filled diamond for what happened, a hollow one for what has not happened
-yet. Both markers and both labels sit flush left; each block's wrapped lines
-hang under where its own text began, so the indent resets between the two —
-`Recap:` and `Next:` are different widths. The attribution sits flush left
-again.
-
-Both diamonds are East Asian Width "Neutral", so they occupy one cell. The
-obvious pair, `◆`/`◇` (U+25C6/U+25C7), is "Ambiguous" — terminals may render
-those double-width, which would pull the hanging indents out of alignment.
-
-The text is italic against the theme's muted grey rather than the main text
-color, so it reads as an aside and not as something the agent just said.
-
-The recap carries the work and where it stands; the `Next:` line is only what
-happens after — what is wanted from you and what is
-coming up. Set in italic against the theme's muted grey rather than the main
-text color, so it reads as an aside and not as something the agent just said.
-The clock marks the recap once, at the start.
+The recap line carries the work and where it stands. The `Next:` line is only
+what happens after it — what is wanted from you, or what would happen if you
+said go.
 
 ## It stays put
 
