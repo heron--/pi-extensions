@@ -36,11 +36,13 @@ const TEE_RIGHT = "┤";
 
 /** Width of the two rails the frame steals from the editor's own render width. */
 const FRAME_WIDTH = 2;
+/** Rules on each side of a status item, so the run reads as broken, not ended. */
+const RULE_RUN = 2;
+/** `╭── ` before the first item, ` ──╮` after the last. */
+const LEAD_WIDTH = 1 + RULE_RUN + 1;
+const TRAIL_WIDTH = 1 + RULE_RUN + 1;
 /** Below this the frame cannot hold a rule plus a segment, so it is skipped. */
 const MIN_FRAMED_WIDTH = 24;
-/** `╭── ` on the left, ` ──╮` on the right. */
-const LEAD_WIDTH = 4;
-const TRAIL_WIDTH = 4;
 
 const THINKING_COLOR: Record<string, ThemeColor> = {
 	minimal: "thinkingMinimal",
@@ -58,19 +60,16 @@ const RAINBOW_COLORS = [
 type Paint = (text: string) => string;
 
 /**
- * How many blank rail rows separate the input from the rule.
+ * Whether a blank rail row separates the input from the rule.
  *
- * A terminal row is atomic, so "half" is one row rather than two rather than a
- * shorter row. It buys air below the input, where new lines arrive and the
- * cursor rests, and lets the first line sit against the upper run.
- *
- * Hugging the rule to a cell edge with `▔`/`▁` would free vertical space
- * without spending a row, but box-drawing `─` is inked at text height, which is
- * what lets a status item read as a break in the line. Move the ink to the top
- * of the cell and the label no longer interrupts the rule, it sits beneath it.
+ * A terminal row is atomic, so this is a row or nothing. Hugging the rule to a
+ * cell edge with `▔`/`▁` would free vertical space without spending a row, but
+ * box-drawing `─` is inked at text height, which is what lets a status item
+ * read as a break in the line. Move the ink to the top of the cell and the
+ * label no longer interrupts the rule, it sits beneath it.
  */
-type Padding = "full" | "half" | "none";
-const PADDINGS = new Set<Padding>(["full", "half", "none"]);
+type Padding = "full" | "none";
+const PADDINGS = new Set<Padding>(["full", "none"]);
 
 function hexToAnsi(hex: string): string {
 	const value = hex.slice(1);
@@ -115,8 +114,26 @@ interface CostTotals {
 	input: number;
 	output: number;
 	cost: number;
-	estimated: boolean;
 	hasCost: boolean;
+}
+
+/**
+ * Per-response cost, memoized on the message.
+ *
+ * This runs on every editor render — so on every keystroke — and a price
+ * estimate is a dataset lookup that tries several candidate model ids. A
+ * response's usage never changes once recorded, so pay for it once.
+ */
+const COST_CACHE = new WeakMap<AssistantMessage, number | null>();
+
+function messageCost(message: AssistantMessage): number | null {
+	const cached = COST_CACHE.get(message);
+	if (cached !== undefined) return cached;
+
+	const recorded = message.usage.cost.total;
+	const cost = recorded > 0 ? recorded : (estimateUsageCost(message.model, message.usage)?.total ?? null);
+	COST_CACHE.set(message, cost);
+	return cost;
 }
 
 /** Sum recorded provider cost, or calculate public-list-price cost per response. */
@@ -124,31 +141,22 @@ function computeCostTotals(ctx: ExtensionContext): CostTotals {
 	let input = 0;
 	let output = 0;
 	let cost = 0;
-	let estimated = false;
 	let hasCost = false;
 
 	for (const entry of ctx.sessionManager.getBranch()) {
 		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
 		const message = entry.message as AssistantMessage;
-		const usage = message.usage;
-		input += usage.input + usage.cacheRead + usage.cacheWrite;
-		output += usage.output;
+		input += message.usage.input + message.usage.cacheRead + message.usage.cacheWrite;
+		output += message.usage.output;
 
-		if (usage.cost.total > 0) {
-			cost += usage.cost.total;
-			hasCost = true;
-			continue;
-		}
-
-		const estimate = estimateUsageCost(message.model, usage);
-		if (estimate) {
-			cost += estimate.total;
-			estimated = true;
+		const messageTotal = messageCost(message);
+		if (messageTotal !== null) {
+			cost += messageTotal;
 			hasCost = true;
 		}
 	}
 
-	return { input, output, cost, estimated, hasCost };
+	return { input, output, cost, hasCost };
 }
 
 function gaugeColor(percent: number): "success" | "warning" | "error" {
@@ -248,6 +256,8 @@ function scrollNotice(theme: Theme, line: string): string | null {
  * One horizontal run of the frame: a continuous rule broken only by the
  * segments handed in. The result is always exactly `width` cells wide, which is
  * what keeps pi's render-width assertion from tearing the screen down.
+ *
+ * Callers pass a `width` of at least `MIN_FRAMED_WIDTH`.
  */
 function buildBorderRow(
 	width: number,
@@ -256,21 +266,18 @@ function buildBorderRow(
 	rightCorner: string,
 	segments: string[],
 ): string {
-	if (width <= 0) return "";
-	if (width < FRAME_WIDTH) return paint(RULE.repeat(width));
-
 	const present = segments.filter((segment) => segment.trim().length > 0);
-	if (present.length === 0 || width < MIN_FRAMED_WIDTH) {
+	if (present.length === 0) {
 		return paint(leftCorner + RULE.repeat(width - FRAME_WIDTH) + rightCorner);
 	}
 
-	const lead = `${paint(leftCorner + RULE.repeat(2))} `;
 	const budget = width - LEAD_WIDTH - TRAIL_WIDTH;
-	let body = present.join(paint(` ${RULE.repeat(2)} `));
+	let body = present.join(paint(` ${RULE.repeat(RULE_RUN)} `));
 	if (visibleWidth(body) > budget) body = truncateToWidth(body, budget, "…");
 
-	const fill = Math.max(0, width - LEAD_WIDTH - visibleWidth(body) - 2);
-	return `${lead}${body}${paint(` ${RULE.repeat(fill)}${rightCorner}`)}`;
+	// The trailing rule run stretches to fill whatever the items left over.
+	const fill = width - LEAD_WIDTH - visibleWidth(body) - (TRAIL_WIDTH - RULE_RUN);
+	return `${paint(leftCorner + RULE.repeat(RULE_RUN))} ${body}${paint(` ${RULE.repeat(fill)}${rightCorner}`)}`;
 }
 
 /** Close a rule row pi still owns (a scroll marker) without reflowing it. */
@@ -296,8 +303,6 @@ function frameEditor(
 	topSegments: string[],
 	bottomSegments: string[],
 ): string[] {
-	if (width < MIN_FRAMED_WIDTH) return baseRender(width);
-
 	const innerWidth = width - FRAME_WIDTH;
 	const lines = baseRender(innerWidth);
 	if (lines.length < 2) return lines;
@@ -324,7 +329,7 @@ function frameEditor(
 	for (let index = hasUpperRule ? 1 : 0; index < lowerRuleIndex; index++) {
 		framed.push(railRow(lines[index]!, paint));
 	}
-	if (padding !== "none") framed.push(gutter);
+	if (padding === "full") framed.push(gutter);
 
 	const lowerNotice = scrollNotice(theme, lines[lowerRuleIndex]!);
 	const trailing = lines.slice(lowerRuleIndex + 1);
@@ -348,10 +353,16 @@ function frameEditor(
 
 export default function contextFooterExtension(pi: ExtensionAPI): void {
 	let enabled = true;
-	let padding: Padding = "half";
+	let installed = false;
+	let padding: Padding = "full";
 	let footerData: ReadonlyFooterDataProvider | undefined;
 
 	function install(ctx: ExtensionContext): void {
+		// A second install would wrap this extension's own wrapper, nesting a
+		// frame inside a frame and narrowing the editor twice.
+		if (installed) return;
+		installed = true;
+
 		ctx.ui.setFooter((tui, _theme, provider) => {
 			footerData = provider;
 			const unsubscribe = provider.onBranchChange(() => tui.requestRender());
@@ -372,7 +383,8 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 			const baseRender = editor.render.bind(editor);
 
 			editor.render = (width: number): string[] => {
-				if (!enabled) return baseRender(width);
+				// Too narrow for a rule plus a label: leave pi's own rows alone.
+				if (!enabled || width < MIN_FRAMED_WIDTH) return baseRender(width);
 
 				const theme = ctx.ui.theme;
 				// Track the editor's own border color so the frame follows pi's
@@ -401,25 +413,28 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 	pi.registerCommand("context-footer", {
 		description: "Toggle the context-footer border, or set its padding",
 		handler: async (args, ctx) => {
-			const arg = (args ?? "").trim().toLowerCase();
+			const [verb, value, ...extra] = (args ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
 
-			const padMatch = /^pad(?:ding)?(?:\s+(\S+))?$/.exec(arg);
-			if (padMatch) {
-				const requested = padMatch[1];
-				if (requested === undefined) {
+			if (verb === "pad" || verb === "padding") {
+				if (value === undefined) {
 					ctx.ui.notify(`Context footer padding is ${padding}`, "info");
 					return;
 				}
-				if (!PADDINGS.has(requested as Padding)) {
+				if (extra.length > 0 || !PADDINGS.has(value as Padding)) {
 					ctx.ui.notify(`Padding must be one of: ${[...PADDINGS].join(", ")}`, "warning");
 					return;
 				}
-				padding = requested as Padding;
+				padding = value as Padding;
 				ctx.ui.notify(`Context footer padding set to ${padding}`, "info");
 				return;
 			}
 
-			const nextEnabled = arg === "off" ? false : arg === "on" ? true : !enabled;
+			if (value !== undefined || (verb !== undefined && verb !== "on" && verb !== "off")) {
+				ctx.ui.notify("Usage: /context-footer [on|off|pad full|pad none]", "warning");
+				return;
+			}
+
+			const nextEnabled = verb === "off" ? false : verb === "on" ? true : !enabled;
 			if (nextEnabled === enabled) {
 				ctx.ui.notify(`Context footer is already ${enabled ? "on" : "off"}`, "info");
 				return;
