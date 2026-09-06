@@ -16,12 +16,23 @@ const DEFAULT_THRESHOLD_MINUTES = 5;
 const MIN_THRESHOLD_MINUTES = 0.05;
 const MAX_THRESHOLD_MINUTES = 240;
 
-/** A recap is a couple of lines, so the reply does not need much room. */
-const RECAP_MAX_TOKENS = 400;
+/**
+ * Every model in the rotation is a reasoning model, and thinking is drawn from
+ * the same budget as the reply — 400 bought a recap that stopped mid-sentence.
+ */
+const RECAP_MAX_TOKENS = 2_000;
 const RECAP_TIMEOUT_MS = 30_000;
+/**
+ * Never recap within this long of the agent going quiet, so a run someone
+ * watched to the end is not immediately talked over. Capped by the threshold
+ * itself, so a deliberately tiny threshold still fires promptly.
+ */
+const SETTLE_GRACE_MS = 8_000;
 /** Digest budget. The tail is kept, because the newest activity matters most. */
-const DIGEST_MAX_CHARS = 6_000;
-const ENTRY_TEXT_MAX_CHARS = 400;
+const DIGEST_MAX_CHARS = 14_000;
+const ENTRY_TEXT_MAX_CHARS = 300;
+/** Marks where the user stopped typing, inside a whole-session digest. */
+const AWAY_MARKER = "--- the user stepped away after this point ---";
 
 /**
  * The rotation, cheapest-first, matched against the model catalogue by id.
@@ -42,13 +53,19 @@ const ROTATION_PATTERNS: RegExp[] = [
 const RECAP_SYSTEM_PROMPT = [
 	"You write the recap a developer reads when they sit back down at their terminal after stepping away.",
 	"",
-	"You are given a digest of what happened in their coding session while they were gone.",
-	"Tell them what happened, in at most three short sentences, plainest possible language.",
-	"Lead with the outcome — what now exists, what broke, what is waiting on them.",
+	"You are given a digest of their whole coding session. A marker line shows where they stopped",
+	"typing and stepped away.",
 	"",
-	"Write only the recap itself. No preamble, no greeting, no sign-off, no bullet points,",
-	"no markdown headings, no restating that they were away. Never invent activity that is",
-	"not in the digest. If the digest shows very little, say so in one short sentence.",
+	"Write a recap of the session as a whole, in four to six sentences:",
+	"- what this session has been about, and where it has got to",
+	"- what concretely exists now that did not before: files, commands, decisions, fixes",
+	"- what happened after the marker, in more detail, since that is the part they did not see",
+	"- anything failing, unresolved, or waiting on them",
+	"",
+	"Write only the recap itself, as plain prose. No preamble, no greeting, no sign-off, no bullet",
+	"points, no markdown headings, no restating that they were away. Name real things — files,",
+	"commands, errors — rather than describing activity in the abstract. Never invent anything that",
+	"is not in the digest. Finish every sentence.",
 ].join("\n");
 
 interface RecapResult {
@@ -71,7 +88,7 @@ function collapse(text: string, limit: number): string {
 }
 
 /**
- * Plain-text account of the session entries added while the user was away.
+ * Plain-text account of the session, with a marker where the user stepped away.
  *
  * Deliberately not the raw transcript: tool arguments and results are the bulk
  * of a session and almost none of what a recap needs, so each entry collapses
@@ -79,9 +96,17 @@ function collapse(text: string, limit: number): string {
  */
 function buildDigest(ctx: ExtensionContext, since: number): string[] {
 	const lines: string[] = [];
+	let awayMarked = false;
+	let sawAwayActivity = false;
 
 	for (const entry of ctx.sessionManager.getBranch()) {
-		if (Date.parse(entry.timestamp) < since) continue;
+		if (Date.parse(entry.timestamp) >= since) {
+			if (!awayMarked) {
+				lines.push(AWAY_MARKER);
+				awayMarked = true;
+			}
+			sawAwayActivity = true;
+		}
 
 		if (entry.type === "compaction") {
 			lines.push("[system] context was compacted");
@@ -114,7 +139,8 @@ function buildDigest(ctx: ExtensionContext, since: number): string[] {
 		}
 	}
 
-	return lines;
+	// Nothing happened while they were away, so there is nothing to catch up on.
+	return sawAwayActivity ? lines : [];
 }
 
 function capDigest(lines: string[]): string {
@@ -173,9 +199,17 @@ export default function awayRecapExtension(pi: ExtensionAPI): void {
 	let generating = false;
 	/** Keystrokes are the only presence signal pi hands an extension. */
 	let lastKeypressAt = Date.now();
+	/** One recap per absence, so a long silence does not keep re-summarizing. */
+	let episodeRecapped = false;
+	let awayTimer: ReturnType<typeof setTimeout> | undefined;
+	let editor: CustomEditorType | undefined;
 
 	function thresholdMs(): number {
 		return thresholdMinutes * 60_000;
+	}
+
+	function hasDraft(): boolean {
+		return (editor?.getText() ?? "").trim().length > 0;
 	}
 
 	async function generateRecap(ctx: ExtensionContext, since: number): Promise<RecapResult | null> {
@@ -225,29 +259,74 @@ export default function awayRecapExtension(pi: ExtensionAPI): void {
 		);
 	}
 
+	/**
+	 * A recap stays up until the next one replaces it, or until it is dismissed.
+	 *
+	 * Claude Code appends its recap to the transcript, so it scrolls up into
+	 * history like any other message. pi gives extensions no way to write to the
+	 * transcript — only widgets, which are pinned rather than scrolled — so
+	 * clearing it when the next turn starts is the one option that loses the
+	 * text outright. Better to leave it and let it be replaced.
+	 */
 	function clearRecap(ctx: ExtensionContext): void {
 		ctx.ui.setWidget(WIDGET_KEY, undefined);
 	}
 
-	async function recapNow(ctx: ExtensionContext, since: number, announce: boolean): Promise<void> {
-		if (generating) return;
+	/** Resolves true when a recap was actually produced and shown. */
+	async function recapNow(ctx: ExtensionContext, since: number, announce: boolean): Promise<boolean> {
+		if (generating) return false;
 		generating = true;
 		try {
 			const recap = await generateRecap(ctx, since);
 			if (recap) {
 				showRecap(ctx, recap);
-			} else if (announce) {
-				ctx.ui.notify("Nothing happened worth recapping", "info");
+				return true;
 			}
+			if (announce) ctx.ui.notify("Nothing happened worth recapping", "info");
+			return false;
 		} catch (error) {
 			// A recap is a courtesy. A gateway that is down, unauthenticated, or
 			// slow should cost the session nothing.
 			if (announce) {
 				ctx.ui.notify(`Recap failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
 			}
+			return false;
 		} finally {
 			generating = false;
 		}
+	}
+
+	/**
+	 * Arm the away check.
+	 *
+	 * The clock runs from the last keystroke, not from the agent's activity —
+	 * a long run the user waited through is exactly when a recap is wanted. A
+	 * check that lands while the agent is still working is skipped rather than
+	 * queued, and `agent_settled` re-arms it.
+	 */
+	function scheduleAwayCheck(ctx: ExtensionContext): void {
+		if (awayTimer) clearTimeout(awayTimer);
+		if (!enabled) return;
+
+		const remaining = thresholdMs() - (Date.now() - lastKeypressAt);
+		const delay = Math.max(remaining, Math.min(SETTLE_GRACE_MS, thresholdMs()));
+
+		awayTimer = setTimeout(() => {
+			awayTimer = undefined;
+			if (!enabled || generating || episodeRecapped) return;
+			if (Date.now() - lastKeypressAt < thresholdMs()) return;
+			// Still working, or never really left.
+			if (!ctx.isIdle() || hasDraft()) return;
+
+			episodeRecapped = true;
+			void recapNow(ctx, lastKeypressAt, false).then((shown) => {
+				// A recap that never appeared should not consume the absence: the
+				// keystroke fallback gets another go at it.
+				if (!shown) episodeRecapped = false;
+			});
+		}, delay);
+		// Never hold the process open for a courtesy.
+		awayTimer.unref?.();
 	}
 
 	function install(ctx: ExtensionContext): void {
@@ -257,42 +336,58 @@ export default function awayRecapExtension(pi: ExtensionAPI): void {
 
 		const previousFactory = ctx.ui.getEditorComponent();
 		ctx.ui.setEditorComponent((tui, editorTheme, keybindings) => {
-			const editor = previousFactory
+			const built = previousFactory
 				? previousFactory(tui, editorTheme, keybindings)
 				: new CustomEditor(tui, editorTheme, keybindings);
-			const baseHandleInput = editor.handleInput.bind(editor);
+			const baseHandleInput = built.handleInput.bind(built);
 
-			editor.handleInput = (data: string): void => {
+			built.handleInput = (data: string): void => {
 				const now = Date.now();
 				const idleFor = now - lastKeypressAt;
+				const wasRecapped = episodeRecapped;
 				lastKeypressAt = now;
+				episodeRecapped = false;
 
-				// The first keystroke after a long silence is the user sitting back
-				// down. A draft already in the box means they never really left.
-				if (enabled && !generating && idleFor >= thresholdMs() && ctx.isIdle() && !editor.getText().trim()) {
+				// The timer normally has the recap waiting before the user touches
+				// anything. This covers the case where it could not: the agent was
+				// still working when the check landed, or the call failed.
+				if (enabled && !generating && !wasRecapped && idleFor >= thresholdMs() && ctx.isIdle() && !hasDraft()) {
+					episodeRecapped = true;
 					void recapNow(ctx, now - idleFor, false);
 				}
 
 				baseHandleInput(data);
+				scheduleAwayCheck(ctx);
 			};
 
-			return editor as CustomEditorType;
+			editor = built as CustomEditorType;
+			return editor;
 		});
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
-		if (ctx.mode === "tui") install(ctx);
+		if (ctx.mode !== "tui") return;
+		install(ctx);
+		scheduleAwayCheck(ctx);
 	});
 
-	// The recap describes the gap the user just crossed, so it stops being true
-	// the moment they act on it.
-	pi.on("input", async (_event, ctx) => clearRecap(ctx));
-	pi.on("turn_start", async (_event, ctx) => clearRecap(ctx));
+	// A check skipped because the agent was mid-run gets another go once it stops.
+	pi.on("agent_settled", async (_event, ctx) => scheduleAwayCheck(ctx));
+
+	pi.on("session_shutdown", async () => {
+		if (awayTimer) clearTimeout(awayTimer);
+		awayTimer = undefined;
+	});
 
 	pi.registerCommand("away-recap", {
-		description: "Recap what happened while you were away (on|off|now|after <minutes>|models)",
+		description: "Recap what happened while you were away (on|off|now|clear|after <minutes>|models)",
 		handler: async (args, ctx) => {
 			const [verb, value, ...extra] = (args ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+
+			if (verb === "clear" || verb === "dismiss") {
+				clearRecap(ctx);
+				return;
+			}
 
 			if (verb === "now") {
 				await recapNow(ctx, Date.now() - thresholdMs(), true);
@@ -322,7 +417,7 @@ export default function awayRecapExtension(pi: ExtensionAPI): void {
 			}
 
 			if (value !== undefined || (verb !== undefined && verb !== "on" && verb !== "off")) {
-				ctx.ui.notify("Usage: /away-recap [on|off|now|after <minutes>|models]", "warning");
+				ctx.ui.notify("Usage: /away-recap [on|off|now|clear|after <minutes>|models]", "warning");
 				return;
 			}
 
