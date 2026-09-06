@@ -128,9 +128,14 @@ export default function writeLockExtension(pi: ExtensionAPI): void {
 	}
 
 	function updateStatus(ctx: ExtensionContext): void {
+		// Both states are published, not just the lock: a footer cannot tell
+		// "unlocked" from "extension absent" if the status is cleared when the
+		// lock is off. The wording is the contract other extensions read.
 		ctx.ui.setStatus(
 			STATUS_ID,
-			locked ? ctx.ui.theme.fg("warning", "write locked") : undefined,
+			locked
+				? ctx.ui.theme.fg("warning", "write locked")
+				: ctx.ui.theme.fg("dim", "write unlocked"),
 		);
 	}
 

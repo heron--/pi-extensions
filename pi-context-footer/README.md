@@ -16,7 +16,7 @@ interrupted only where a status item sits in the rule:
 │                                                                                 │
 │ what shape should the border take?                                              │
 │                                                                                 │
-╰───────  devin.marsh/context-footer ── #4 ── $0.04 ── ⇡47k ⇣5 ── bg 1 running ──╯
+╰───────  devin.marsh/context-footer ── #4 ── $0.04 ── ⇡47k ⇣5 ── 󰌿 write unlocked ──╯
 ```
 
 ## Padding
@@ -76,7 +76,9 @@ still closes.
 ### Colors
 
 The frame is painted with the editor's *own* border color, so it keeps following
-pi's bash-mode and thinking-level tinting instead of overriding it.
+pi's bash-mode and thinking-level tinting instead of overriding it. The pull
+request number uses the theme's link color and the money figure the theme's
+accent color.
 
 Thinking colors match `pi-powerline-footer`: `minimal`, `low`, and `medium` use
 pi's corresponding thinking colors; `high`, `xhigh`, and `max` use its exact
@@ -121,6 +123,12 @@ light-blue pill — so the styling is stripped and repainted in the theme's
 accent color, and the item reads as part of the border rather than a sticker on
 it. Other global footer summaries, such as the MCP server count, are
 intentionally excluded to keep the prompt area quiet.
+
+The `write-lock` status is borrowed too, but not in the accent color: it is
+repainted in the theme's warning color — yellow — with a lock icon that
+follows the state, `󰌾` for `write locked` and `󰌿` for `write unlocked`
+(nf-md-lock and nf-md-lock_open). The label text is whatever write-lock
+published, so the lock state stays visible at a glance even without reading it.
 
 ## Usage
 
