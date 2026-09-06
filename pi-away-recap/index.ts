@@ -25,8 +25,6 @@ const CORNER_TL = "╭";
 const CORNER_TR = "╮";
 const CORNER_BL = "╰";
 const CORNER_BR = "╯";
-const TEE_L = "├";
-const TEE_R = "┤";
 const RULE = "─";
 const RAIL = "│";
 /** A background applied per row survives an `\x1b[39m` but not an `\x1b[0m`. */
@@ -156,14 +154,7 @@ function collapse(text: string, limit: number): string {
 	return flat.length > limit ? `${flat.slice(0, limit)}…` : flat;
 }
 
-/**
- * Collapse a message but keep both ends.
- *
- * Keeping only the head loses the answer: a long reply opens with what it is
- * about — often a file it just dumped — and closes with the result. Cutting
- * from the front handed the recap a file listing with the line count removed,
- * and it filled the gap with a number of its own.
- */
+/** Hold a reply to its budget, cutting on a word boundary. */
 function clampChars(text: string, limit: number): string {
 	const flat = text.replace(/\s+/g, " ").trim();
 	if (flat.length <= limit) return flat;
@@ -173,6 +164,14 @@ function clampChars(text: string, limit: number): string {
 	return `${(lastSpace > limit * 0.6 ? cut.slice(0, lastSpace) : cut).replace(/[\s,;:.]+$/, "")}…`;
 }
 
+/**
+ * Collapse a message but keep both ends.
+ *
+ * Keeping only the head loses the answer: a long reply opens with what it is
+ * about — often a file it just dumped — and closes with the result. Cutting
+ * from the front handed the recap a file listing with the line count removed,
+ * and it filled the gap with a number of its own.
+ */
 function collapseEnds(text: string, limit: number): string {
 	const flat = text.replace(/\s+/g, " ").trim();
 	if (flat.length <= limit) return flat;
@@ -341,8 +340,8 @@ function renderFrame(theme: Theme, recap: RecapResult, width: number): string[] 
 	for (const line of wrap(body, content)) rows.push(row(prose(line)));
 
 	if (next) {
-		// A rule across the box, so the two blocks read as two.
-		rows.push(filled(rule(`${TEE_L}${RULE.repeat(inner)}${TEE_R}`)));
+		// A blank row, so the two blocks read as two.
+		rows.push(row(""));
 
 		// Marker and label sit flush left; the block's wrapped lines hang
 		// under where its own text began.
