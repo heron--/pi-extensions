@@ -18,8 +18,8 @@ const ICON_MODEL = String.fromCodePoint(0xf068c);
 const ICON_FOLDER = "\uf115";
 const ICON_BRANCH = "\uf126";
 const ICON_GAUGE = "\uf1c0";
-const ICON_PENCIL = String.fromCodePoint(0xf0cb6); // nf-md-pencil_outline
-const ICON_PENCIL_LOCK = String.fromCodePoint(0xf0de7); // nf-md-pencil_lock_outline
+const ICON_LOCK = String.fromCodePoint(0xf033e); // nf-md-lock
+const ICON_LOCK_OPEN = String.fromCodePoint(0xf033f); // nf-md-lock_open
 
 const GAUGE_WIDTH = 8;
 const GAUGE_FILLED = "█";
@@ -321,12 +321,9 @@ function buildBottomSegments(
 		if (!plain) continue;
 		if (key === WRITE_LOCK_STATUS_KEY) {
 			// The published text (`write unlocked`) contains "locked", so the
-			// open-pencil test has to win. The pencil carries the "write"; the
-			// label is just the state word.
-			const unlocked = /unlock/i.test(plain);
-			segments.push(
-				theme.fg("warning", `${unlocked ? ICON_PENCIL : ICON_PENCIL_LOCK} ${unlocked ? "unlocked" : "locked"}`),
-			);
+			// open-lock test has to win.
+			const icon = /unlock/i.test(plain) ? ICON_LOCK_OPEN : ICON_LOCK;
+			segments.push(theme.fg("warning", `${icon} ${plain}`));
 			continue;
 		}
 		segments.push(theme.fg("accent", plain));

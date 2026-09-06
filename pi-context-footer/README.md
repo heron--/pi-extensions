@@ -78,8 +78,7 @@ still closes.
 The frame is painted with the editor's *own* border color, so it keeps following
 pi's bash-mode and thinking-level tinting instead of overriding it. The pull
 request number uses the theme's link color and the money figure the theme's
-accent color — in the frontier-funds theme, DeepSeek blue and the identity
-teal respectively.
+accent color.
 
 Thinking colors match `pi-powerline-footer`: `minimal`, `low`, and `medium` use
 pi's corresponding thinking colors; `high`, `xhigh`, and `max` use its exact
@@ -126,10 +125,10 @@ it. Other global footer summaries, such as the MCP server count, are
 intentionally excluded to keep the prompt area quiet.
 
 The `write-lock` status is borrowed too, but not in the accent color: it is
-repainted in the theme's warning color — yellow — with a pencil icon that
-follows the state: `󰲶` with `unlocked` (nf-md-pencil_outline) and `󰷧` with
-`locked` (nf-md-pencil_lock_outline). The pencil carries the word "write",
-so the label is just the state word.
+repainted in the theme's warning color — yellow — with a lock icon that
+follows the state, `󰌾` for `write locked` and `󰌿` for `write unlocked`
+(nf-md-lock and nf-md-lock_open). The label text is whatever write-lock
+published, so the lock state stays visible at a glance even without reading it.
 
 ## Usage
 
