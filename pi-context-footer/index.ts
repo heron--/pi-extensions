@@ -36,6 +36,8 @@ const TEE_RIGHT = "┤";
 
 /** Width of the two rails the frame steals from the editor's own render width. */
 const FRAME_WIDTH = 2;
+/** Columns of air between each rail and the input, paid for the same way. */
+const GUTTER_X = 1;
 /** Rules on each side of a status item, so the run reads as broken, not ended. */
 const RULE_RUN = 2;
 /** `╭── ` before the first item, ` ──╮` after the last. */
@@ -292,9 +294,10 @@ function buildBorderRow(
 	return `${paint(leftCorner + RULE.repeat(leadRun))} ${body}${paint(` ${RULE.repeat(trailRun)}${rightCorner}`)}`;
 }
 
-/** Close a rule row pi still owns (a scroll marker) without reflowing it. */
+/** Set one of pi's own rows between the rails, without reflowing it. */
 function railRow(line: string, paint: Paint): string {
-	return `${paint(RAIL)}${line}${paint(RAIL)}`;
+	const gutter = " ".repeat(GUTTER_X);
+	return `${paint(RAIL)}${gutter}${line}${gutter}${paint(RAIL)}`;
 }
 
 /**
@@ -302,8 +305,8 @@ function railRow(line: string, paint: Paint): string {
  * into the top and bottom runs of the rule. This is deliberately not a widget:
  * the labels are part of the prompt's own frame.
  *
- * The editor is rendered two columns narrow so the rails have somewhere to
- * live. Prefixing full-width rows instead overflows the terminal, and pi
+ * The editor is rendered narrow so the rails and their gutters have somewhere
+ * to live. Prefixing full-width rows instead overflows the terminal, and pi
  * responds to an over-wide row by throwing out of `TuiMainScreen.doRender`.
  */
 function frameEditor(
@@ -315,7 +318,7 @@ function frameEditor(
 	topSegments: string[],
 	bottomSegments: string[],
 ): string[] {
-	const innerWidth = width - FRAME_WIDTH;
+	const innerWidth = width - FRAME_WIDTH - GUTTER_X * 2;
 	const lines = baseRender(innerWidth);
 	if (lines.length < 2) return lines;
 

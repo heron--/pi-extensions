@@ -21,8 +21,10 @@ interrupted only where a status item sits in the rule:
 
 ## Padding
 
-By default a blank rail row sits above and below the input so the text is not
-cramped against the rule.
+A column of air sits between each rail and the input, and by default a blank
+rail row sits above and below it, so the text is not cramped against the frame.
+The horizontal gutters are paid for the same way as the rails: the inner editor
+renders that much narrower.
 
 ```text
 /context-footer pad         report the current padding
