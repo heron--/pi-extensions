@@ -11,16 +11,40 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 const WIDGET_KEY = "away-recap";
 /**
- * Filled diamond for what happened, hollow for what has not happened yet.
- *
- * Both are East Asian Width "Neutral", so they occupy one cell. The obvious
- * pair, U+25C6/U+25C7, is "Ambiguous" — terminals are free to render those
- * double-width, which would pull the wrapped lines out of alignment.
+ * Nerd Font's filled and hollow circle: what happened, and what has not
+ * happened yet. A designed pair from one family, so they stay the same optical
+ * size as each other whatever the terminal does with them.
  */
-const MARKER_RECAP = "\u2b25";
-const MARKER_NEXT = "\u2b26";
-const LABEL_RECAP = "Recap:";
+const MARKER_RECAP = "\uf111";
+const MARKER_NEXT = "\uf10c";
+const LABEL_RECAP = "Recap";
 const LABEL_NEXT = "Next:";
+
+/** Box drawing, matching the user-message frame `pi-tool-display` renders. */
+const CORNER_TL = "╭";
+const CORNER_TR = "╮";
+const CORNER_BL = "╰";
+const CORNER_BR = "╯";
+const RULE = "─";
+const RAIL = "│";
+/** A background applied per row survives an `\x1b[39m` but not an `\x1b[0m`. */
+const BG_RESET = "\x1b[49m";
+/** Columns of air inside the rails, and blank rows top and bottom. */
+const PAD_X = 1;
+const MIN_BOX_WIDTH = 24;
+
+/**
+ * Reply budgets, enforced here rather than trusted to the model.
+ *
+ * A cheap model told to write two sentences will sometimes write five, so the
+ * prompt states the limits and the renderer clamps to them.
+ */
+const RECAP_MAX_CHARS = 500;
+const NEXT_MAX_CHARS = 100;
+
+/** `frame` draws the box; `clean` sets the same content flush left. */
+type Style = "frame" | "clean";
+const STYLES = new Set<Style>(["frame", "clean"]);
 
 const MONTHS = [
 	"January", "February", "March", "April", "May", "June",
@@ -71,22 +95,23 @@ const RECAP_SYSTEM_PROMPT = [
 	"You are given a digest of their whole coding session. A marker line shows where they stopped",
 	"typing and stepped away.",
 	"",
-	"Reply as exactly two lines, in this shape and nothing else:",
+	"You are speaking to the user. Be concise and word-efficient. Reply as exactly two lines, in",
+	"this shape and nothing else:",
 	"",
-	`${LABEL_RECAP} <two sentences>`,
-	`${LABEL_NEXT} <one sentence>`,
+	`${LABEL_RECAP}: <a concise summary of the session and the most recent work>`,
+	`${LABEL_NEXT} <the current state of the session, and what it needs from them>`,
 	"",
-	`The two ${LABEL_RECAP} sentences: the first says what the session has been about and where it got`,
-	"to, the second says what concretely came of it — a file, a command, a decision, a fix, a",
-	"failure. Favour the part after the marker, since that is what they did not see.",
+	`Limit the ${LABEL_RECAP} line to ${RECAP_MAX_CHARS} characters, and the ${LABEL_NEXT} line to ${NEXT_MAX_CHARS}.`,
 	"",
-	`The ${LABEL_NEXT} sentence: what is needed from them and what is coming up. If nothing is needed`,
-	"from them, say what would happen next if they said go.",
+	`${LABEL_RECAP} example: "Building a new dashboard widget for the dash-viz library that visualizes`,
+	'activity per model, polishing its look after your feedback."',
+	`${LABEL_NEXT} example: "Everything sits in draft PR #5."`,
 	"",
-	"No preamble, no greeting, no sign-off, no bullet points, no markdown, no restating that they",
-	"were away. Name real things — files, commands, errors — rather than describing activity in the",
-	"abstract. Never invent anything that is not in the digest — if it does not give you a number,",
-	"a filename, or a result, do not supply one. Two sentences means two.",
+	"Favour the part after the marker, since that is what they did not see. No preamble, no",
+	"greeting, no sign-off, no bullet points, no markdown, no restating that they were away. Name",
+	"real things — files, commands, errors — rather than describing activity in the abstract. Never",
+	"invent anything that is not in the digest: if it does not give you a number, a filename, or a",
+	"result, do not supply one.",
 ].join("\n");
 
 interface RecapResult {
@@ -126,6 +151,15 @@ function collapse(text: string, limit: number): string {
  * from the front handed the recap a file listing with the line count removed,
  * and it filled the gap with a number of its own.
  */
+function clampChars(text: string, limit: number): string {
+	const flat = text.replace(/\s+/g, " ").trim();
+	if (flat.length <= limit) return flat;
+
+	const cut = flat.slice(0, limit);
+	const lastSpace = cut.lastIndexOf(" ");
+	return `${(lastSpace > limit * 0.6 ? cut.slice(0, lastSpace) : cut).replace(/[\s,;:.]+$/, "")}…`;
+}
+
 function collapseEnds(text: string, limit: number): string {
 	const flat = text.replace(/\s+/g, " ").trim();
 	if (flat.length <= limit) return flat;
@@ -231,13 +265,16 @@ function splitNext(text: string): { body: string; next: string | null } {
 	const anchored = new RegExp(`(?:^|\n)\\s*${LABEL_NEXT}\\s*`, "i").exec(text);
 	const match = anchored ?? new RegExp(`\\s*${LABEL_NEXT}\\s*`, "i").exec(text);
 	const stripRecap = (value: string) =>
-		value.replace(new RegExp(`^\\s*${LABEL_RECAP}\\s*`, "i"), "").trim();
+		value.replace(new RegExp(`^\\s*${LABEL_RECAP}:?\\s*`, "i"), "").trim();
 
-	if (!match) return { body: stripRecap(text), next: null };
+	if (!match) return { body: clampChars(stripRecap(text), RECAP_MAX_CHARS), next: null };
 
 	const body = stripRecap(text.slice(0, match.index));
 	const next = text.slice(match.index + match[0].length).trim();
-	return { body: body || stripRecap(text), next: next || null };
+	return {
+		body: clampChars(body || stripRecap(text), RECAP_MAX_CHARS),
+		next: next ? clampChars(next, NEXT_MAX_CHARS) : null,
+	};
 }
 
 function wrap(text: string, width: number): string[] {
@@ -260,10 +297,92 @@ function wrap(text: string, width: number): string[] {
 	return rows;
 }
 
+/** The boxed treatment: label in the border, content on its own background. */
+function renderFrame(theme: Theme, recap: RecapResult, width: number): string[] {
+	if (width < MIN_BOX_WIDTH) return [];
+
+	const { body, next } = splitNext(recap.text);
+	// A row's background must be applied around the whole row: the fg
+	// resets inside it are `\x1b[39m`, which leave a background alone.
+	const filled = (row: string) => `${theme.getBgAnsi("customMessageBg")}${row}${BG_RESET}`;
+	const rule = (text: string) => theme.fg("border", text);
+	const label = (text: string) => theme.bold(theme.fg("customMessageLabel", text));
+	const prose = (text: string) => theme.italic(theme.fg("customMessageText", text));
+
+	const inner = width - 2;
+	const content = Math.max(1, inner - PAD_X * 2);
+	const pad = " ".repeat(PAD_X);
+
+	/** `│ …content… │`, padded so the background covers the full row. */
+	const row = (text: string): string => {
+		const gap = " ".repeat(Math.max(0, content - visibleWidth(text)));
+		return filled(`${rule(RAIL)}${pad}${text}${gap}${pad}${rule(RAIL)}`);
+	};
+
+	const title = ` ${label(`${MARKER_RECAP} ${LABEL_RECAP}`)} `;
+	const titleFill = RULE.repeat(Math.max(0, inner - visibleWidth(title)));
+	const rows = [filled(`${rule(CORNER_TL)}${title}${rule(`${titleFill}${CORNER_TR}`)}`), row("")];
+
+	for (const line of wrap(body, content)) rows.push(row(prose(line)));
+
+	if (next) {
+		// Marker and label sit flush left; the block's wrapped lines hang
+		// under where its own text began.
+		const head = `${MARKER_NEXT} ${LABEL_NEXT} `;
+		const indent = " ".repeat(visibleWidth(head));
+		for (const [index, line] of wrap(next, Math.max(1, content - visibleWidth(head))).entries()) {
+			rows.push(
+				row(index === 0 ? `${label(`${MARKER_NEXT} ${LABEL_NEXT}`)} ${prose(line)}` : `${indent}${prose(line)}`),
+			);
+		}
+	}
+
+	rows.push(row(""));
+
+	// The attribution rides the bottom rule, the way pi-context-footer
+	// sets status items into the prompt border.
+	const stamp = ` generated by ${recap.modelName} at ${recap.stamp} `;
+	const stampFill = inner - visibleWidth(stamp);
+	rows.push(
+		filled(
+			stampFill >= 2
+				? `${rule(`${CORNER_BL}${RULE.repeat(stampFill)}`)}${theme.fg("dim", stamp)}${rule(CORNER_BR)}`
+				: rule(`${CORNER_BL}${RULE.repeat(inner)}${CORNER_BR}`),
+		),
+	);
+	return rows;
+}
+
+/** Flush left, no box — the same content with nothing drawn around it. */
+function renderClean(theme: Theme, recap: RecapResult, width: number): string[] {
+	const { body, next } = splitNext(recap.text);
+	const label = (text: string) => theme.bold(theme.fg("customMessageLabel", text));
+	const prose = (text: string) => theme.italic(theme.fg("customMessageText", text));
+
+	// Marker and label sit flush left; each block's wrapped lines hang under
+	// where its own text began, so the indent resets between blocks.
+	const block = (marker: string, labelText: string, text: string): string[] => {
+		const head = `${marker} ${labelText} `;
+		const indent = " ".repeat(visibleWidth(head));
+		return wrap(text, Math.max(1, width - visibleWidth(head) - 2)).map((line, index) =>
+			index === 0
+				? `${label(`${marker} ${labelText}`)} ${prose(line)}`
+				: `${indent}${prose(line)}`,
+		);
+	};
+
+	return [
+		...block(MARKER_RECAP, `${LABEL_RECAP}:`, body),
+		...(next ? block(MARKER_NEXT, LABEL_NEXT, next) : []),
+		theme.italic(theme.fg("dim", `generated by ${recap.modelName} at ${recap.stamp}`)),
+	];
+}
+
 export default function awayRecapExtension(pi: ExtensionAPI): void {
 	let enabled = true;
 	let installed = false;
 	let thresholdMinutes = DEFAULT_THRESHOLD_MINUTES;
+	let style: Style = "frame";
 	let rotationIndex = 0;
 	let generating = false;
 	/** Keystrokes are the only presence signal pi hands an extension. */
@@ -318,30 +437,8 @@ export default function awayRecapExtension(pi: ExtensionAPI): void {
 			(_tui: TUI, theme: Theme): Component => ({
 				invalidate() {},
 				render(width: number): string[] {
-					const { body, next } = splitNext(recap.text);
-					const quiet = (text: string) => theme.italic(theme.fg("muted", text));
-
-					/**
-					 * Marker and label sit flush left; the block's own wrapped lines
-					 * hang under where its text began. The two labels differ in width,
-					 * so each block's hanging indent is its own.
-					 */
-					const block = (marker: string, label: string, text: string): string[] => {
-						const head = `${marker} ${label} `;
-						const indent = " ".repeat(visibleWidth(head));
-						const rows = wrap(text, Math.max(1, width - visibleWidth(head) - 2));
-						return rows.map((row, index) =>
-							index === 0
-								? `${theme.fg("dim", marker)} ${theme.fg("accent", label)} ${quiet(row)}`
-								: `${indent}${quiet(row)}`,
-						);
-					};
-
-					return [
-						...block(MARKER_RECAP, LABEL_RECAP, body),
-						...(next ? block(MARKER_NEXT, LABEL_NEXT, next) : []),
-						theme.italic(theme.fg("dim", `generated by ${recap.modelName} at ${recap.stamp}`)),
-					];
+					// Read at render time, so switching style redraws what is already up.
+					return style === "frame" ? renderFrame(theme, recap, width) : renderClean(theme, recap, width);
 				},
 			}),
 			{ placement: "aboveEditor" },
@@ -469,9 +566,23 @@ export default function awayRecapExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("away-recap", {
-		description: "Recap what happened while you were away (on|off|now|clear|after <minutes>|models)",
+		description: "Recap what happened while you were away (on|off|now|clear|style|after <minutes>|models)",
 		handler: async (args, ctx) => {
 			const [verb, value, ...extra] = (args ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+
+			if (verb === "style") {
+				if (value === undefined) {
+					ctx.ui.notify(`Recap style is ${style}`, "info");
+					return;
+				}
+				if (extra.length > 0 || !STYLES.has(value as Style)) {
+					ctx.ui.notify(`Style must be one of: ${[...STYLES].join(", ")}`, "warning");
+					return;
+				}
+				style = value as Style;
+				ctx.ui.notify(`Recap style set to ${style}`, "info");
+				return;
+			}
 
 			if (verb === "clear" || verb === "dismiss") {
 				clearRecap(ctx);
@@ -506,7 +617,7 @@ export default function awayRecapExtension(pi: ExtensionAPI): void {
 			}
 
 			if (value !== undefined || (verb !== undefined && verb !== "on" && verb !== "off")) {
-				ctx.ui.notify("Usage: /away-recap [on|off|now|clear|after <minutes>|models]", "warning");
+				ctx.ui.notify("Usage: /away-recap [on|off|now|clear|style frame|clean|after <minutes>|models]", "warning");
 				return;
 			}
 
