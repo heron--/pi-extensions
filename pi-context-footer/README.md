@@ -14,8 +14,13 @@ interrupted only where a status item sits in the rule:
 ```text
 ╭── 󰚌 Claude Sonnet 5 ── thinking:high ──  pi-extensions ──  ░░░░░░░░ 5%/1.0M ──╮
 │                                                                                 │
-╰──  devin.marsh/context-footer ──  ~0.009 ── ⇡46k ⇣5 ───────────────────────────╯
+│ what shape should the border take?                                              │
+│                                                                                 │
+╰──  devin.marsh/context-footer ──  $0.04 ── ⇡47k ⇣5 ── bg 1 running · Shift↓ ───╯
 ```
+
+A blank rail row sits above and below the input so the text is not cramped
+against the rule.
 
 The **top run** carries identity and context health: model, thinking level,
 working directory, context gauge and window. The **bottom run** carries the
@@ -55,14 +60,19 @@ For each completed response, the footer uses Pi's reported cost when present.
 Otherwise it calls the same bundled `@pydantic/genai-prices` model used by the
 model picker, with input, output, cache-read, and cache-write tokens. This
 calculation is performed per response so long-context price tiers are applied
-correctly. Estimated totals are marked with a leading `~`. The dollar sign comes
-from the money icon, so the numeric amount is not redundantly prefixed with a
-second `$`.
+correctly. Estimates are not marked apart from exact totals — the whole figure
+is understood to be approximate.
 
-The `pi-background-tasks` status is also shown on the bottom run, so its
-running/finished-task indicator remains visible instead of being lost when this
-extension replaces pi's standard footer. Other global footer summaries, such as
-the MCP server count, are intentionally excluded to keep the prompt area quiet.
+## Borrowed statuses
+
+The `pi-background-tasks` status is shown on the bottom run, so its
+running/finished-task indicator and its entry keys remain visible instead of
+being lost when this extension replaces pi's standard footer. Statuses arrive
+pre-styled for pi's own footer — `pi-background-tasks` ships a filled
+light-blue pill — so the styling is stripped and repainted in the theme's
+accent color, and the item reads as part of the border rather than a sticker on
+it. Other global footer summaries, such as the MCP server count, are
+intentionally excluded to keep the prompt area quiet.
 
 ## Usage
 

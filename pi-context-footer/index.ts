@@ -93,7 +93,6 @@ function formatTokens(count: number): string {
 }
 
 function formatDollars(cost: number): string {
-	if (cost < 0.01) return `$${cost.toFixed(3)}`;
 	return `$${cost.toFixed(2)}`;
 }
 
@@ -186,15 +185,19 @@ function buildBottomSegments(
 	if (branch) segments.push(theme.fg("success", `${ICON_BRANCH} ${branch}`));
 
 	if (totals.hasCost) {
-		const amount = formatDollars(totals.cost).slice(1);
-		segments.push(theme.fg("warning", `${ICON_COST} ${totals.estimated ? "~" : ""}${amount}`));
+		segments.push(theme.fg("warning", `${ICON_COST} ${formatDollars(totals.cost)}`));
 	}
 	if (totals.input || totals.output) {
 		segments.push(theme.fg("syntaxNumber", `⇡${formatTokens(totals.input)} ⇣${formatTokens(totals.output)}`));
 	}
 
 	for (const [key, status] of footerData?.getExtensionStatuses() ?? []) {
-		if (STATUS_KEYS.has(key) && status.trim()) segments.push(status);
+		if (!STATUS_KEYS.has(key)) continue;
+		// Statuses arrive pre-styled for pi's own footer — pi-background-tasks
+		// ships a filled light-blue pill. Strip that and repaint so a borrowed
+		// status reads as part of this border rather than a sticker on it.
+		const plain = stripAnsi(status).trim();
+		if (plain) segments.push(theme.fg("accent", plain));
 	}
 	return segments;
 }
@@ -291,6 +294,7 @@ function frameEditor(
 
 	const hasUpperRule = isRuleRow(lines[0]!, innerWidth);
 	const framed: string[] = [];
+	const gutter = railRow(" ".repeat(innerWidth), paint);
 
 	const upperNotice = hasUpperRule ? scrollNotice(theme, lines[0]!) : null;
 	framed.push(
@@ -299,9 +303,12 @@ function frameEditor(
 			...topSegments,
 		]),
 	);
-	if (!hasUpperRule) framed.push(railRow(lines[0]!, paint));
 
-	for (let index = 1; index < lowerRuleIndex; index++) framed.push(railRow(lines[index]!, paint));
+	framed.push(gutter);
+	for (let index = hasUpperRule ? 1 : 0; index < lowerRuleIndex; index++) {
+		framed.push(railRow(lines[index]!, paint));
+	}
+	framed.push(gutter);
 
 	const lowerNotice = scrollNotice(theme, lines[lowerRuleIndex]!);
 	const trailing = lines.slice(lowerRuleIndex + 1);
