@@ -320,9 +320,8 @@ function buildBottomSegments(
 	return segments;
 }
 
-const ANSI_PATTERN =
-	// biome-ignore lint/suspicious/noControlCharactersInRegex: terminal escapes are the input here
-	/\x1b\[[0-9;?]*[a-zA-Z]|\x1b[\]_][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+/** A CSI sequence, or an OSC/APC string up to its BEL or ST terminator. */
+const ANSI_PATTERN = /\x1b\[[0-9;?]*[a-zA-Z]|\x1b[\]_][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 
 function stripAnsi(text: string): string {
 	return text.replace(ANSI_PATTERN, "");
