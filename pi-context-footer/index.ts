@@ -18,13 +18,16 @@ const ICON_MODEL = String.fromCodePoint(0xf068c);
 const ICON_FOLDER = "\uf115";
 const ICON_BRANCH = "\uf126";
 const ICON_GAUGE = "\uf1c0";
+const ICON_LOCK = String.fromCodePoint(0xf033e); // nf-md-lock
+const ICON_LOCK_OPEN = String.fromCodePoint(0xf033f); // nf-md-lock_open
 
 const GAUGE_WIDTH = 8;
 const GAUGE_FILLED = "█";
 const GAUGE_EMPTY = "░";
 const GAUGE_WARN_PERCENT = 60;
 const GAUGE_ALERT_PERCENT = 85;
-const STATUS_KEYS = new Set(["background-tasks"]);
+const WRITE_LOCK_STATUS_KEY = "write-lock";
+const STATUS_KEYS = new Set(["background-tasks", WRITE_LOCK_STATUS_KEY]);
 
 /** OSC 8: wraps a label so terminals treat it as a link to `url`. */
 const LINK_OPEN = "\x1b]8;;";
@@ -315,7 +318,14 @@ function buildBottomSegments(
 		// ships a filled light-blue pill. Strip that and repaint so a borrowed
 		// status reads as part of this border rather than a sticker on it.
 		const plain = stripAnsi(status).trim();
-		if (plain) segments.push(theme.fg("accent", plain));
+		if (!plain) continue;
+		if (key === WRITE_LOCK_STATUS_KEY) {
+			// `write unlocked` contains "locked", so the open-lock test has to win.
+			const icon = /unlock/i.test(plain) ? ICON_LOCK_OPEN : ICON_LOCK;
+			segments.push(theme.fg("warning", `${icon} ${plain}`));
+			continue;
+		}
+		segments.push(theme.fg("accent", plain));
 	}
 	return segments;
 }

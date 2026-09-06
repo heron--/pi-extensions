@@ -16,7 +16,10 @@ The lock is off by default in a new session. Its state is stored in the session,
 so it survives `/reload` and `/resume` and follows session-tree branches. A fork
 inherits the state on the branch it was created from.
 
-While the lock is on, the footer shows `write locked`.
+The lock's state is always published as an extension status under the
+`write-lock` key: `write locked` while on, `write unlocked` while off. Any
+footer that reads extension statuses — pi's own, or a replacement such as
+pi-context-footer — can show it.
 
 ## What it does
 
