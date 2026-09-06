@@ -82,6 +82,17 @@ calculation is performed per response so long-context price tiers are applied
 correctly. Estimates are not marked apart from exact totals — the whole figure
 is understood to be approximate.
 
+## Copying out of the prompt
+
+The rails are real characters, so a normal drag across them copies them too —
+no terminal offers a way to mark a glyph unselectable. Use rectangular
+selection to take just the text: ⌥-drag in iTerm2, Terminal.app, and Ghostty
+selects only the columns dragged across.
+
+Drawing the rails as background-tinted spaces instead would copy as whitespace,
+but a background fills the whole cell, so the rail becomes a band rather than a
+hairline and joins the corners less cleanly. The hairline won out.
+
 ## Borrowed statuses
 
 The `pi-background-tasks` status is shown on the bottom run, so its
