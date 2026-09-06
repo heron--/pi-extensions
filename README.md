@@ -1,22 +1,30 @@
 # pi-extensions
 
-Personal pi extensions, plus a shared dev-only TypeScript toolchain.
+Personal pi extensions for heron--, plus a shared dev-only TypeScript toolchain.
+In addition to the packages is some scripting to fetch model price info and 
+automatically symlink my local checkout of these to my local pi install.
 
 Each subdirectory is an independent pi package (its own `package.json` with a
 `pi` key). This root is **not** a pi package — it exists only to give every
 extension a single typechecker.
 
+## AI Disclosure
+It's likely unsurprising considering the repo, but all of the code here was AI-driven.
+I would not call it "vibe coded" as I was normally aware of the implementation details.
+Certainly some extensions had more intellectual engagement from me than others.
+
 ## Extensions
 
-- **[pi-recap](pi-recap/README.md)** — when you sit back down after
-  stepping away, a rotating cheap model recaps what happened while you were
-  gone, and signs its work.
+<!-- Keep this alphabetized -->
 - **[pi-context-footer](pi-context-footer/README.md)** — puts model, thinking,
   path, context, git, cost, token, and extension status information directly
   into the prompt editor's top and bottom border rows.
 - **[pi-model-picker](pi-model-picker/README.md)** — takes over `/model` with a
   two-stage picker that sets the model and its thinking level in one flow, with
   type-to-filter, capability icons, and a pricing column.
+- **[pi-recap](pi-recap/README.md)** — when you sit back down after
+  stepping away, a rotating cheap model recaps what happened while you were
+  gone, and signs its work.
 - **[pi-typewriter](pi-typewriter/README.md)** — reveals streamed assistant
   output at a steady typewriter pace instead of whatever has arrived so far.
   Escape skips the effect for the current message.
@@ -71,14 +79,10 @@ pi-extensions/
 │   └── link-extensions.mjs
 ├── lib/                   # shared helpers, imported as "../lib/x.ts"
 │   └── pricing.ts
-├── pi-recap/         # away-and-back session recap
-├── pi-context-footer/     # inline prompt-border status display
-├── pi-model-picker/       # an extension
-│   ├── package.json       # has the "pi" key
+├── pi-{extension_name}/   # most extensions have the same shape.
+│   ├── package.json       # some have config files
 │   ├── index.ts
 │   └── README.md
-├── pi-typewriter/         # an extension (same shape)
-└── pi-write-lock/         # an extension (same shape)
 ```
 
 ## Shared helpers (`lib/`)
@@ -107,12 +111,12 @@ with no flags loads whatever is linked there, and `/reload` hot-reloads it:
 ```
 .pi/extensions/
 ├── lib                -> ../../lib                 # REQUIRED, see below
-├── pi-recap      -> ../../pi-recap
 ├── pi-context-footer  -> ../../pi-context-footer
 ├── pi-model-picker    -> ../../pi-model-picker
+├── pi-recap           -> ../../pi-recap
 ├── pi-typewriter      -> ../../pi-typewriter
 └── pi-write-lock      -> ../../pi-write-lock
-```
+`
 
 Add or remove links freely — `.pi/` is gitignored, so it never shows up in
 `git status`. On a fresh checkout, `node scripts/link-extensions.mjs`

@@ -354,7 +354,7 @@ export default function typewriterExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("typewriter", {
-		description: "Configure the streaming-output typewriter effect (motion-sickness aid)",
+		description: "Configure the streaming-output typewriter effect",
 		handler: async (args: string | undefined, ctx: ExtensionCommandContext) => {
 			const arg = (args ?? "").trim().toLowerCase();
 			if (arg === "off") {
