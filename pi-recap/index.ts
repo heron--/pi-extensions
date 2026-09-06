@@ -28,10 +28,17 @@ const DEFAULT_MARKER_NEXT = "\uf10c";
 const config = {
 	markers: { recap: DEFAULT_MARKER_RECAP, next: DEFAULT_MARKER_NEXT },
 	style: "frame" as Style,
+	/**
+	 * Position in `ROTATION_PATTERNS`, persisted so a new session continues the
+	 * rotation instead of restarting at the first (cheapest) model every time —
+	 * a session that produces only one recap before you restart pi would
+	 * otherwise always land on the same model.
+	 */
+	rotationIndex: 0,
 };
 
 /** Custom entry type: the key pi renders this extension's transcript entries by. */
-const ENTRY_TYPE = "away-recap";
+const ENTRY_TYPE = "recap";
 const LABEL_RECAP = "Recap";
 const LABEL_NEXT = "Next:";
 
@@ -66,7 +73,7 @@ const STYLES = new Set<Style>(["frame", "clean"]);
 /**
  * Where the marker override lives.
  *
- * Not under `<agent dir>/extensions/pi-away-recap/`, the convention
+ * Not under `<agent dir>/extensions/pi-recap/`, the convention
  * `pi-tool-display` uses, because this extension is installed by symlink: that
  * path resolves into the git checkout, and config would land in the repo.
  */
@@ -75,12 +82,13 @@ function configFile(): string {
 	const agentDir = configured
 		? configured.replace(/^~(?=$|\/)/, homedir())
 		: join(homedir(), ".pi", "agent");
-	return join(agentDir, "pi-away-recap", "config.json");
+	return join(agentDir, "pi-recap", "config.json");
 }
 
 interface StoredConfig {
 	markers?: { recap?: string; next?: string };
 	style?: string;
+	rotationIndex?: number;
 }
 
 function loadConfig(): void {
@@ -91,6 +99,9 @@ function loadConfig(): void {
 		if (typeof recap === "string" && recap) config.markers.recap = recap;
 		if (typeof next === "string" && next) config.markers.next = next;
 		if (typeof stored.style === "string" && STYLES.has(stored.style as Style)) config.style = stored.style as Style;
+		if (typeof stored.rotationIndex === "number" && Number.isInteger(stored.rotationIndex) && stored.rotationIndex >= 0) {
+			config.rotationIndex = stored.rotationIndex;
+		}
 	} catch {
 		// No config, or an unreadable one. Defaults are not worth an error.
 	}
@@ -103,6 +114,7 @@ function saveConfig(): boolean {
 		const body: StoredConfig = {
 			markers: { recap: config.markers.recap, next: config.markers.next },
 			style: config.style,
+			rotationIndex: config.rotationIndex,
 		};
 		writeFileSync(file, `${JSON.stringify(body, null, 2)}\n`, "utf8");
 		return true;
@@ -470,11 +482,10 @@ function renderClean(theme: Theme, recap: RecapResult, width: number): string[] 
 	];
 }
 
-export default function awayRecapExtension(pi: ExtensionAPI): void {
+export default function recapExtension(pi: ExtensionAPI): void {
 	let enabled = true;
 	let installed = false;
 	let thresholdMinutes = DEFAULT_THRESHOLD_MINUTES;
-	let rotationIndex = 0;
 	let generating = false;
 	/** Keystrokes are the only presence signal pi hands an extension. */
 	let lastKeypressAt = Date.now();
@@ -498,8 +509,9 @@ export default function awayRecapExtension(pi: ExtensionAPI): void {
 		const rotation = resolveRotation(ctx);
 		if (rotation.length === 0) return null;
 
-		const model = rotation[rotationIndex % rotation.length]!;
-		rotationIndex = (rotationIndex + 1) % rotation.length;
+		const model = rotation[config.rotationIndex % rotation.length]!;
+		config.rotationIndex = (config.rotationIndex + 1) % rotation.length;
+		saveConfig();
 
 		const prompt: UserMessage = {
 			role: "user",
@@ -657,7 +669,7 @@ export default function awayRecapExtension(pi: ExtensionAPI): void {
 		awayTimer = undefined;
 	});
 
-	pi.registerCommand("away-recap", {
+	pi.registerCommand("recap", {
 		description: "Recap what happened while you were away (on|off|now|style|icons|after <minutes>|models)",
 		handler: async (args, ctx) => {
 			const [verb, value, ...extra] = (args ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -665,7 +677,7 @@ export default function awayRecapExtension(pi: ExtensionAPI): void {
 			if (verb === "icons" || verb === "markers") {
 				if (value === undefined) {
 					ctx.ui.notify(
-						`Icons: ${config.markers.recap} recap, ${config.markers.next} next. Set with /away-recap icons <recap> <next>`,
+						`Icons: ${config.markers.recap} recap, ${config.markers.next} next. Set with /recap icons <recap> <next>`,
 						"info",
 					);
 					return;
@@ -680,7 +692,7 @@ export default function awayRecapExtension(pi: ExtensionAPI): void {
 				const recapGlyph = parseGlyph(value);
 				const nextGlyph = extra[0] === undefined ? null : parseGlyph(extra[0]);
 				if (!recapGlyph || !nextGlyph || extra.length > 1) {
-					ctx.ui.notify("Usage: /away-recap icons <recap> <next>  (a glyph, or U+F11EA)", "warning");
+					ctx.ui.notify("Usage: /recap icons <recap> <next>  (a glyph, or U+F11EA)", "warning");
 					return;
 				}
 
@@ -722,7 +734,7 @@ export default function awayRecapExtension(pi: ExtensionAPI): void {
 			if (verb === "after") {
 				const minutes = Number.parseFloat(value ?? "");
 				if (!Number.isFinite(minutes) || extra.length > 0) {
-					ctx.ui.notify("Usage: /away-recap after <minutes>", "warning");
+					ctx.ui.notify("Usage: /recap after <minutes>", "warning");
 					return;
 				}
 				thresholdMinutes = clampMinutes(minutes);
@@ -736,14 +748,14 @@ export default function awayRecapExtension(pi: ExtensionAPI): void {
 					ctx.ui.notify("No rotation model is configured and authenticated", "warning");
 					return;
 				}
-				const next = rotation[rotationIndex % rotation.length]!.name;
+				const next = rotation[config.rotationIndex % rotation.length]!.name;
 				ctx.ui.notify(`Rotation: ${rotation.map((model) => model.name).join(", ")}. Next: ${next}`, "info");
 				return;
 			}
 
 			if (value !== undefined || (verb !== undefined && verb !== "on" && verb !== "off")) {
 				ctx.ui.notify(
-					"Usage: /away-recap [on|off|now|style frame|clean|icons <recap> <next>|after <minutes>|models]",
+					"Usage: /recap [on|off|now|style frame|clean|icons <recap> <next>|after <minutes>|models]",
 					"warning",
 				);
 				return;

@@ -22,7 +22,7 @@ pi-extensions/
 │                             # discovery locations (by convention, not a list)
 ├── lib/
 │   └── pricing.ts            # shared helper, imported as "../lib/pricing.ts"
-├── pi-away-recap/           # extension: away-and-back recap, rotating cheap models
+├── pi-recap/           # extension: away-and-back recap, rotating cheap models
 ├── pi-context-footer/        # extension: continuous prompt border + status items
 ├── pi-model-picker/          # extension: /model-picker, and takes over /model
 │   ├── index.ts
@@ -87,7 +87,7 @@ otherwise a rename can leave a symlink pointing at nothing, and pi errors on
 next launch (this happened during the `pi-throttle-stream` → `pi-typewriter`
 rename).
 
-Currently symlinked, both locations: `pi-away-recap`, `pi-context-footer`, `pi-model-picker`,
+Currently symlinked, both locations: `pi-recap`, `pi-context-footer`, `pi-model-picker`,
 `pi-typewriter`, `pi-write-lock`, `lib`.
 
 ## The `lib` symlink rule
@@ -202,7 +202,7 @@ worth knowing before touching that seam:
 
 ## Calling a model, and knowing the user is there
 
-Two seams `pi-away-recap` needed that are not obvious from the extension types.
+Two seams `pi-recap` needed that are not obvious from the extension types.
 
 **A one-off LLM call.** There is no `generate`/`complete` helper on
 `ExtensionContext`. The path is `ctx.modelRegistry`:

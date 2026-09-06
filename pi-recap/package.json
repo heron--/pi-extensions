@@ -1,5 +1,5 @@
 {
-  "name": "pi-away-recap",
+  "name": "pi-recap",
   "version": "0.1.0",
   "private": true,
   "description": "Pi extension: when you come back after stepping away, a cheap model recaps what happened while you were gone.",
