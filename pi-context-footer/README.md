@@ -16,7 +16,7 @@ interrupted only where a status item sits in the rule:
 │                                                                                 │
 │ what shape should the border take?                                              │
 │                                                                                 │
-╰────────────  devin.marsh/context-footer ──  $0.04 ── ⇡47k ⇣5 ── bg 1 running ──╯
+╰───────  devin.marsh/context-footer ── #4 ── $0.04 ── ⇡47k ⇣5 ── bg 1 running ──╯
 ```
 
 ## Padding
@@ -40,8 +40,18 @@ label no longer interrupts the rule, it sits beneath it.
 
 The **top run** carries identity and context health: model, thinking level,
 working directory, context gauge and window. The **bottom run** carries the
-remaining session items: git branch, session cost, cache-inclusive input/output
-token totals, and background-task state when active.
+remaining session items: git branch, its pull request, session cost,
+cache-inclusive input/output token totals, and background-task state when
+active.
+
+### Pull request
+
+When `gh` reports a pull request for the current branch, its number follows the
+branch as an OSC 8 hyperlink — ⌘-click, or whatever the terminal binds. The
+lookup runs once per branch, off the render path, and caches misses too, so a
+branch without a pull request does not spawn `gh` again. A pull request opened
+mid-session therefore appears on the next pi run. If `gh` is missing,
+unauthenticated, or slow, the segment is simply absent.
 
 Items are separated by short rule segments, so the border reads as continuous
 line broken by labels rather than as a line with a separate status bar attached.
@@ -80,7 +90,15 @@ Otherwise it calls the same bundled `@pydantic/genai-prices` model used by the
 model picker, with input, output, cache-read, and cache-write tokens. This
 calculation is performed per response so long-context price tiers are applied
 correctly. Estimates are not marked apart from exact totals — the whole figure
-is understood to be approximate.
+is understood to be approximate. The money glyph is a dollar sign in its own
+right, so the segment is just `$0.04` with no icon in front of it.
+
+Totals cover every billed entry in the session, matching what pi's own
+`getUsageCostBreakdown` counts: assistant responses, usage a tool reported for
+itself, and the calls behind a compaction or branch summary. It walks the whole
+session rather than the active branch, because an abandoned branch was still
+billed. Only assistant responses carry a model id, so everything else can
+contribute only the cost pi recorded for it.
 
 ## Copying out of the prompt
 
@@ -116,8 +134,13 @@ discovery directory.
 /context-footer pad none   set the padding (see above)
 ```
 
-`off` leaves the editor wrapper installed but inert. This avoids removing a
-subsequently installed editor integration such as the `/model` interceptor.
+`off` leaves the editor wrapper installed but inert, which avoids removing a
+subsequently installed editor integration such as the `/model` interceptor, and
+hands the footer back to pi so the session information does not simply vanish.
+
+For the same reason, the footer renders the status as two plain rows whenever
+the terminal is too narrow to frame — replacing pi's footer and then declining
+to draw is how the model, context and cost disappear entirely.
 
 ## Development
 

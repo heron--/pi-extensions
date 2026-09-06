@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import type {
 	CustomEditor as CustomEditorType,
 	ExtensionAPI,
@@ -8,14 +8,15 @@ import type {
 	ThemeColor,
 } from "@earendil-works/pi-coding-agent";
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
+import { execFile } from "node:child_process";
 import { basename } from "node:path";
+import type { TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { estimateUsageCost } from "../lib/pricing.ts";
 
 const ICON_MODEL = String.fromCodePoint(0xf068c);
 const ICON_FOLDER = "\uf115";
 const ICON_BRANCH = "\uf126";
-const ICON_COST = "\uf155";
 const ICON_GAUGE = "\uf1c0";
 
 const GAUGE_WIDTH = 8;
@@ -24,6 +25,10 @@ const GAUGE_EMPTY = "░";
 const GAUGE_WARN_PERCENT = 60;
 const GAUGE_ALERT_PERCENT = 85;
 const STATUS_KEYS = new Set(["background-tasks"]);
+
+/** OSC 8: wraps a label so terminals treat it as a link to `url`. */
+const LINK_OPEN = "\x1b]8;;";
+const LINK_CLOSE = "\x1b]8;;\x07";
 
 const RULE = "─";
 const RAIL = "│";
@@ -58,6 +63,8 @@ const RAINBOW_COLORS = [
 	"#b281d6", "#d787af", "#febc38", "#e4c00f",
 	"#89d281", "#00afaf", "#178fb9", "#b281d6",
 ];
+
+let footerData: ReadonlyFooterDataProvider | undefined;
 
 type Paint = (text: string) => string;
 
@@ -142,32 +149,98 @@ function messageCost(message: AssistantMessage): number | null {
 	if (cached !== undefined) return cached;
 
 	const recorded = message.usage.cost.total;
-	const cost = recorded > 0 ? recorded : (estimateUsageCost(message.model, message.usage)?.total ?? null);
+	// A gateway can expose a request alias in `model` and the model that
+	// actually answered in `responseModel`; price the latter when it is there.
+	const priced = message.responseModel ?? message.model;
+	const cost = recorded > 0 ? recorded : (estimateUsageCost(priced, message.usage)?.total ?? null);
 	COST_CACHE.set(message, cost);
 	return cost;
 }
 
-/** Sum recorded provider cost, or calculate public-list-price cost per response. */
+/**
+ * Sum every billed entry in the session, using pi's recorded cost where it has
+ * one and a public-list-price estimate per response where it does not.
+ *
+ * This walks `getEntries()` rather than `getBranch()`, and counts the same
+ * things pi's own `getUsageCostBreakdown` does: assistant responses, usage
+ * reported by a tool, and the calls behind a compaction or a branch summary.
+ * An abandoned branch was still billed, and only assistant responses carry a
+ * model id, so everything else can only contribute its recorded cost.
+ */
 function computeCostTotals(ctx: ExtensionContext): CostTotals {
 	let input = 0;
 	let output = 0;
 	let cost = 0;
 	let hasCost = false;
 
-	for (const entry of ctx.sessionManager.getBranch()) {
-		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-		const message = entry.message as AssistantMessage;
-		input += message.usage.input + message.usage.cacheRead + message.usage.cacheWrite;
-		output += message.usage.output;
+	function add(usage: Usage, message: AssistantMessage | null): void {
+		input += usage.input + usage.cacheRead + usage.cacheWrite;
+		output += usage.output;
 
-		const messageTotal = messageCost(message);
-		if (messageTotal !== null) {
-			cost += messageTotal;
+		const total = message ? messageCost(message) : (usage.cost.total > 0 ? usage.cost.total : null);
+		if (total !== null) {
+			cost += total;
 			hasCost = true;
 		}
 	}
 
+	for (const entry of ctx.sessionManager.getEntries()) {
+		if (entry.type === "compaction" || entry.type === "branch_summary") {
+			if (entry.usage) add(entry.usage, null);
+			continue;
+		}
+		if (entry.type !== "message") continue;
+		if (entry.message.role === "assistant") {
+			add(entry.message.usage, entry.message);
+		} else if (entry.message.role === "toolResult" && entry.message.usage) {
+			add(entry.message.usage, null);
+		}
+	}
+
 	return { input, output, cost, hasCost };
+}
+
+interface PullRequest {
+	number: number;
+	url: string;
+}
+
+const PR_LOOKUP_TIMEOUT_MS = 5_000;
+const PR_BY_BRANCH = new Map<string, PullRequest | null>();
+let prLookupBranch: string | null = null;
+
+/**
+ * Ask `gh` for the pull request on a branch, once per branch.
+ *
+ * A miss is cached too, so a branch without a PR does not spawn `gh` on every
+ * branch change. Switching back to a branch re-reads the cache, so a PR opened
+ * mid-session shows up on the next pi run rather than immediately.
+ */
+function lookupPullRequest(cwd: string, branch: string, onResolved: () => void): void {
+	if (PR_BY_BRANCH.has(branch) || prLookupBranch === branch) return;
+	prLookupBranch = branch;
+
+	execFile(
+		"gh",
+		["pr", "view", branch, "--json", "number,url"],
+		{ cwd, timeout: PR_LOOKUP_TIMEOUT_MS },
+		(error, stdout) => {
+			prLookupBranch = null;
+			let found: PullRequest | null = null;
+			if (!error) {
+				try {
+					const parsed = JSON.parse(stdout) as { number?: unknown; url?: unknown };
+					if (typeof parsed.number === "number" && typeof parsed.url === "string") {
+						found = { number: parsed.number, url: parsed.url };
+					}
+				} catch {
+					// `gh` is missing, unauthenticated, or printed something else.
+				}
+			}
+			PR_BY_BRANCH.set(branch, found);
+			onResolved();
+		},
+	);
 }
 
 function gaugeColor(percent: number): "success" | "warning" | "error" {
@@ -211,21 +284,32 @@ function buildTopSegments(ctx: ExtensionContext, theme: Theme): string[] {
 function buildBottomSegments(
 	ctx: ExtensionContext,
 	theme: Theme,
-	footerData: ReadonlyFooterDataProvider | undefined,
+	provider: ReadonlyFooterDataProvider | undefined,
 ): string[] {
 	const totals = computeCostTotals(ctx);
 	const segments: string[] = [];
-	const branch = footerData?.getGitBranch() ?? null;
-	if (branch) segments.push(theme.fg("success", `${ICON_BRANCH} ${branch}`));
+	const branch = provider?.getGitBranch() ?? null;
+	if (branch) {
+		const pullRequest = PR_BY_BRANCH.get(branch);
+		const label = `${ICON_BRANCH} ${branch}`;
+		segments.push(theme.fg("success", label));
+		if (pullRequest) {
+			segments.push(
+				`${LINK_OPEN}${pullRequest.url}\x07${theme.fg("mdLink", `#${pullRequest.number}`)}${LINK_CLOSE}`,
+			);
+		}
+	}
 
+	// The money glyph is itself a dollar sign, so `formatDollars` supplies the
+	// only one the segment needs.
 	if (totals.hasCost) {
-		segments.push(theme.fg("warning", `${ICON_COST} ${formatDollars(totals.cost)}`));
+		segments.push(theme.fg("warning", formatDollars(totals.cost)));
 	}
 	if (totals.input || totals.output) {
 		segments.push(theme.fg("syntaxNumber", `⇡${formatTokens(totals.input)} ⇣${formatTokens(totals.output)}`));
 	}
 
-	for (const [key, status] of footerData?.getExtensionStatuses() ?? []) {
+	for (const [key, status] of provider?.getExtensionStatuses() ?? []) {
 		if (!STATUS_KEYS.has(key)) continue;
 		// Statuses arrive pre-styled for pi's own footer — pi-background-tasks
 		// ships a filled light-blue pill. Strip that and repaint so a borrowed
@@ -285,7 +369,11 @@ function buildBorderRow(
 
 	const budget = width - LEAD_WIDTH - TRAIL_WIDTH;
 	let body = present.join(paint(` ${RULE.repeat(RULE_RUN)} `));
-	if (visibleWidth(body) > budget) body = truncateToWidth(body, budget, "…");
+	if (visibleWidth(body) > budget) {
+		// Truncation can cut a hyperlink before its terminator, which would leave
+		// the rest of the row linked. Closing again costs no width.
+		body = truncateToWidth(body, budget, "…") + LINK_CLOSE;
+	}
 
 	// One rule run is fixed at the item end; the other absorbs the remainder.
 	const fill = width - LEAD_WIDTH - visibleWidth(body) - (TRAIL_WIDTH - RULE_RUN);
@@ -366,11 +454,55 @@ function frameEditor(
 	return framed;
 }
 
+/**
+ * The status as a plain footer, for when the frame is not drawing it.
+ *
+ * Replacing pi's footer and then declining to render is how the model, context
+ * and cost vanish entirely on a terminal too narrow to frame.
+ */
+function renderPlainFooter(ctx: ExtensionContext, theme: Theme, width: number): string[] {
+	const separator = theme.fg("borderMuted", `  ${RULE.repeat(RULE_RUN)}  `);
+	const rows = [buildTopSegments(ctx, theme), buildBottomSegments(ctx, theme, footerData)];
+
+	return rows.map((segments) => {
+		const row = segments.filter((segment) => segment.trim().length > 0).join(separator);
+		return visibleWidth(row) > width ? truncateToWidth(row, width, "…") + LINK_CLOSE : row;
+	});
+}
+
 export default function contextFooterExtension(pi: ExtensionAPI): void {
 	let enabled = true;
 	let installed = false;
 	let padding: Padding = "full";
-	let footerData: ReadonlyFooterDataProvider | undefined;
+
+	function buildFooter(ctx: ExtensionContext) {
+		return (tui: TUI, _theme: Theme, provider: ReadonlyFooterDataProvider) => {
+			footerData = provider;
+
+			const findPullRequest = () => {
+				const branch = provider.getGitBranch();
+				if (branch) {
+					lookupPullRequest(ctx.sessionManager.getCwd(), branch, () => tui.requestRender());
+				}
+			};
+			findPullRequest();
+
+			const unsubscribe = provider.onBranchChange(() => {
+				findPullRequest();
+				tui.requestRender();
+			});
+
+			return {
+				dispose: unsubscribe,
+				invalidate() {},
+				render(width: number): string[] {
+					// The frame carries the status itself, unless it is not drawing.
+					if (width >= MIN_FRAMED_WIDTH) return [];
+					return renderPlainFooter(ctx, ctx.ui.theme, width);
+				},
+			};
+		};
+	}
 
 	function install(ctx: ExtensionContext): void {
 		// A second install would wrap this extension's own wrapper, nesting a
@@ -378,17 +510,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 		if (installed) return;
 		installed = true;
 
-		ctx.ui.setFooter((tui, _theme, provider) => {
-			footerData = provider;
-			const unsubscribe = provider.onBranchChange(() => tui.requestRender());
-			return {
-				dispose: unsubscribe,
-				invalidate() {},
-				render(): string[] {
-					return [];
-				},
-			};
-		});
+		ctx.ui.setFooter(buildFooter(ctx));
 
 		const previousFactory = ctx.ui.getEditorComponent();
 		ctx.ui.setEditorComponent((tui, editorTheme, keybindings) => {
@@ -456,6 +578,9 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 			}
 
 			enabled = nextEnabled;
+			// The editor wrapper stays installed but inert; the footer goes back to
+			// pi so the session information does not simply disappear.
+			ctx.ui.setFooter(enabled ? buildFooter(ctx) : undefined);
 			ctx.ui.notify(enabled ? "Context footer enabled" : "Context footer disabled", "info");
 		},
 	});
