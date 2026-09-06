@@ -10,9 +10,22 @@ import type { Component, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 const WIDGET_KEY = "away-recap";
-const ICON = "\uf017";
-/** Line that separates the recap proper from what is wanted next. */
-const NEXT_LABEL = "Next:";
+/**
+ * Filled diamond for what happened, hollow for what has not happened yet.
+ *
+ * Both are East Asian Width "Neutral", so they occupy one cell. The obvious
+ * pair, U+25C6/U+25C7, is "Ambiguous" — terminals are free to render those
+ * double-width, which would pull the wrapped lines out of alignment.
+ */
+const MARKER_RECAP = "\u2b25";
+const MARKER_NEXT = "\u2b26";
+const LABEL_RECAP = "Recap:";
+const LABEL_NEXT = "Next:";
+
+const MONTHS = [
+	"January", "February", "March", "April", "May", "June",
+	"July", "August", "September", "October", "November", "December",
+];
 
 const DEFAULT_THRESHOLD_MINUTES = 5;
 const MIN_THRESHOLD_MINUTES = 0.05;
@@ -32,7 +45,7 @@ const RECAP_TIMEOUT_MS = 30_000;
 const SETTLE_GRACE_MS = 8_000;
 /** Digest budget. The tail is kept, because the newest activity matters most. */
 const DIGEST_MAX_CHARS = 14_000;
-const ENTRY_TEXT_MAX_CHARS = 300;
+const ENTRY_TEXT_MAX_CHARS = 500;
 /** Marks where the user stopped typing, inside a whole-session digest. */
 const AWAY_MARKER = "--- the user stepped away after this point ---";
 
@@ -58,23 +71,37 @@ const RECAP_SYSTEM_PROMPT = [
 	"You are given a digest of their whole coding session. A marker line shows where they stopped",
 	"typing and stepped away.",
 	"",
-	"Reply in exactly this shape and nothing else:",
+	"Reply as exactly two lines, in this shape and nothing else:",
 	"",
-	"Two sentences. The first says what the session has been about and where it got to. The second",
-	"says what concretely came of it — a file, a command, a decision, a fix, a failure. Favour the",
-	"part after the marker, since that is what they did not see.",
+	`${LABEL_RECAP} <two sentences>`,
+	`${LABEL_NEXT} <one sentence>`,
 	"",
-	`A final line beginning "${NEXT_LABEL}" saying what is needed from them and what is coming up. If`,
-	"nothing is needed from them, say what would happen next if they said go.",
+	`The two ${LABEL_RECAP} sentences: the first says what the session has been about and where it got`,
+	"to, the second says what concretely came of it — a file, a command, a decision, a fix, a",
+	"failure. Favour the part after the marker, since that is what they did not see.",
+	"",
+	`The ${LABEL_NEXT} sentence: what is needed from them and what is coming up. If nothing is needed`,
+	"from them, say what would happen next if they said go.",
 	"",
 	"No preamble, no greeting, no sign-off, no bullet points, no markdown, no restating that they",
 	"were away. Name real things — files, commands, errors — rather than describing activity in the",
-	"abstract. Never invent anything that is not in the digest. Two sentences means two.",
+	"abstract. Never invent anything that is not in the digest — if it does not give you a number,",
+	"a filename, or a result, do not supply one. Two sentences means two.",
 ].join("\n");
 
 interface RecapResult {
 	text: string;
 	modelName: string;
+	stamp: string;
+}
+
+/** `5:00pm, August 12` */
+function formatStamp(at: Date): string {
+	const hours = at.getHours();
+	const hour12 = hours % 12 || 12;
+	const minutes = at.getMinutes().toString().padStart(2, "0");
+	const meridiem = hours < 12 ? "am" : "pm";
+	return `${hour12}:${minutes}${meridiem}, ${MONTHS[at.getMonth()]} ${at.getDate()}`;
 }
 
 function clampMinutes(value: number): number {
@@ -89,6 +116,23 @@ function formatMinutes(minutes: number): string {
 function collapse(text: string, limit: number): string {
 	const flat = text.replace(/\s+/g, " ").trim();
 	return flat.length > limit ? `${flat.slice(0, limit)}…` : flat;
+}
+
+/**
+ * Collapse a message but keep both ends.
+ *
+ * Keeping only the head loses the answer: a long reply opens with what it is
+ * about — often a file it just dumped — and closes with the result. Cutting
+ * from the front handed the recap a file listing with the line count removed,
+ * and it filled the gap with a number of its own.
+ */
+function collapseEnds(text: string, limit: number): string {
+	const flat = text.replace(/\s+/g, " ").trim();
+	if (flat.length <= limit) return flat;
+
+	const head = Math.floor(limit * 0.4);
+	const tail = limit - head;
+	return `${flat.slice(0, head)} … ${flat.slice(flat.length - tail)}`;
 }
 
 /**
@@ -124,7 +168,7 @@ function buildDigest(ctx: ExtensionContext, since: number): string[] {
 				.filter((part): part is { type: "text"; text: string } => part.type === "text")
 				.map((part) => part.text)
 				.join(" ");
-			if (said.trim()) lines.push(`[agent] ${collapse(said, ENTRY_TEXT_MAX_CHARS)}`);
+			if (said.trim()) lines.push(`[agent] ${collapseEnds(said, ENTRY_TEXT_MAX_CHARS)}`);
 
 			for (const part of message.content) {
 				if (part.type === "toolCall") lines.push(`[tool] ran ${part.name}`);
@@ -139,7 +183,7 @@ function buildDigest(ctx: ExtensionContext, since: number): string[] {
 			const said = typeof message.content === "string"
 				? message.content
 				: message.content.map((part) => (part.type === "text" ? part.text : "[image]")).join(" ");
-			if (said.trim()) lines.push(`[user] ${collapse(said, ENTRY_TEXT_MAX_CHARS)}`);
+			if (said.trim()) lines.push(`[user] ${collapseEnds(said, ENTRY_TEXT_MAX_CHARS)}`);
 		}
 	}
 
@@ -175,13 +219,25 @@ function assistantText(message: AssistantMessage): string {
 		.trim();
 }
 
+/**
+ * Split the reply into its two blocks, and drop the labels it wrote itself —
+ * the renderer supplies those.
+ *
+ * A small model asked for two labelled lines will sometimes run them together
+ * into one paragraph instead, so the label is looked for at a line start first
+ * and anywhere in the text second.
+ */
 function splitNext(text: string): { body: string; next: string | null } {
-	const match = /(^|\n)\s*Next:\s*/i.exec(text);
-	if (!match) return { body: text.trim(), next: null };
+	const anchored = new RegExp(`(?:^|\n)\\s*${LABEL_NEXT}\\s*`, "i").exec(text);
+	const match = anchored ?? new RegExp(`\\s*${LABEL_NEXT}\\s*`, "i").exec(text);
+	const stripRecap = (value: string) =>
+		value.replace(new RegExp(`^\\s*${LABEL_RECAP}\\s*`, "i"), "").trim();
 
-	const body = text.slice(0, match.index).trim();
+	if (!match) return { body: stripRecap(text), next: null };
+
+	const body = stripRecap(text.slice(0, match.index));
 	const next = text.slice(match.index + match[0].length).trim();
-	return { body: body || text.trim(), next: next || null };
+	return { body: body || stripRecap(text), next: next || null };
 }
 
 function wrap(text: string, width: number): string[] {
@@ -250,7 +306,7 @@ export default function awayRecapExtension(pi: ExtensionAPI): void {
 				{ maxTokens: RECAP_MAX_TOKENS, signal: abort.signal },
 			);
 			const text = assistantText(reply);
-			return text ? { text, modelName: model.name } : null;
+			return text ? { text, modelName: model.name, stamp: formatStamp(new Date()) } : null;
 		} finally {
 			clearTimeout(timer);
 		}
@@ -262,26 +318,30 @@ export default function awayRecapExtension(pi: ExtensionAPI): void {
 			(_tui: TUI, theme: Theme): Component => ({
 				invalidate() {},
 				render(width: number): string[] {
-					const gutter = visibleWidth(ICON) + 1;
-					const indent = " ".repeat(gutter);
-					const inner = Math.max(1, width - gutter - 2);
 					const { body, next } = splitNext(recap.text);
 					const quiet = (text: string) => theme.italic(theme.fg("muted", text));
-					const rows: string[] = [];
 
-					// The icon marks the recap once. Repeating it per line was a row of
-					// clocks down the side of the screen.
-					for (const [index, row] of wrap(body, inner).entries()) {
-						rows.push(`${index === 0 ? `${theme.fg("dim", ICON)} ` : indent}${quiet(row)}`);
-					}
-					if (next) {
-						for (const [index, row] of wrap(next, inner - NEXT_LABEL.length - 1).entries()) {
-							const label = index === 0 ? `${theme.fg("accent", NEXT_LABEL)} ` : " ".repeat(NEXT_LABEL.length + 1);
-							rows.push(`${indent}${label}${quiet(row)}`);
-						}
-					}
-					rows.push(`${indent}${theme.italic(theme.fg("dim", `generated by ${recap.modelName}`))}`);
-					return rows;
+					/**
+					 * Marker and label sit flush left; the block's own wrapped lines
+					 * hang under where its text began. The two labels differ in width,
+					 * so each block's hanging indent is its own.
+					 */
+					const block = (marker: string, label: string, text: string): string[] => {
+						const head = `${marker} ${label} `;
+						const indent = " ".repeat(visibleWidth(head));
+						const rows = wrap(text, Math.max(1, width - visibleWidth(head) - 2));
+						return rows.map((row, index) =>
+							index === 0
+								? `${theme.fg("dim", marker)} ${theme.fg("accent", label)} ${quiet(row)}`
+								: `${indent}${quiet(row)}`,
+						);
+					};
+
+					return [
+						...block(MARKER_RECAP, LABEL_RECAP, body),
+						...(next ? block(MARKER_NEXT, LABEL_NEXT, next) : []),
+						theme.italic(theme.fg("dim", `generated by ${recap.modelName} at ${recap.stamp}`)),
+					];
 				},
 			}),
 			{ placement: "aboveEditor" },
