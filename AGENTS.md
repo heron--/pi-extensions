@@ -22,6 +22,7 @@ pi-extensions/
 │                             # discovery locations (by convention, not a list)
 ├── lib/
 │   └── pricing.ts            # shared helper, imported as "../lib/pricing.ts"
+├── pi-away-recap/           # extension: away-and-back recap, rotating cheap models
 ├── pi-context-footer/        # extension: continuous prompt border + status items
 ├── pi-model-picker/          # extension: /model-picker, and takes over /model
 │   ├── index.ts
@@ -86,7 +87,7 @@ otherwise a rename can leave a symlink pointing at nothing, and pi errors on
 next launch (this happened during the `pi-throttle-stream` → `pi-typewriter`
 rename).
 
-Currently symlinked, both locations: `pi-context-footer`, `pi-model-picker`,
+Currently symlinked, both locations: `pi-away-recap`, `pi-context-footer`, `pi-model-picker`,
 `pi-typewriter`, `pi-write-lock`, `lib`.
 
 ## The `lib` symlink rule
@@ -198,6 +199,45 @@ worth knowing before touching that seam:
 - `autocompleteState` and the row layout are private; do not reach for them.
   Structure detection off the returned rows is enough and does not break when
   pi's internals move.
+
+## Calling a model, and knowing the user is there
+
+Two seams `pi-away-recap` needed that are not obvious from the extension types.
+
+**A one-off LLM call.** There is no `generate`/`complete` helper on
+`ExtensionContext`. The path is `ctx.modelRegistry`:
+
+```ts
+const model = ctx.modelRegistry.getAvailable().find(/* … */);
+if (!ctx.modelRegistry.hasConfiguredAuth(model)) return;
+const reply = await ctx.modelRegistry.complete(
+  model,
+  { systemPrompt, messages: [{ role: "user", content, timestamp: Date.now() }] },
+  { maxTokens: 400, signal },
+);
+```
+
+`complete()` resolves provider auth and headers itself — do not go looking for
+an API key to pass in. Match models by id pattern rather than
+`provider/id`: the same model shows up under different provider names depending
+on how the gateway is configured, and `ctx.model` is the *session's* model, not
+a way to reach a different one. Always pass a `signal` with a timeout; a
+courtesy feature must not be able to hang a session.
+
+**Whether the user is at the keyboard.** pi does not forward the terminal's
+focus events to extensions, so there is no way to distinguish "walked away"
+from "sat and read the whole run". What exists:
+
+- the `input` event fires on *submit*, carrying the finished text — it is not a
+  keystroke stream, so it is too late to greet someone who just came back
+- the editor's `handleInput` is the only pre-submit signal, reachable by
+  wrapping it the same way `pi-context-footer` wraps `render`
+
+So presence is "keystrokes seen recently", and that limitation belongs in the
+extension's README rather than being papered over. Do not update the
+last-seen timestamp on agent events: a long run the user waited through is
+exactly the case where a recap is wanted, and refreshing the clock on the
+agent's own activity would suppress it.
 
 ## Typechecking
 

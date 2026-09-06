@@ -8,6 +8,9 @@ extension a single typechecker.
 
 ## Extensions
 
+- **[pi-away-recap](pi-away-recap/README.md)** — when you sit back down after
+  stepping away, a rotating cheap model recaps what happened while you were
+  gone, and signs its work.
 - **[pi-context-footer](pi-context-footer/README.md)** — puts model, thinking,
   path, context, git, cost, token, and extension status information directly
   into the prompt editor's top and bottom border rows.
@@ -68,6 +71,7 @@ pi-extensions/
 │   └── link-extensions.mjs
 ├── lib/                   # shared helpers, imported as "../lib/x.ts"
 │   └── pricing.ts
+├── pi-away-recap/         # away-and-back session recap
 ├── pi-context-footer/     # inline prompt-border status display
 ├── pi-model-picker/       # an extension
 │   ├── package.json       # has the "pi" key
@@ -103,6 +107,7 @@ with no flags loads whatever is linked there, and `/reload` hot-reloads it:
 ```
 .pi/extensions/
 ├── lib                -> ../../lib                 # REQUIRED, see below
+├── pi-away-recap      -> ../../pi-away-recap
 ├── pi-context-footer  -> ../../pi-context-footer
 ├── pi-model-picker    -> ../../pi-model-picker
 ├── pi-typewriter      -> ../../pi-typewriter
