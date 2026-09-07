@@ -9,8 +9,8 @@ level in one flow.
   `anthropic/claude-sonnet-4-5`). Fixed-width columns show capability icons,
   id, and context window; the current model is marked and preselected.
   Models sort by capability tier within a provider group where the family has
-  one (Anthropic: fable > opus > sonnet > haiku); unknown tiers keep registry
-  order after the mapped ones.
+  one (Anthropic: fable > opus > sonnet > haiku; OpenAI: astra > sol > terra >
+  luna); unknown tiers keep registry order after the mapped ones.
 - **Stage 2** — pick a reasoning level from the levels the selected model
   actually supports (derived from `reasoning` + `thinkingLevelMap`), with a
   colour-coded intensity gauge. The gauge's filled cells and the level name

@@ -538,6 +538,11 @@ const MODEL_TIER_PATTERNS: readonly (readonly [RegExp, number])[] = [
 	[/\bopus\b/i, 1],
 	[/\bsonnet\b/i, 2],
 	[/\bhaiku\b/i, 3],
+	// OpenAI: astra > sol > terra > luna.
+	[/\bastra\b/i, 0],
+	[/\bsol\b/i, 1],
+	[/\bterra\b/i, 2],
+	[/\bluna\b/i, 3],
 ];
 
 /**
@@ -553,9 +558,9 @@ export function modelTier(id: string): number {
 
 /**
  * Sort one provider group by capability tier (opus before sonnet before
- * haiku, …). Ids with no known tier keep their registry order, after the
- * mapped ones — the pre-sort index makes that explicit rather than leaning
- * on Array#sort stability.
+ * haiku, sol before terra before luna, …). Ids with no known tier keep their
+ * registry order, after the mapped ones — the pre-sort index makes that
+ * explicit rather than leaning on Array#sort stability.
  */
 export function sortGroupByTier(group: ModelEntry[]): ModelEntry[] {
 	if (group.length < 2) return group;
