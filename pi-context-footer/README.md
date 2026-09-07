@@ -13,10 +13,10 @@ interrupted only where a status item sits in the rule:
 
 ```text
 ╭── 󰚌 Claude Sonnet 5 ── thinking:high ──  pi-extensions ──  ░░░░░░░░ 5%/1.0M ── 󰓹 my-feature-work ──╮
-│                                                                                 │
-│ what shape should the border take?                                              │
-│                                                                                 │
-╰───────  devin.marsh/context-footer ── #4 ── $0.04 ── ⇡47k ⇣5 ── 󰌿 write unlocked ──╯
+│                                                                                                    │
+│ what shape should the border take?                                                                 │
+│                                                                                                    │
+╰───────────────────────  devin.marsh/context-footer ── #4 ── $0.04 ── ⇡47k ⇣5 ── 󰌿 write unlocked ──╯
 ```
 
 ## Padding
