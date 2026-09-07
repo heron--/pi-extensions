@@ -539,10 +539,10 @@ function buildBorderRow(
 	rightCorner: string,
 	align: Align,
 	segments: string[],
-	lead: string[] = [],
+	leftLead: string[] = [],
 ): string {
 	const present = segments.filter((segment) => segment.trim().length > 0);
-	const leadPresent = lead.filter((segment) => segment.trim().length > 0);
+	const leadPresent = leftLead.filter((segment) => segment.trim().length > 0);
 	if (present.length === 0 && leadPresent.length === 0) {
 		return paint(leftCorner + RULE.repeat(width - FRAME_WIDTH) + rightCorner);
 	}
@@ -558,6 +558,7 @@ function buildBorderRow(
 	// A left-anchored lead (the session name) sits right after the corner; the
 	// right-aligned run keeps its place after it, so the bottom row can carry a
 	// name at the left edge without giving up the right-aligned status run.
+	// The lead implies a right-aligned body, so `align` is not consulted here.
 	if (leadPresent.length > 0) {
 		let leadBody = leadPresent.join(paint(` ${RULE.repeat(RULE_RUN)} `));
 		// Fixed overhead between the corner rules: corner + rule + space on each
@@ -570,6 +571,13 @@ function buildBorderRow(
 			leadBody = truncateToWidth(leadBody, contentBudget, "…") + LINK_CLOSE;
 		} else if (visibleWidth(body) > bodyBudget) {
 			body = truncateToWidth(body, bodyBudget, "…") + LINK_CLOSE;
+		}
+		if (visibleWidth(body) === 0) {
+			// No right-aligned body survives: render the lead as a plain left-aligned
+			// run so the row is a single broken rule rather than a notch beside an
+			// empty status slot.
+			const fill = width - LEAD_WIDTH - visibleWidth(leadBody) - (TRAIL_WIDTH - RULE_RUN);
+			return `${paint(leftCorner + RULE.repeat(RULE_RUN))} ${leadBody}${paint(` ${RULE.repeat(fill)}${rightCorner}`)}`;
 		}
 		const fill = width - LEAD_WIDTH - visibleWidth(leadBody) - visibleWidth(body) - (TRAIL_WIDTH + RULE_RUN);
 		return `${paint(leftCorner + RULE.repeat(RULE_RUN))} ${leadBody}${paint(` ${RULE.repeat(fill)}`)} ${body}${paint(` ${RULE.repeat(RULE_RUN)}${rightCorner}`)}`;
