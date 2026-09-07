@@ -216,10 +216,12 @@ Three details worth not re-discovering:
 
 - `paintThinkingSpans` composes a level indicator out of spans: styled spans
   join the tier treatment as ONE run — the palette, and the `max` sheen, flow
-  straight across them — while `styled: false` spans pass through verbatim
-  for caller-styled segments (the picker's dim empty gauge cells, fixed
-  gaps). `paintThinkingLevel` is the single-string form. The picker's gauge
-  joins its level's name this way, so `high`/`xhigh`/`max` read as one block.
+  straight across them — while `styled: false` spans and any spaces past the
+  last colored character pass through after a reset, so `xhigh`'s background
+  stops at its own cells instead of tinting the gauge's empty cell or the
+  padding after the name. `paintThinkingLevel` is the single-string form.
+  The picker's gauge joins its level's name this way, so `high`/`xhigh`/`max`
+  read as one block.
 - `THINKING_LEVEL_COLORS` is for level-*tinted instruments* outside a painted
   indicator; inside one, the solid tier reaches the same colours through the
   paint helpers. Either way callers never re-map levels by hand — that is

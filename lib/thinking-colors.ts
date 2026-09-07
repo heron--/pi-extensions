@@ -189,8 +189,12 @@ function rainbowSpans(spans: ThinkingSpan[], style: RainbowStyle, animated: bool
 	let position = 0;
 	for (const span of spans) {
 		// Verbatim spans — caller-styled gaps and dim cells — sit inside the
-		// indicator without joining the gradient.
+		// indicator without joining the gradient. Their own escapes carry a
+		// foreground only, so reset first: without that, the previous colored
+		// character's attributes bleed onto them — `xhigh`'s background would
+		// tint the gauge's empty cell and the air around the name.
 		if (span.styled === false) {
+			if (result !== "") result += "\x1b[0m";
 			result += span.text;
 			continue;
 		}
@@ -198,8 +202,12 @@ function rainbowSpans(spans: ThinkingSpan[], style: RainbowStyle, animated: bool
 			// Spaces and the colon are emitted bare, inheriting the previous
 			// character's attributes — the look `high` has always had. With
 			// `xhigh`'s backgrounds that means the colon shares its neighbor's
-			// tint, so the block reads as one continuous label.
+			// tint, so the block reads as one continuous label. A bare character
+			// past the last colored one is outside the block, though: it resets
+			// first, so `xhigh`'s background stops where the word ends instead of
+			// tinting the padding after it.
 			if (character === " " || character === ":") {
+				if (coloredTotal > 0 && colorIndex >= coloredTotal) result += "\x1b[0m";
 				result += character;
 				continue;
 			}
