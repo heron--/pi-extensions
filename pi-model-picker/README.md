@@ -22,6 +22,17 @@ level in one flow.
   [`/context-footer animate`](../pi-context-footer/README.md) preference as
   the footer. Shows the provider-mapped value for the highlighted level. Esc
   goes **back to stage 1**.
+- **Stage 2 for DeepSeek-family models** — DeepSeek does not reason with an
+  OpenAI-style effort ladder; its API takes a single toggle
+  (`thinking: { type: "enabled" | "disabled" }`). Those models get stage 2 in
+  DeepSeek's own vocabulary instead: a two-option `on`/`off` list under a
+  `Thinking` title, no effort gauge, and a detail line spelling out the
+  payload (`thinking: { type: … }` for pi's own DeepSeek entries, the mapped
+  effort string for gateway copies). Choosing `on` applies a supported pi
+  level — pinned, else current, else `high`, else the strongest supported —
+  because the wire only distinguishes on/off; the completion notification
+  reports `thinking on`/`thinking off`, not a ladder position. Detection:
+  `compat.thinkingFormat: "deepseek"`, or `deepseek` in the provider/id.
 
 ### Row icons
 
@@ -96,6 +107,11 @@ Stage 2 keys: `↑↓` navigate · `Enter` select · `Esc` back to models.
   level is preselected in stage 2.
 - Unsupported levels are hidden in stage 2; `pi.setThinkingLevel()` clamps to
   real capabilities regardless (the notification reports the clamp).
+- Stage 2's shape is provider-aware, not hardcoded per family: the OpenAI
+  ladder is what `pickThinkingLevel` renders, and DeepSeek's toggle is what
+  `pickDeepSeekThinking` renders for `isDeepSeekModel()` matches. Another
+  family with its own reasoning control gets its own picker there — not
+  renamed rows on the ladder.
 - Requires interactive (TUI) mode; the command no-ops elsewhere.
 
 ## Implementation notes

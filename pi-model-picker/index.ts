@@ -3,7 +3,8 @@
  *
  * A two-stage picker that sets the model AND its reasoning level in one flow:
  *   Stage 1: pick a model (grouped by provider, type to filter)
- *   Stage 2: pick a thinking level supported by that model
+ *   Stage 2: pick the model's reasoning control — a thinking level for
+ *     OpenAI-style effort models, the on/off toggle for DeepSeek-family ones
  *
  * Both model and level are applied together when stage 2 completes.
  * Escape in stage 2 goes back to stage 1; escape in stage 1 cancels.
@@ -211,6 +212,47 @@ export function supportedThinkingLevels(model: Model<Api>): ModelThinkingLevel[]
 		// Omitted key: standard levels default-supported, extended levels unsupported.
 		return level !== "xhigh" && level !== "max";
 	});
+}
+
+/**
+ * Whether this model reasons in DeepSeek's vocabulary: a single toggle —
+ * `thinking: { type: "enabled" | "disabled" }` — rather than an OpenAI-style
+ * effort ladder. pi's own DeepSeek catalog entries say so via
+ * `compat.thinkingFormat: "deepseek"`, and gateway copies keep `deepseek`
+ * somewhere in their provider/id; either signal is enough (stage 2 then
+ * renders the toggle, see pickDeepSeekThinking).
+ */
+export function isDeepSeekModel(model: Model<Api>): boolean {
+	const compat = model.compat as { thinkingFormat?: string } | undefined;
+	if (compat?.thinkingFormat === "deepseek") return true;
+	return `${model.provider}/${model.id}`.toLowerCase().includes("deepseek");
+}
+
+/**
+ * The pi level "thinking on" means for a DeepSeek model.
+ *
+ * The wire format only distinguishes on/off, so any supported non-off level
+ * implements "on" — pick the one that changes nothing about the request: a
+ * pinned level first (scoping chose it deliberately), then the session's
+ * current level (re-applying "on" must not silently move the effort string
+ * sent to the gateway), then "high" (pi's standard default), then the
+ * strongest level the model supports. Undefined when the model offers no
+ * non-off level at all.
+ */
+export function deepSeekOnLevel(
+	model: Model<Api>,
+	preferred: ModelThinkingLevel | undefined,
+	current: ModelThinkingLevel | undefined,
+): ModelThinkingLevel | undefined {
+	const supported = supportedThinkingLevels(model);
+	const usable = (level: ModelThinkingLevel | undefined): level is ModelThinkingLevel =>
+		!!level && level !== "off" && supported.includes(level);
+	if (usable(preferred)) return preferred;
+	if (usable(current)) return current;
+	if (supported.includes("high")) return "high";
+	return [...ALL_LEVELS].reverse().find(
+		(level) => level !== "off" && supported.includes(level),
+	);
 }
 
 /**
@@ -1084,6 +1126,182 @@ function pickThinkingLevel(
 }
 
 /**
+ * The "what happens on the wire" note under the toggle. pi's DeepSeek
+ * thinkingFormat sends the literal toggle payload; gateway copies go out
+ * as an effort string (what thinkingLevelMap maps the level to), which the
+ * map spells out when it has one.
+ */
+export function deepSeekWireDetail(
+	model: Model<Api>,
+	option: "on" | "off",
+	onLevel: ModelThinkingLevel | undefined,
+): string {
+	const compat = model.compat as { thinkingFormat?: string } | undefined;
+	if (compat?.thinkingFormat === "deepseek") {
+		return option === "on" ? 'thinking: { type: "enabled" }' : 'thinking: { type: "disabled" }';
+	}
+	const map = model.thinkingLevelMap;
+	const mapped = map?.[option === "on" ? (onLevel ?? "high") : "off"];
+	return typeof mapped === "string"
+		? `sends "${mapped}" to ${model.provider}`
+		: `uses ${model.provider}'s default for this level`;
+}
+
+/**
+ * Stage 2 for DeepSeek-family models: reasoning is a toggle, and this renders
+ * it in DeepSeek's own vocabulary — rows "on"/"off" under a "Thinking" title
+ * — instead of the OpenAI effort ladder with its intensity gauge, which reads
+ * as a seven-step scale the provider does not have.
+ *
+ * "on" applies the level deepSeekOnLevel resolves (the wire only distinguishes
+ * on/off); "off" applies "off". Returns the chosen pi level, or null to go
+ * back to stage 1.
+ */
+function pickDeepSeekThinking(
+	ctx: ExtensionContext,
+	model: Model<Api>,
+	preferred: ModelThinkingLevel | undefined,
+): Promise<ModelThinkingLevel | null> {
+	const levels = supportedThinkingLevels(model);
+	const current = ctx.thinkingLevel as ModelThinkingLevel | undefined;
+	const onLevel = deepSeekOnLevel(model, preferred, current);
+	// Only reachable by a map that nulls every level including "off": the
+	// ladder is equally empty there, but at least it is the picker that
+	// renders nothing rather than a toggle with no rows.
+	if (onLevel === undefined && !levels.includes("off")) {
+		return pickThinkingLevel(ctx, model, preferred);
+	}
+
+	return ctx.ui.custom<ModelThinkingLevel | null>((tui, theme, _kb, done) => {
+		const options: SelectItem[] = [];
+		if (onLevel !== undefined) {
+			options.push({
+				value: "on",
+				label: "on",
+				description: "reasoning before answering",
+			});
+		}
+		if (levels.includes("off")) {
+			options.push({
+				value: "off",
+				label: "off",
+				description: "no thinking pass — fastest",
+			});
+		}
+
+		const selectList = new SelectList(
+			options,
+			options.length,
+			{
+				selectedPrefix: (t) => theme.fg("accent", t),
+				selectedText: (t) => theme.fg("accent", t),
+				description: (t) => theme.fg("muted", t),
+				scrollInfo: (t) => theme.fg("dim", t),
+				noMatch: (t) => theme.fg("warning", t),
+			},
+			{
+				// Same pin as the ladder so the description column starts at the
+				// same offset whichever stage-2 picker is open.
+				minPrimaryColumnWidth: LEVEL_PRIMARY_CONTENT + CELL_GAP,
+				maxPrimaryColumnWidth: LEVEL_PRIMARY_CONTENT + CELL_GAP,
+				truncatePrimary: ({ item, isSelected }) => {
+					const isOn = item.value === "on";
+					// The session's current state: any non-off level reads as "on" on
+					// the wire.
+					const isCurrent = isOn
+						? current !== undefined && current !== "off"
+						: current === "off";
+					const gap = " ".repeat(CELL_GAP);
+					// See composeModelPrimary: re-assert accent so the selected row's
+					// description is not left unpainted by the reset our coloured
+					// cells end with.
+					const tail = isSelected ? theme.getFgAnsi("accent") : "";
+					// Solid colours, deliberately NOT the shared thinking-level scheme:
+					// "on"/"off" is not a pi level, so it wears no tier's rainbow.
+					// "on" takes the ✦ reasoning icon's colour; "off" matches how
+					// the ladder paints "off" (thinkingOff).
+					const glyph = isOn
+						? theme.fg(ICON_COLOR.reasoning, ICON.reasoning)
+						: theme.fg("dim", ICON.absent);
+					const nameColor: PickerColor = isOn ? ICON_COLOR.reasoning : "thinkingOff";
+					return (
+						[
+							glyph,
+							theme.fg(nameColor, padEndTo(item.value as string, LEVEL_NAME_WIDTH)),
+							isCurrent ? theme.fg("accent", ICON.current) : " ",
+						].join(gap) + tail
+					);
+				},
+			},
+		);
+
+		selectList.onSelect = (item) => done(item.value === "on" ? (onLevel ?? "off") : "off");
+		selectList.onCancel = () => done(null);
+
+		// Default highlight mirrors the ladder's: pinned > current > "high".
+		// A pinned/current "off" highlights "off"; any non-off level — or no
+		// signal at all, matching the ladder's "high" default — highlights "on".
+		const defaultOption: "on" | "off" =
+			preferred === "off" || (preferred === undefined && current === "off")
+				? "off"
+				: "on";
+		const defaultIndex = options.findIndex((o) => o.value === defaultOption);
+		if (defaultIndex >= 0) selectList.setSelectedIndex(defaultIndex);
+
+		return {
+			render(width: number): string[] {
+				const w = Math.max(1, width);
+				const lines: string[] = [];
+
+				lines.push(theme.fg("border", "─".repeat(w)));
+				lines.push(
+					truncateToWidth(
+						`  ${theme.fg("accent", theme.bold("Thinking"))}${theme.fg("dim", `  ·  for ${model.name}`)}`,
+						w,
+						"…",
+					),
+				);
+				lines.push("");
+				for (const line of selectList.render(w)) lines.push(line);
+
+				// Detail panel: what this choice actually sends to the provider.
+				const selected = selectList.getSelectedItem();
+				if (selected) {
+					const isOn = selected.value === "on";
+					lines.push("");
+					lines.push(
+						truncateToWidth(
+							`  ${theme.fg(isOn ? ICON_COLOR.reasoning : "thinkingOff", selected.value as string)}${theme.fg("dim", "  ·  ")}${theme.fg("muted", deepSeekWireDetail(model, isOn ? "on" : "off", onLevel))}`,
+							w,
+							"…",
+						),
+					);
+				}
+
+				lines.push("");
+				lines.push(
+					truncateToWidth(
+						`  ${theme.fg("dim", "↑↓ move   ⏎ apply   esc back to models")}`,
+						w,
+						"…",
+					),
+				);
+				lines.push(theme.fg("border", "─".repeat(w)));
+				return lines;
+			},
+			invalidate() {
+				selectList.invalidate();
+			},
+			handleInput(data: string) {
+				// SelectList handles up/down (wrapping), Enter (confirm), Esc/Ctrl+C (cancel).
+				selectList.handleInput(data);
+				tui.requestRender();
+			},
+		};
+	});
+}
+
+/**
  * Apply model + thinking level together.
  */
 async function applySelection(
@@ -1101,7 +1319,29 @@ async function applySelection(
 	pi.setThinkingLevel(level);
 	const applied = pi.getThinkingLevel();
 	const clamped = applied !== level ? ` (${level} not supported, clamped)` : "";
+	if (isDeepSeekModel(model)) {
+		// DeepSeek vocabulary: the control is a toggle, so report the state, not
+		// the ladder position the applied level happens to sit at.
+		const state = applied === "off" ? "off" : "on";
+		ctx.ui.notify(`${model.name} · thinking ${state}${clamped}`, "info");
+		return;
+	}
 	ctx.ui.notify(`${model.name} · reasoning ${applied}${clamped}`, "info");
+}
+
+/**
+ * Stage 2 dispatcher: render the reasoning control in the vocabulary the
+ * provider actually speaks — the effort ladder for OpenAI-style models, the
+ * on/off toggle for DeepSeek-family ones (see pickDeepSeekThinking).
+ */
+function pickReasoningControl(
+	ctx: ExtensionContext,
+	model: Model<Api>,
+	preferred: ModelThinkingLevel | undefined,
+): Promise<ModelThinkingLevel | null> {
+	return isDeepSeekModel(model)
+		? pickDeepSeekThinking(ctx, model, preferred)
+		: pickThinkingLevel(ctx, model, preferred);
 }
 
 /** Shared flow for both /model-picker and the intercepted /model. */
@@ -1121,7 +1361,7 @@ async function runPicker(
 		const entry = await pickModel(ctx, entries, initialFilter);
 		if (!entry) return; // cancelled in stage 1
 
-		const level = await pickThinkingLevel(ctx, entry.model, entry.pinnedLevel);
+		const level = await pickReasoningControl(ctx, entry.model, entry.pinnedLevel);
 		if (level === null) continue; // back to stage 1
 
 		await applySelection(pi, ctx, entry.model, level);
