@@ -7,9 +7,10 @@ import type {
 	Theme,
 	ThemeColor,
 } from "@earendil-works/pi-coding-agent";
-import { CustomEditor } from "@earendil-works/pi-coding-agent";
+import { CustomEditor, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
-import { basename } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import type { TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { estimateUsageCost } from "../lib/pricing.ts";
@@ -60,14 +61,115 @@ const THINKING_COLOR: Record<string, ThemeColor> = {
 	medium: "thinkingMedium",
 };
 
-// Matches pi-powerline-footer's high-thinking gradient exactly.
-const RAINBOW_LEVELS = new Set(["high", "xhigh", "max"]);
+// Matches pi-powerline-footer's high-thinking gradient exactly; the last
+// entry repeats the first so a full 8-character cycle ends where it began.
 const RAINBOW_COLORS = [
 	"#b281d6", "#d787af", "#febc38", "#e4c00f",
 	"#89d281", "#00afaf", "#178fb9", "#b281d6",
 ];
 
+/** How strongly the traveling highlight brightens a character, by distance from its center. */
+const SHEEN_FALLOFF = [0.85, 0.5, 0.2] as const;
+/**
+ * How far `xhigh`'s per-character background is dimmed from its foreground: the
+ * tint keeps 30% of the character's brightness, so it reads as hue-matched
+ * depth behind the glyph rather than a second palette.
+ */
+const BACKGROUND_DIM = 0.7;
+/**
+ * One highlight step per 80ms, the cadence of pi's own working spinner. While
+ * the gloss is on screen the extension asks for a repaint each step itself —
+ * pi repaints on demand, so without this the shimmer would only move when
+ * something else happened to trigger a render.
+ */
+const SHEEN_STEP_MS = 80;
+
+interface RainbowStyle {
+	/** Emit bold alongside each character's own color. */
+	bold?: boolean;
+	/** Back each character with a dark tint derived from its own foreground color. */
+	background?: boolean;
+	/** Overlay the traveling holographic highlight used by `max`. */
+	sheen?: boolean;
+}
+
+/** Per-level rainbow treatment; `high` is the look `pi-powerline-footer` ships. */
+const RAINBOW_STYLES: Readonly<Record<string, RainbowStyle | undefined>> = {
+	high: {},
+	xhigh: { bold: true, background: true },
+	max: { bold: true, sheen: true },
+};
+
 let footerData: ReadonlyFooterDataProvider | undefined;
+
+/** The TUI the shimmer's repaint loop drives, captured from the editor factory. */
+let tickerTui: TUI | null = null;
+/** The shimmer's repaint driver, held only while its label is on screen. */
+let sheenTicker: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Start or stop the shimmer's repaint loop to match whether its label is being
+ * drawn. Called from the editor's render: every transition that could show or
+ * hide the gloss — a level change, `/context-footer`, a resize, a model without
+ * reasoning — is followed by a render, so this one call keeps the ticker
+ * truthful without subscribing to anything.
+ */
+function syncSheenTicker(active: boolean): void {
+	if (!active) {
+		if (sheenTicker === null) return;
+		clearInterval(sheenTicker);
+		sheenTicker = null;
+		return;
+	}
+	if (sheenTicker === null) {
+		sheenTicker = setInterval(() => tickerTui?.requestRender(), SHEEN_STEP_MS);
+	}
+}
+
+/**
+ * Whether the `max` shimmer may animate at all. A machine preference rather
+ * than a session choice, so it persists; `/context-footer animate` flips it.
+ */
+let animate = true;
+
+/**
+ * Where the animation preference lives: pi's own agent-config directory, so
+ * a customized agent dir (PI_CODING_AGENT_DIR) is respected without this file
+ * re-implementing the resolution.
+ *
+ * Not under `<agent dir>/extensions/pi-context-footer/`, because this
+ * extension is installed by symlink: that path resolves into the git checkout,
+ * and the config would land in the repo.
+ */
+function configFile(): string {
+	return join(getAgentDir(), "pi-context-footer", "config.json");
+}
+
+interface StoredConfig {
+	/** Whether the `max` shimmer may animate. Absent means on, the default. */
+	animate?: boolean;
+}
+
+function loadConfig(): void {
+	try {
+		const stored = JSON.parse(readFileSync(configFile(), "utf8")) as StoredConfig;
+		if (typeof stored.animate === "boolean") animate = stored.animate;
+	} catch {
+		// No config, or an unreadable one. Defaults are not worth an error.
+	}
+}
+
+function saveConfig(): boolean {
+	try {
+		const file = configFile();
+		mkdirSync(dirname(file), { recursive: true });
+		const body: StoredConfig = { animate };
+		writeFileSync(file, `${JSON.stringify(body, null, 2)}\n`, "utf8");
+		return true;
+	} catch {
+		return false;
+	}
+}
 
 type Paint = (text: string) => string;
 
@@ -92,31 +194,89 @@ type Align = "left" | "right";
 type Padding = "full" | "none";
 const PADDINGS = new Set<Padding>(["full", "none"]);
 
-function hexToAnsi(hex: string): string {
+function hexToRgb(hex: string): [number, number, number] {
 	const value = hex.slice(1);
-	const red = Number.parseInt(value.slice(0, 2), 16);
-	const green = Number.parseInt(value.slice(2, 4), 16);
-	const blue = Number.parseInt(value.slice(4, 6), 16);
-	return `\x1b[38;2;${red};${green};${blue}m`;
+	return [
+		Number.parseInt(value.slice(0, 2), 16),
+		Number.parseInt(value.slice(2, 4), 16),
+		Number.parseInt(value.slice(4, 6), 16),
+	];
 }
 
-function rainbow(text: string): string {
+/** Foreground SGR for `hex`, optionally bold with a derived background. Each colored character's whole style rides inside its own escape, so consecutive characters never inherit each other's color; the reset in `rainbow()` keeps the label from painting past its end. */
+function hexToAnsi(hex: string, bold = false, background?: string): string {
+	const [red, green, blue] = hexToRgb(hex);
+	const back = background === undefined ? "" : `;48;2;${hexToRgb(background).join(";")}`;
+	return `\x1b[${bold ? "1;" : ""}38;2;${red};${green};${blue}${back}m`;
+}
+
+/** Blend a palette color toward white — the highlight is a gloss over the rainbow, not a color of its own. */
+function towardWhite(hex: string, amount: number): string {
+	const mix = (channel: number) =>
+		Math.round(channel + (255 - channel) * amount)
+			.toString(16)
+			.padStart(2, "0");
+	const [red, green, blue] = hexToRgb(hex);
+	return `#${mix(red)}${mix(green)}${mix(blue)}`;
+}
+
+/** Dim a palette color toward black — `xhigh`'s background is derived from the character's own foreground. */
+function towardBlack(hex: string, amount: number): string {
+	const dim = (channel: number) =>
+		Math.round(channel * (1 - amount))
+			.toString(16)
+			.padStart(2, "0");
+	const [red, green, blue] = hexToRgb(hex);
+	return `#${dim(red)}${dim(green)}${dim(blue)}`;
+}
+
+function rainbow(text: string, style: RainbowStyle, animated: boolean): string {
+	const bold = style.bold ?? false;
+	const characters = [...text];
+	const coloredTotal = characters.filter((c) => c !== " " && c !== ":").length;
+	const sheen = style.sheen === true && coloredTotal > 0;
+	let center = 0;
+	if (sheen) {
+		// The highlight laps the label: measured on colored characters only, it
+		// slides off the right edge as it enters on the left, so the loop has no
+		// seam. It advances only while `animated` — the same predicate that runs
+		// the repaint ticker — so a gloss that is not being driven stays pinned
+		// at the head of the label instead of jumping on unrelated renders.
+		center = animated
+			? Math.floor(Date.now() / SHEEN_STEP_MS) % coloredTotal
+			: 0;
+	}
+
 	let result = "";
 	let colorIndex = 0;
-	for (const character of text) {
+	let position = 0;
+	for (const character of characters) {
+		// Spaces and the colon are emitted bare, inheriting the previous
+		// character's attributes — the look `high` has always had. With
+		// `xhigh`'s backgrounds that means the colon shares its neighbor's
+		// tint, so the block reads as one continuous label.
 		if (character === " " || character === ":") {
 			result += character;
 			continue;
 		}
-		result += `${hexToAnsi(RAINBOW_COLORS[colorIndex % RAINBOW_COLORS.length]!)}${character}`;
+		let color = RAINBOW_COLORS[colorIndex % RAINBOW_COLORS.length]!;
+		if (sheen) {
+			const offset = Math.abs(position - center);
+			const amount = SHEEN_FALLOFF[Math.min(offset, coloredTotal - offset)] ?? 0;
+			if (amount > 0) color = towardWhite(color, amount);
+		}
+		const back = style.background === true ? towardBlack(color, BACKGROUND_DIM) : undefined;
+		result += `${hexToAnsi(color, bold, back)}${character}`;
 		colorIndex++;
+		position++;
 	}
 	return `${result}\x1b[0m`;
 }
 
-function thinkingLabel(theme: Theme, level: string): string {
+function thinkingLabel(theme: Theme, level: string, animated: boolean): string {
 	const text = `thinking:${level}`;
-	if (RAINBOW_LEVELS.has(level)) return rainbow(text);
+	const style = RAINBOW_STYLES[level];
+	if (style) return rainbow(text, style, animated);
 	return theme.fg(THINKING_COLOR[level] ?? "thinkingOff", text);
 }
 
@@ -262,7 +422,7 @@ function renderGauge(theme: Theme, percent: number | null): string {
 }
 
 /** The upper border carries identity and current context health. */
-function buildTopSegments(ctx: ExtensionContext, theme: Theme): string[] {
+function buildTopSegments(ctx: ExtensionContext, theme: Theme, animated: boolean): string[] {
 	const model = ctx.model?.name || ctx.model?.id || "no-model";
 	const sessionCwd = ctx.sessionManager.getCwd();
 	const cwd = basename(sessionCwd) || sessionCwd;
@@ -274,7 +434,7 @@ function buildTopSegments(ctx: ExtensionContext, theme: Theme): string[] {
 
 	const segments = [theme.fg("syntaxType", `${ICON_MODEL} ${model}`)];
 	if (ctx.model?.reasoning && ctx.thinkingLevel) {
-		segments.push(thinkingLabel(theme, ctx.thinkingLevel));
+		segments.push(thinkingLabel(theme, ctx.thinkingLevel, animated));
 	}
 	segments.push(theme.fg("syntaxFunction", `${ICON_FOLDER} ${cwd}`));
 	segments.push(
@@ -472,7 +632,8 @@ function frameEditor(
  */
 function renderPlainFooter(ctx: ExtensionContext, theme: Theme, width: number): string[] {
 	const separator = theme.fg("borderMuted", `  ${RULE.repeat(RULE_RUN)}  `);
-	const rows = [buildTopSegments(ctx, theme), buildBottomSegments(ctx, theme, footerData)];
+	// No repaint ticker drives the plain rows, so the gloss never animates here.
+	const rows = [buildTopSegments(ctx, theme, false), buildBottomSegments(ctx, theme, footerData)];
 
 	return rows.map((segments) => {
 		const row = segments.filter((segment) => segment.trim().length > 0).join(separator);
@@ -524,12 +685,27 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 
 		const previousFactory = ctx.ui.getEditorComponent();
 		ctx.ui.setEditorComponent((tui, editorTheme, keybindings) => {
+			// The shimmer's repaint loop needs the TUI. The frame this factory wraps
+			// is where the gloss animates; the narrow plain footer draws it too,
+			// but never moving.
+			tickerTui = tui;
 			const editor = previousFactory
 				? previousFactory(tui, editorTheme, keybindings)
 				: new CustomEditor(tui, editorTheme, keybindings);
 			const baseRender = editor.render.bind(editor);
 
 			editor.render = (width: number): string[] => {
+				// One predicate drives both the ticker and the gloss: the highlight
+				// advances only while the ticker runs, so a gloss that is not being
+				// driven never jumps to a new position on an unrelated render — it
+				// stays pinned at the head of the label, as in the plain footer.
+				const animated =
+					enabled
+						&& animate
+						&& width >= MIN_FRAMED_WIDTH
+						&& !!ctx.model?.reasoning
+						&& ctx.thinkingLevel === "max";
+				syncSheenTicker(animated);
 				// Too narrow for a rule plus a label: leave pi's own rows alone.
 				if (!enabled || width < MIN_FRAMED_WIDTH) return baseRender(width);
 
@@ -544,7 +720,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 					theme,
 					paint,
 					padding,
-					buildTopSegments(ctx, theme),
+					buildTopSegments(ctx, theme, animated),
 					buildBottomSegments(ctx, theme, footerData),
 				);
 			};
@@ -554,11 +730,18 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
+		loadConfig();
 		if (ctx.mode === "tui") install(ctx);
 	});
 
+	pi.on("session_shutdown", async () => {
+		// The TUI is going away; a live interval would paint into it after the
+		// session ends and pin the event loop open at quit.
+		syncSheenTicker(false);
+	});
+
 	pi.registerCommand("context-footer", {
-		description: "Toggle the context-footer border, or set its padding",
+		description: "Toggle the context-footer border, set its padding, or toggle the thinking shimmer",
 		handler: async (args, ctx) => {
 			const [verb, value, ...extra] = (args ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
 
@@ -576,8 +759,33 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 				return;
 			}
 
+			if (verb === "animate") {
+				if (value === undefined) {
+					ctx.ui.notify(`Context footer animation is ${animate ? "on" : "off"}`, "info");
+					return;
+				}
+				if (extra.length > 0 || (value !== "on" && value !== "off")) {
+					ctx.ui.notify("Usage: /context-footer animate [on|off]", "warning");
+					return;
+				}
+				const nextAnimate = value === "on";
+				if (nextAnimate === animate) {
+					ctx.ui.notify(`Context footer animation is already ${animate ? "on" : "off"}`, "info");
+					return;
+				}
+				animate = nextAnimate;
+				// The command's own notify repaints, so the ticker re-syncs itself.
+				ctx.ui.notify(
+					saveConfig()
+						? `Context footer animation ${nextAnimate ? "enabled" : "disabled"}`
+						: `Context footer animation ${nextAnimate ? "enabled" : "disabled"} for this session only (config file not writable)`,
+					"info",
+				);
+				return;
+			}
+
 			if (value !== undefined || (verb !== undefined && verb !== "on" && verb !== "off")) {
-				ctx.ui.notify("Usage: /context-footer [on|off|pad full|pad none]", "warning");
+				ctx.ui.notify("Usage: /context-footer [on|off|pad full|pad none|animate on|animate off]", "warning");
 				return;
 			}
 

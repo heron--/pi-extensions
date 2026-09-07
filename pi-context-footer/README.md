@@ -81,9 +81,24 @@ request number uses the theme's link color and the money figure the theme's
 accent color.
 
 Thinking colors match `pi-powerline-footer`: `minimal`, `low`, and `medium` use
-pi's corresponding thinking colors; `high`, `xhigh`, and `max` use its exact
-purple → pink → yellow → green → cyan → blue gradient. The model marker is the
-Nerd Font `nf-md-skull` glyph.
+pi's corresponding thinking colors; `high` uses its exact purple → pink →
+yellow → green → cyan → blue gradient. Above that the treatment escalates on
+the same palette: `xhigh` is the same gradient, bold, with each character
+backed by a dark tint derived from its own color, and `max` — bold — adds a
+white gloss that travels across the characters, one step per 80ms. pi repaints on demand — there is no idle frame loop — so while the gloss
+is on screen the extension keeps an 80ms `requestRender` interval of its own,
+the same mechanism pi's working spinner uses, and the shimmer runs at the same
+speed whether you are typing, the agent is working, or the prompt is idle.
+The ticker is started and stopped from the editor's render path: every
+transition that could show or hide the label — a level change,
+`/context-footer`, a resize, a model without reasoning — is followed by a
+render, so no subscriptions are needed to keep it truthful, and
+`session_shutdown` stops it so it can never pin the event loop at exit. The
+shimmer can be switched off with `/context-footer animate off` (persisted;
+see Usage). The gloss's animation only ever changes foreground color, so the
+shimmer cannot shift the layout or leak attributes into the rest of the
+border; below 24 columns the plain footer carries the label with the gloss
+pinned, never moving. The model marker is the Nerd Font `nf-md-skull` glyph.
 
 ## Cost
 
@@ -140,7 +155,14 @@ discovery directory.
 /context-footer on         enable it
 /context-footer off        disable it
 /context-footer pad none   set the padding (see above)
+/context-footer animate [on|off]   report or toggle the traveling gloss
 ```
+
+The animation preference is a machine setting rather than a session choice,
+so it persists across sessions in `<agent dir>/pi-context-footer/config.json`.
+With animation off the gloss is not removed — it stays pinned at the head of
+the label, the static form of the same effect, and the repaint loop stays
+down.
 
 `off` leaves the editor wrapper installed but inert, which avoids removing a
 subsequently installed editor integration such as the `/model` interceptor, and
