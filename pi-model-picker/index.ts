@@ -48,6 +48,7 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { formatPricing, getPricing } from "../lib/pricing.ts";
+import { paintThinkingLevel, THINKING_LEVEL_COLORS } from "../lib/thinking-colors.ts";
 
 const ALL_LEVELS: ModelThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
@@ -144,18 +145,12 @@ const ICON_COLOR = {
 	current: "warning",
 } as const;
 
-/** Per-level colour, matching pi's own thinking-level palette. */
-const LEVEL_COLOR = {
-	off: "thinkingOff",
-	minimal: "thinkingMinimal",
-	low: "thinkingLow",
-	medium: "thinkingMedium",
-	high: "thinkingHigh",
-	xhigh: "thinkingXhigh",
-	max: "thinkingMax",
-} as const;
-
-/** Relative reasoning effort per level, used to fill the gauge (0..6). */
+/**
+ * Relative reasoning effort per level, used to fill the gauge (0..6). The
+ * gauge is painted in the level's base colour from the shared scheme; the
+ * level NAME gets the full treatment via paintThinkingLevel, so high/xhigh/max
+ * preview here exactly as pi-context-footer renders them.
+ */
 const LEVEL_INTENSITY: Record<ModelThinkingLevel, number> = {
 	off: 0,
 	minimal: 1,
@@ -857,7 +852,7 @@ export function levelGauge(level: ModelThinkingLevel, theme: PickerTheme): strin
 	const filled = LEVEL_INTENSITY[level];
 	const empty = GAUGE_WIDTH - filled;
 	return (
-		(filled > 0 ? theme.fg(LEVEL_COLOR[level], ICON.gaugeOn.repeat(filled)) : "") +
+		(filled > 0 ? theme.fg(THINKING_LEVEL_COLORS[level], ICON.gaugeOn.repeat(filled)) : "") +
 		(empty > 0 ? theme.fg("dim", ICON.gaugeOff.repeat(empty)) : "")
 	);
 }
@@ -903,12 +898,13 @@ function pickThinkingLevel(
 					const isCurrent = level === current;
 					const gap = " ".repeat(CELL_GAP);
 					// See composeModelPrimary: re-assert accent so the selected row's
-					// description is not left unpainted by our foreground-only resets.
+					// description is not left unpainted by the resets our coloured cells
+					// end with (the shared rainbow closes with a full \x1b[0m).
 					const tail = isSelected ? theme.getFgAnsi("accent") : "";
 					return (
 						[
 							levelGauge(level, theme),
-							theme.fg(LEVEL_COLOR[level], padEndTo(level, LEVEL_NAME_WIDTH)),
+							paintThinkingLevel(theme, level, padEndTo(level, LEVEL_NAME_WIDTH)),
 							isCurrent ? theme.fg("accent", ICON.current) : " ",
 						].join(gap) + tail
 					);
@@ -954,7 +950,7 @@ function pickThinkingLevel(
 					lines.push("");
 					lines.push(
 						truncateToWidth(
-							`  ${theme.fg(LEVEL_COLOR[level], level)}${theme.fg("dim", "  ·  ")}${theme.fg("muted", detail)}`,
+							`  ${paintThinkingLevel(theme, level, level)}${theme.fg("dim", "  ·  ")}${theme.fg("muted", detail)}`,
 							w,
 							"…",
 						),

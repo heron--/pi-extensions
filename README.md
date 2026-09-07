@@ -194,6 +194,40 @@ Two implementation details worth not re-discovering:
 If `@pydantic/genai-prices` isn't installed, estimates return `null` instead of
 throwing — the extension keeps working, just without them.
 
+### `lib/thinking-colors.ts`
+
+The thinking-level colour scheme, shared by `pi-context-footer` (the
+`thinking:level` label in the frame) and `pi-model-picker` (the stage-2 level
+rows), so a given level looks the same everywhere it appears.
+
+Two tiers, mirroring the escalation they encode:
+
+- `off`/`minimal`/`low`/`medium` — pi's own `thinking*` theme colours.
+- `high`/`xhigh`/`max` — the `pi-powerline-footer` rainbow, escalating: `high`
+  the plain gradient, `xhigh` bold over per-character backgrounds derived from
+  each character's own foreground, `max` bold with a travelling white gloss.
+
+```ts
+paintThinkingLevel(theme, level, "thinking:high", animated); // the whole scheme
+THINKING_LEVEL_COLORS[level];                                  // base colour only
+```
+
+Three details worth not re-discovering:
+
+- `THINKING_LEVEL_COLORS` is for level-*tinted instruments* that are not the
+  label itself — the picker's intensity gauge keeps a single base colour per
+  level. Level labels go through `paintThinkingLevel`, or they drift out of
+  sync with the footer.
+- `animated` governs only the `max` gloss: it advances one
+  `THINKING_SHEEN_STEP_MS` per frame while true, and stays pinned at the head
+  of the label while false. A caller that repaints only on events (the picker)
+  must pass false or the gloss jumps on every unrelated render; a caller that
+  wants it moving (the footer) keeps a `requestRender` interval at that same
+  cadence.
+- The rainbow tiers close with a full `\x1b[0m` reset, so anything styled after
+  painted text on the same row must re-establish its own attributes — both
+  callers already do this.
+
 ## Adding an extension
 
 1. `mkdir pi-my-thing` with an `index.ts` and a `package.json` carrying a `pi`

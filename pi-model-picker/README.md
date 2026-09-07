@@ -10,8 +10,11 @@ level in one flow.
   id, and context window; the current model is marked and preselected.
 - **Stage 2** — pick a reasoning level from the levels the selected model
   actually supports (derived from `reasoning` + `thinkingLevelMap`), with a
-  colour-coded intensity gauge. Shows the provider-mapped value for the
-  highlighted level. Esc goes **back to stage 1**.
+  colour-coded intensity gauge. Level names are painted with the shared scheme
+  from [`lib/thinking-colors.ts`](../README.md#libthinking-colorsts), so
+  `high`/`xhigh`/`max` preview exactly as the context footer renders them.
+  Shows the provider-mapped value for the highlighted level. Esc goes
+  **back to stage 1**.
 
 ### Row icons
 

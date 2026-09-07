@@ -80,7 +80,10 @@ pi's bash-mode and thinking-level tinting instead of overriding it. The pull
 request number uses the theme's link color and the money figure the theme's
 accent color.
 
-Thinking colors match `pi-powerline-footer`: `minimal`, `low`, and `medium` use
+The thinking-level scheme lives in
+[`lib/thinking-colors.ts`](../README.md#libthinking-colorsts), shared with
+`pi-model-picker` so a level looks identical in the picker's level list and in
+the border. Thinking colors match `pi-powerline-footer`: `minimal`, `low`, and `medium` use
 pi's corresponding thinking colors; `high` uses its exact purple → pink →
 yellow → green → cyan → blue gradient. Above that the treatment escalates on
 the same palette: `xhigh` is the same gradient, bold, with each character
