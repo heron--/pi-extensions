@@ -21,6 +21,7 @@ const ICON_BRANCH = "\uf126";
 const ICON_GAUGE = "\uf1c0";
 const ICON_LOCK = String.fromCodePoint(0xf033e); // nf-md-lock
 const ICON_LOCK_OPEN = String.fromCodePoint(0xf033f); // nf-md-lock_open
+const ICON_SESSION = String.fromCodePoint(0xf04f9); // nf-md-tag
 
 const GAUGE_WIDTH = 8;
 const GAUGE_FILLED = "█";
@@ -421,6 +422,16 @@ function renderGauge(theme: Theme, percent: number | null): string {
 		+ theme.fg("dim", GAUGE_EMPTY.repeat(GAUGE_WIDTH - filledCount));
 }
 
+/** The session name as a right-anchored segment, or null when none is set. */
+function sessionNameSegment(ctx: ExtensionContext, theme: Theme): string | null {
+	const name = ctx.sessionManager.getSessionName();
+	if (!name) return null;
+	// `emphasisText` is a theme color pi's ThemeColor union does not know about
+	// yet (the schema is lenient at runtime, so the cast is safe); it resolves to
+	// claude pink in the frontier-funds theme.
+	return theme.fg("emphasisText" as ThemeColor, `${ICON_SESSION} ${name}`);
+}
+
 /** The upper border carries identity and current context health. */
 function buildTopSegments(ctx: ExtensionContext, theme: Theme, animated: boolean): string[] {
 	const model = ctx.model?.name || ctx.model?.id || "no-model";
@@ -531,9 +542,11 @@ function buildBorderRow(
 	rightCorner: string,
 	align: Align,
 	segments: string[],
+	rightTrail: string[] = [],
 ): string {
 	const present = segments.filter((segment) => segment.trim().length > 0);
-	if (present.length === 0) {
+	const trailPresent = rightTrail.filter((segment) => segment.trim().length > 0);
+	if (present.length === 0 && trailPresent.length === 0) {
 		return paint(leftCorner + RULE.repeat(width - FRAME_WIDTH) + rightCorner);
 	}
 
@@ -543,6 +556,34 @@ function buildBorderRow(
 		// Truncation can cut a hyperlink before its terminator, which would leave
 		// the rest of the row linked. Closing again costs no width.
 		body = truncateToWidth(body, budget, "…") + LINK_CLOSE;
+	}
+
+	// A right-anchored trail (the session name) sits just before the corner; the
+	// left-aligned run keeps its place before it, so the top row can carry a name
+	// at the right edge without giving up the left-aligned status run. The trail
+	// implies a left-aligned body, so `align` is not consulted here.
+	if (trailPresent.length > 0) {
+		let trailBody = trailPresent.join(paint(` ${RULE.repeat(RULE_RUN)} `));
+		// Fixed overhead between the corner rules: corner + rule + space on each
+		// side of the fill run (10 cells) once a trail is present.
+		const contentBudget = width - LEAD_WIDTH - TRAIL_WIDTH - (RULE_RUN + 2);
+		let bodyBudget = contentBudget - visibleWidth(trailBody);
+		if (bodyBudget < 0) {
+			// The trail alone is too wide; truncate it and give the body nothing.
+			body = "";
+			trailBody = truncateToWidth(trailBody, contentBudget, "…") + LINK_CLOSE;
+		} else if (visibleWidth(body) > bodyBudget) {
+			body = truncateToWidth(body, bodyBudget, "…") + LINK_CLOSE;
+		}
+		if (visibleWidth(body) === 0) {
+			// No left-aligned body survives: render the trail as a plain right-aligned
+			// run so the row is a single broken rule rather than a notch beside an
+			// empty status slot.
+			const fill = width - LEAD_WIDTH - visibleWidth(trailBody) - (TRAIL_WIDTH - RULE_RUN);
+			return `${paint(leftCorner + RULE.repeat(fill))} ${trailBody}${paint(` ${RULE.repeat(RULE_RUN)}${rightCorner}`)}`;
+		}
+		const fill = width - LEAD_WIDTH - visibleWidth(body) - visibleWidth(trailBody) - (TRAIL_WIDTH + RULE_RUN);
+		return `${paint(leftCorner + RULE.repeat(RULE_RUN))} ${body}${paint(` ${RULE.repeat(fill)}`)} ${trailBody}${paint(` ${RULE.repeat(RULE_RUN)}${rightCorner}`)}`;
 	}
 
 	// One rule run is fixed at the item end; the other absorbs the remainder.
@@ -575,6 +616,7 @@ function frameEditor(
 	padding: Padding,
 	topSegments: string[],
 	bottomSegments: string[],
+	topTrail: string[],
 ): string[] {
 	const innerWidth = width - FRAME_WIDTH - GUTTER_X * 2;
 	const lines = baseRender(innerWidth);
@@ -595,7 +637,7 @@ function frameEditor(
 		buildBorderRow(width, paint, CORNER_TOP_LEFT, CORNER_TOP_RIGHT, "left", [
 			...(upperNotice ? [upperNotice] : []),
 			...topSegments,
-		]),
+		], topTrail),
 	);
 
 	if (padding === "full") framed.push(gutter);
@@ -633,7 +675,9 @@ function frameEditor(
 function renderPlainFooter(ctx: ExtensionContext, theme: Theme, width: number): string[] {
 	const separator = theme.fg("borderMuted", `  ${RULE.repeat(RULE_RUN)}  `);
 	// No repaint ticker drives the plain rows, so the gloss never animates here.
-	const rows = [buildTopSegments(ctx, theme, false), buildBottomSegments(ctx, theme, footerData)];
+	const sessionName = sessionNameSegment(ctx, theme);
+	const top = sessionName ? [...buildTopSegments(ctx, theme, false), sessionName] : buildTopSegments(ctx, theme, false);
+	const rows = [top, buildBottomSegments(ctx, theme, footerData)];
 
 	return rows.map((segments) => {
 		const row = segments.filter((segment) => segment.trim().length > 0).join(separator);
@@ -722,6 +766,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 					padding,
 					buildTopSegments(ctx, theme, animated),
 					buildBottomSegments(ctx, theme, footerData),
+					[sessionNameSegment(ctx, theme)].filter((s): s is string => s !== null),
 				);
 			};
 
