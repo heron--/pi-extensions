@@ -188,7 +188,7 @@ const RECAP_SYSTEM_PROMPT = [
 	"this shape and nothing else:",
 	"",
 	`${LABEL_RECAP}: <a concise summary of the session and the most recent work, and where it stands now>`,
-	`${LABEL_NEXT} <what is needed from them, and what is coming up>`,
+	`${LABEL_NEXT} <what is needed from them or what is coming up. this must be very short>`,
 	"",
 	`Aim for about ${RECAP_TARGET_CHARS} characters on the ${LABEL_RECAP} line — ${RECAP_MAX_CHARS} is a hard ceiling, not a`,
 	`target — and ${NEXT_MAX_CHARS} on the ${LABEL_NEXT} line.`,
