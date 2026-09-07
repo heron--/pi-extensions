@@ -60,14 +60,70 @@ const THINKING_COLOR: Record<string, ThemeColor> = {
 	medium: "thinkingMedium",
 };
 
-// Matches pi-powerline-footer's high-thinking gradient exactly.
-const RAINBOW_LEVELS = new Set(["high", "xhigh", "max"]);
+// Matches pi-powerline-footer's high-thinking gradient exactly; the last
+// entry repeats the first so a full 8-character cycle ends where it began.
 const RAINBOW_COLORS = [
 	"#b281d6", "#d787af", "#febc38", "#e4c00f",
 	"#89d281", "#00afaf", "#178fb9", "#b281d6",
 ];
 
+/** How strongly the traveling highlight brightens a character, by distance from its center. */
+const SHEEN_FALLOFF = [0.85, 0.5, 0.2] as const;
+/**
+ * How far `xhigh`'s per-character background is dimmed from its foreground: the
+ * tint keeps 30% of the character's brightness, so it reads as hue-matched
+ * depth behind the glyph rather than a second palette.
+ */
+const BACKGROUND_DIM = 0.7;
+/**
+ * One highlight step per 80ms, the cadence of pi's own working spinner. While
+ * the gloss is on screen the extension asks for a repaint each step itself —
+ * pi repaints on demand, so without this the shimmer would only move when
+ * something else happened to trigger a render.
+ */
+const SHEEN_STEP_MS = 80;
+
+interface RainbowStyle {
+	/** Emit bold alongside each character's own color. */
+	bold?: boolean;
+	/** Back each character with a dark tint derived from its own foreground color. */
+	background?: boolean;
+	/** Overlay the traveling holographic highlight used by `max`. */
+	sheen?: boolean;
+}
+
+/** Per-level rainbow treatment; `high` is the look `pi-powerline-footer` ships. */
+const RAINBOW_STYLES: Readonly<Record<string, RainbowStyle | undefined>> = {
+	high: {},
+	xhigh: { bold: true, background: true },
+	max: { bold: true, sheen: true },
+};
+
 let footerData: ReadonlyFooterDataProvider | undefined;
+
+/** The TUI the shimmer's repaint loop drives, captured from the editor factory. */
+let tickerTui: TUI | null = null;
+/** The shimmer's repaint driver, held only while its label is on screen. */
+let sheenTicker: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Start or stop the shimmer's repaint loop to match whether its label is being
+ * drawn. Called from the editor's render: every transition that could show or
+ * hide the gloss — a level change, `/context-footer`, a resize, a model without
+ * reasoning — is followed by a render, so this one call keeps the ticker
+ * truthful without subscribing to anything.
+ */
+function syncSheenTicker(active: boolean): void {
+	if (!active) {
+		if (sheenTicker === null) return;
+		clearInterval(sheenTicker);
+		sheenTicker = null;
+		return;
+	}
+	if (sheenTicker === null) {
+		sheenTicker = setInterval(() => tickerTui?.requestRender(), SHEEN_STEP_MS);
+	}
+}
 
 type Paint = (text: string) => string;
 
@@ -92,31 +148,84 @@ type Align = "left" | "right";
 type Padding = "full" | "none";
 const PADDINGS = new Set<Padding>(["full", "none"]);
 
-function hexToAnsi(hex: string): string {
+function hexToRgb(hex: string): [number, number, number] {
 	const value = hex.slice(1);
-	const red = Number.parseInt(value.slice(0, 2), 16);
-	const green = Number.parseInt(value.slice(2, 4), 16);
-	const blue = Number.parseInt(value.slice(4, 6), 16);
-	return `\x1b[38;2;${red};${green};${blue}m`;
+	return [
+		Number.parseInt(value.slice(0, 2), 16),
+		Number.parseInt(value.slice(2, 4), 16),
+		Number.parseInt(value.slice(4, 6), 16),
+	];
 }
 
-function rainbow(text: string): string {
+/** Foreground SGR for `hex`, optionally bold with a derived background. The whole style rides inside each character's own escape, so no attribute is left dangling on the skipped characters. */
+function hexToAnsi(hex: string, bold = false, background?: string): string {
+	const [red, green, blue] = hexToRgb(hex);
+	const back = background === undefined ? "" : `;48;2;${hexToRgb(background).join(";")}`;
+	return `\x1b[${bold ? "1;" : ""}38;2;${red};${green};${blue}${back}m`;
+}
+
+/** Blend a palette color toward white — the highlight is a gloss over the rainbow, not a color of its own. */
+function towardWhite(hex: string, amount: number): string {
+	const mix = (channel: number) =>
+		Math.round(channel + (255 - channel) * amount)
+			.toString(16)
+			.padStart(2, "0");
+	const [red, green, blue] = hexToRgb(hex);
+	return `#${mix(red)}${mix(green)}${mix(blue)}`;
+}
+
+/** Dim a palette color toward black — `xhigh`'s background is derived from the character's own foreground. */
+function towardBlack(hex: string, amount: number): string {
+	const dim = (channel: number) =>
+		Math.round(channel * (1 - amount))
+			.toString(16)
+			.padStart(2, "0");
+	const [red, green, blue] = hexToRgb(hex);
+	return `#${dim(red)}${dim(green)}${dim(blue)}`;
+}
+
+function rainbow(text: string, style: RainbowStyle = {}): string {
+	const bold = style.bold ?? false;
+	const characters = [...text];
+	const coloredTotal = characters.filter((c) => c !== " " && c !== ":").length;
+	const sheen = style.sheen === true && coloredTotal > 0;
+	let center = 0;
+	if (sheen) {
+		// The highlight laps the label: measured on colored characters only, it
+		// slides off the right edge as it enters on the left, so the loop has no seam.
+		center = Math.floor(Date.now() / SHEEN_STEP_MS) % coloredTotal;
+	}
+
 	let result = "";
 	let colorIndex = 0;
-	for (const character of text) {
+	let position = 0;
+	for (const character of characters) {
+		// Spaces and the colon are emitted bare, inheriting the previous
+		// character's attributes — the look `high` has always had. With
+		// `xhigh`'s backgrounds that means the colon shares its neighbor's
+		// tint, so the block reads as one continuous label.
 		if (character === " " || character === ":") {
 			result += character;
 			continue;
 		}
-		result += `${hexToAnsi(RAINBOW_COLORS[colorIndex % RAINBOW_COLORS.length]!)}${character}`;
+		let color = RAINBOW_COLORS[colorIndex % RAINBOW_COLORS.length]!;
+		if (sheen) {
+			const offset = Math.abs(position - center);
+			const amount = SHEEN_FALLOFF[Math.min(offset, coloredTotal - offset)] ?? 0;
+			if (amount > 0) color = towardWhite(color, amount);
+		}
+		const back = style.background === true ? towardBlack(color, BACKGROUND_DIM) : undefined;
+		result += `${hexToAnsi(color, bold, back)}${character}`;
 		colorIndex++;
+		position++;
 	}
 	return `${result}\x1b[0m`;
 }
 
 function thinkingLabel(theme: Theme, level: string): string {
 	const text = `thinking:${level}`;
-	if (RAINBOW_LEVELS.has(level)) return rainbow(text);
+	const style = RAINBOW_STYLES[level];
+	if (style) return rainbow(text, style);
 	return theme.fg(THINKING_COLOR[level] ?? "thinkingOff", text);
 }
 
@@ -524,12 +633,23 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 
 		const previousFactory = ctx.ui.getEditorComponent();
 		ctx.ui.setEditorComponent((tui, editorTheme, keybindings) => {
+			// The shimmer's repaint loop needs the TUI, and the frame this factory
+			// wraps is the only thing that ever draws the gloss.
+			tickerTui = tui;
 			const editor = previousFactory
 				? previousFactory(tui, editorTheme, keybindings)
 				: new CustomEditor(tui, editorTheme, keybindings);
 			const baseRender = editor.render.bind(editor);
 
 			editor.render = (width: number): string[] => {
+				// The ticker runs only while the gloss is actually being drawn; below
+			// the framed width the plain footer carries the label statically.
+				syncSheenTicker(
+						enabled
+							&& width >= MIN_FRAMED_WIDTH
+							&& !!ctx.model?.reasoning
+							&& ctx.thinkingLevel === "max",
+				);
 				// Too narrow for a rule plus a label: leave pi's own rows alone.
 				if (!enabled || width < MIN_FRAMED_WIDTH) return baseRender(width);
 
@@ -555,6 +675,12 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (_event, ctx) => {
 		if (ctx.mode === "tui") install(ctx);
+	});
+
+	pi.on("session_shutdown", async () => {
+		// The TUI is going away; a live interval would paint into it after the
+		// session ends and pin the event loop open at quit.
+		syncSheenTicker(false);
 	});
 
 	pi.registerCommand("context-footer", {
