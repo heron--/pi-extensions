@@ -48,7 +48,12 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { formatPricing, getPricing } from "../lib/pricing.ts";
-import { paintThinkingLevel, THINKING_LEVEL_COLORS } from "../lib/thinking-colors.ts";
+import {
+	loadThinkingAnimatePreference,
+	paintThinkingLevel,
+	THINKING_LEVEL_COLORS,
+	THINKING_SHEEN_STEP_MS,
+} from "../lib/thinking-colors.ts";
 
 const ALL_LEVELS: ModelThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
@@ -904,15 +909,41 @@ function pickThinkingLevel(
 					return (
 						[
 							levelGauge(level, theme),
-							paintThinkingLevel(theme, level, padEndTo(level, LEVEL_NAME_WIDTH)),
+							paintThinkingLevel(theme, level, padEndTo(level, LEVEL_NAME_WIDTH), animating),
 							isCurrent ? theme.fg("accent", ICON.current) : " ",
 						].join(gap) + tail
 					);
 				},
 			},
 		);
-		selectList.onSelect = (item) => done(item.value as ModelThinkingLevel);
-		selectList.onCancel = () => done(null);
+
+		// The shared `max` gloss travels only while something repaints, and an
+		// idle overlay repaints nothing. While this list is open and a `max` row
+		// is on it, drive the repaints at the shared cadence — the same 80ms
+		// ticker the footer keeps while its frame carries the gloss — so the
+		// row previews `max` exactly as the footer will render it. The shared
+		// `/context-footer animate` preference governs both; it is read fresh
+		// here each time this list opens.
+		const animating = loadThinkingAnimatePreference() && levels.includes("max");
+		let sheenTicker: ReturnType<typeof setInterval> | null = animating
+			? setInterval(() => tui.requestRender(), THINKING_SHEEN_STEP_MS)
+			: null;
+		const stopSheenTicker = () => {
+			if (sheenTicker === null) return;
+			clearInterval(sheenTicker);
+			sheenTicker = null;
+		};
+		// Every exit path funnels through here — Enter (onSelect), Esc/Ctrl+C
+		// (onCancel), and pi's own teardown (dispose) — so the interval can
+		// never outlive the overlay: a live one would paint into a closed
+		// overlay and pin the event loop open at quit.
+		const finish = (result: ModelThinkingLevel | null) => {
+			stopSheenTicker();
+			done(result);
+		};
+
+		selectList.onSelect = (item) => finish(item.value as ModelThinkingLevel);
+		selectList.onCancel = () => finish(null);
 
 		// Default selection: pinned level > current level > "high" > first.
 		const defaultLevel =
@@ -950,7 +981,7 @@ function pickThinkingLevel(
 					lines.push("");
 					lines.push(
 						truncateToWidth(
-							`  ${paintThinkingLevel(theme, level, level)}${theme.fg("dim", "  ·  ")}${theme.fg("muted", detail)}`,
+							`  ${paintThinkingLevel(theme, level, level, animating)}${theme.fg("dim", "  ·  ")}${theme.fg("muted", detail)}`,
 							w,
 							"…",
 						),
@@ -975,6 +1006,11 @@ function pickThinkingLevel(
 				// SelectList handles up/down (wrapping), Enter (confirm), Esc/Ctrl+C (cancel).
 				selectList.handleInput(data);
 				tui.requestRender();
+			},
+			dispose() {
+				// Belt and braces with finish(): covers any teardown path that
+				// does not route through the SelectList's own callbacks.
+				stopSheenTicker();
 			},
 		};
 	});

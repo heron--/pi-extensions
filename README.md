@@ -220,10 +220,14 @@ Three details worth not re-discovering:
   sync with the footer.
 - `animated` governs only the `max` gloss: it advances one
   `THINKING_SHEEN_STEP_MS` per frame while true, and stays pinned at the head
-  of the label while false. A caller that repaints only on events (the picker)
-  must pass false or the gloss jumps on every unrelated render; a caller that
-  wants it moving (the footer) keeps a `requestRender` interval at that same
-  cadence.
+  of the label while false. Pass true only while driving repaints at that
+  cadence — both callers do: the footer keeps a `requestRender` interval while
+  its frame carries `max`, and the picker keeps one while its level list is
+  open and a `max` row is offered (cleared on every exit path).
+- One machine-wide preference governs the gloss everywhere: `/context-footer
+  animate on|off` writes it via `saveThinkingAnimatePreference`, and the picker
+  re-reads it (`loadThinkingAnimatePreference`) each time its list opens, so
+  the one command covers both extensions without a picker toggle of its own.
 - The rainbow tiers close with a full `\x1b[0m` reset, so anything styled after
   painted text on the same row must re-establish its own attributes — both
   callers already do this.

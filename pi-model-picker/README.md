@@ -12,7 +12,10 @@ level in one flow.
   actually supports (derived from `reasoning` + `thinkingLevelMap`), with a
   colour-coded intensity gauge. Level names are painted with the shared scheme
   from [`lib/thinking-colors.ts`](../README.md#libthinking-colorsts), so
-  `high`/`xhigh`/`max` preview exactly as the context footer renders them.
+  `high`/`xhigh`/`max` preview exactly as the context footer renders them; while
+  the list is open and the model offers `max`, the gloss even animates at the
+  shared 80ms cadence, governed by the same
+  [`/context-footer animate`](../pi-context-footer/README.md) preference.
   Shows the provider-mapped value for the highlighted level. Esc goes
   **back to stage 1**.
 

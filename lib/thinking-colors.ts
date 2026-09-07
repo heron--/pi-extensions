@@ -18,6 +18,9 @@
 
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 /**
  * The `thinking*` entries of pi's `ThemeColor`, derived rather than retyped so
@@ -75,10 +78,12 @@ const BACKGROUND_DIM = 0.7;
 /**
  * One highlight step per 80ms, the cadence of pi's own working spinner. The
  * sheen advances with `Date.now()`, so it only moves when something repaints
- * the screen — and pi repaints on demand. A caller showing the gloss must
- * therefore keep a `requestRender` interval of its own running at this same
- * cadence (see pi-context-footer's ticker); without it the shimmer would only
- * move when something else happened to trigger a render.
+ * the screen — and pi repaints on demand. Both callers therefore keep a
+ * `requestRender` interval of their own running at this same cadence while
+ * their gloss is on screen (the footer while its frame carries `max`, the
+ * model picker while its level list is open and a `max` row is offered);
+ * without one the shimmer would only move when something else happened to
+ * trigger a render.
  */
 export const THINKING_SHEEN_STEP_MS = 80;
 
@@ -184,8 +189,9 @@ function rainbow(text: string, style: RainbowStyle, animated: boolean): string {
  *
  * `animated` governs only the `max` sheen's travelling highlight: it advances
  * per THINKING_SHEEN_STEP_MS while true and stays pinned at the head of the
- * label while false (a caller that repaints only on events, like the model
- * picker, must pass false or the gloss jumps on every unrelated render).
+ * label while false. Pass true only while a repaint ticker is driving the
+ * caller's renders at that cadence; a caller that repaints only on events
+ * must pass false, or the gloss jumps on every unrelated render.
  *
  * The rainbow tiers end in a full `\x1b[0m` reset, so anything styled after
  * the painted text on the same row must re-establish its own attributes — both
@@ -200,4 +206,53 @@ export function paintThinkingLevel(
 	const style = RAINBOW_STYLES[level];
 	if (style) return rainbow(text, style, animated);
 	return theme.fg(THINKING_LEVEL_COLORS[level], text);
+}
+
+/**
+ * Whether the `max` sheen may animate anywhere it is drawn — one machine-wide
+ * preference for the whole scheme, so the gloss moves in step in every
+ * extension that shows it. `/context-footer animate on|off` writes it; every
+ * caller that shows the gloss reads it.
+ *
+ * The file lives under the `pi-context-footer` directory of pi's own
+ * agent-config directory, so a customized agent dir (PI_CODING_AGENT_DIR) is
+ * respected without re-implementing the resolution, and NOT under
+ * `<agent dir>/extensions/pi-context-footer/`, because that path resolves
+ * into the git checkout via this repo's install symlinks and the config
+ * would land in the repo. The directory name is historic — the toggle predates
+ * the shared module — but the path stays so existing configs keep working.
+ */
+function animateConfigFile(): string {
+	return join(getAgentDir(), "pi-context-footer", "config.json");
+}
+
+interface StoredAnimateConfig {
+	/** Whether the `max` shimmer may animate. Absent means on, the default. */
+	animate?: boolean;
+}
+
+/** The current preference, defaulting to on when there is no config. */
+export function loadThinkingAnimatePreference(): boolean {
+	try {
+		const stored = JSON.parse(
+			readFileSync(animateConfigFile(), "utf8"),
+		) as StoredAnimateConfig;
+		if (typeof stored.animate === "boolean") return stored.animate;
+	} catch {
+		// No config, or an unreadable one. Defaults are not worth an error.
+	}
+	return true;
+}
+
+/** Persist the preference; returns false when the config file is not writable. */
+export function saveThinkingAnimatePreference(value: boolean): boolean {
+	try {
+		const file = animateConfigFile();
+		mkdirSync(dirname(file), { recursive: true });
+		const body: StoredAnimateConfig = { animate: value };
+		writeFileSync(file, `${JSON.stringify(body, null, 2)}\n`, "utf8");
+		return true;
+	} catch {
+		return false;
+	}
 }

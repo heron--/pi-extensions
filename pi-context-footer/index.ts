@@ -6,14 +6,18 @@ import type {
 	ReadonlyFooterDataProvider,
 	Theme,
 } from "@earendil-works/pi-coding-agent";
-import { CustomEditor, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename } from "node:path";
 import type { TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { estimateUsageCost } from "../lib/pricing.ts";
-import { paintThinkingLevel, THINKING_SHEEN_STEP_MS } from "../lib/thinking-colors.ts";
+import {
+	loadThinkingAnimatePreference,
+	paintThinkingLevel,
+	saveThinkingAnimatePreference,
+	THINKING_SHEEN_STEP_MS,
+} from "../lib/thinking-colors.ts";
 
 const ICON_MODEL = String.fromCodePoint(0xf068c);
 const ICON_FOLDER = "\uf115";
@@ -84,47 +88,10 @@ function syncSheenTicker(active: boolean): void {
 /**
  * Whether the `max` shimmer may animate at all. A machine preference rather
  * than a session choice, so it persists; `/context-footer animate` flips it.
+ * One preference for the whole scheme — it governs the model picker's
+ * level-list gloss too — persisted through the shared lib helpers.
  */
 let animate = true;
-
-/**
- * Where the animation preference lives: pi's own agent-config directory, so
- * a customized agent dir (PI_CODING_AGENT_DIR) is respected without this file
- * re-implementing the resolution.
- *
- * Not under `<agent dir>/extensions/pi-context-footer/`, because this
- * extension is installed by symlink: that path resolves into the git checkout,
- * and the config would land in the repo.
- */
-function configFile(): string {
-	return join(getAgentDir(), "pi-context-footer", "config.json");
-}
-
-interface StoredConfig {
-	/** Whether the `max` shimmer may animate. Absent means on, the default. */
-	animate?: boolean;
-}
-
-function loadConfig(): void {
-	try {
-		const stored = JSON.parse(readFileSync(configFile(), "utf8")) as StoredConfig;
-		if (typeof stored.animate === "boolean") animate = stored.animate;
-	} catch {
-		// No config, or an unreadable one. Defaults are not worth an error.
-	}
-}
-
-function saveConfig(): boolean {
-	try {
-		const file = configFile();
-		mkdirSync(dirname(file), { recursive: true });
-		const body: StoredConfig = { animate };
-		writeFileSync(file, `${JSON.stringify(body, null, 2)}\n`, "utf8");
-		return true;
-	} catch {
-		return false;
-	}
-}
 
 type Paint = (text: string) => string;
 
@@ -607,7 +574,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
-		loadConfig();
+		animate = loadThinkingAnimatePreference();
 		if (ctx.mode === "tui") install(ctx);
 	});
 
@@ -653,7 +620,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 				animate = nextAnimate;
 				// The command's own notify repaints, so the ticker re-syncs itself.
 				ctx.ui.notify(
-					saveConfig()
+					saveThinkingAnimatePreference(animate)
 						? `Context footer animation ${nextAnimate ? "enabled" : "disabled"}`
 						: `Context footer animation ${nextAnimate ? "enabled" : "disabled"} for this session only (config file not writable)`,
 					"info",

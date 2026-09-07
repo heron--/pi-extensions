@@ -98,7 +98,8 @@ transition that could show or hide the label — a level change,
 render, so no subscriptions are needed to keep it truthful, and
 `session_shutdown` stops it so it can never pin the event loop at exit. The
 shimmer can be switched off with `/context-footer animate off` (persisted;
-see Usage). The gloss's animation only ever changes foreground color, so the
+see Usage). That one preference governs the whole scheme, so it also stills the
+gloss in `pi-model-picker`'s level list. The gloss's animation only ever changes foreground color, so the
 shimmer cannot shift the layout or leak attributes into the rest of the
 border; below 24 columns the plain footer carries the label with the gloss
 pinned, never moving. The model marker is the Nerd Font `nf-md-skull` glyph.
