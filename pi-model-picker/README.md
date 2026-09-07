@@ -10,14 +10,14 @@ level in one flow.
   id, and context window; the current model is marked and preselected.
 - **Stage 2** — pick a reasoning level from the levels the selected model
   actually supports (derived from `reasoning` + `thinkingLevelMap`), with a
-  colour-coded intensity gauge. Level names are painted with the shared scheme
-  from [`lib/thinking-colors.ts`](../README.md#libthinking-colorsts), so
-  `high`/`xhigh`/`max` preview exactly as the context footer renders them; while
-  the list is open and the model offers `max`, the gloss even animates at the
-  shared 80ms cadence, governed by the same
-  [`/context-footer animate`](../pi-context-footer/README.md) preference.
-  Shows the provider-mapped value for the highlighted level. Esc goes
-  **back to stage 1**.
+  colour-coded intensity gauge. The gauge's filled cells and the level name
+  are painted as one shared-scheme run from
+  [`lib/thinking-colors.ts`](../README.md#libthinking-colorsts), so for
+  `high`/`xhigh`/`max` the bar is part of the rainbow — the `max` gloss even
+  travels across gauge and name while the list is open, governed by the same
+  [`/context-footer animate`](../pi-context-footer/README.md) preference as
+  the footer. Shows the provider-mapped value for the highlighted level. Esc
+  goes **back to stage 1**.
 
 ### Row icons
 

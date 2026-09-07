@@ -14,6 +14,10 @@
  *   - `high`/`xhigh`/`max` — the pi-powerline-footer rainbow, with per-tier
  *     emphasis: `high` the plain gradient, `xhigh` bold over fg-derived
  *     backgrounds, `max` bold with a travelling holographic sheen.
+ *
+ * Indicators that surround the level's name (pi-model-picker's intensity
+ * gauge) compose through `paintThinkingSpans`, so their cells join the same
+ * run instead of sitting beside it in a flat colour.
  */
 
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
@@ -139,10 +143,33 @@ function towardBlack(hex: string, amount: number): string {
 	return `#${dim(red)}${dim(green)}${dim(blue)}`;
 }
 
-function rainbow(text: string, style: RainbowStyle, animated: boolean): string {
+/**
+ * One piece of a composed level indicator. Styled spans join the level's
+ * tier treatment as ONE run — the palette (and the `max` sheen) flow across
+ * them — while `styled: false` spans pass through verbatim, for segments
+ * the caller styles itself (a fixed gap, dim gauge cells).
+ */
+export interface ThinkingSpan {
+	/** The span's text. */
+	text: string;
+	/** Paint in the level's tier treatment; false emits the span verbatim. */
+	styled?: boolean;
+}
+
+function coloredLength(spans: ThinkingSpan[]): number {
+	let total = 0;
+	for (const span of spans) {
+		if (span.styled === false) continue;
+		for (const character of span.text) {
+			if (character !== " " && character !== ":") total++;
+		}
+	}
+	return total;
+}
+
+function rainbowSpans(spans: ThinkingSpan[], style: RainbowStyle, animated: boolean): string {
 	const bold = style.bold ?? false;
-	const characters = [...text];
-	const coloredTotal = characters.filter((c) => c !== " " && c !== ":").length;
+	const coloredTotal = coloredLength(spans);
 	const sheen = style.sheen === true && coloredTotal > 0;
 	let center = 0;
 	if (sheen) {
@@ -160,25 +187,33 @@ function rainbow(text: string, style: RainbowStyle, animated: boolean): string {
 	let result = "";
 	let colorIndex = 0;
 	let position = 0;
-	for (const character of characters) {
-		// Spaces and the colon are emitted bare, inheriting the previous
-		// character's attributes — the look `high` has always had. With
-		// `xhigh`'s backgrounds that means the colon shares its neighbor's
-		// tint, so the block reads as one continuous label.
-		if (character === " " || character === ":") {
-			result += character;
+	for (const span of spans) {
+		// Verbatim spans — caller-styled gaps and dim cells — sit inside the
+		// indicator without joining the gradient.
+		if (span.styled === false) {
+			result += span.text;
 			continue;
 		}
-		let color = RAINBOW_COLORS[colorIndex % RAINBOW_COLORS.length]!;
-		if (sheen) {
-			const offset = Math.abs(position - center);
-			const amount = SHEEN_FALLOFF[Math.min(offset, coloredTotal - offset)] ?? 0;
-			if (amount > 0) color = towardWhite(color, amount);
+		for (const character of span.text) {
+			// Spaces and the colon are emitted bare, inheriting the previous
+			// character's attributes — the look `high` has always had. With
+			// `xhigh`'s backgrounds that means the colon shares its neighbor's
+			// tint, so the block reads as one continuous label.
+			if (character === " " || character === ":") {
+				result += character;
+				continue;
+			}
+			let color = RAINBOW_COLORS[colorIndex % RAINBOW_COLORS.length]!;
+			if (sheen) {
+				const offset = Math.abs(position - center);
+				const amount = SHEEN_FALLOFF[Math.min(offset, coloredTotal - offset)] ?? 0;
+				if (amount > 0) color = towardWhite(color, amount);
+			}
+			const back = style.background === true ? towardBlack(color, BACKGROUND_DIM) : undefined;
+			result += `${hexToAnsi(color, bold, back)}${character}`;
+			colorIndex++;
+			position++;
 		}
-		const back = style.background === true ? towardBlack(color, BACKGROUND_DIM) : undefined;
-		result += `${hexToAnsi(color, bold, back)}${character}`;
-		colorIndex++;
-		position++;
 	}
 	return `${result}\x1b[0m`;
 }
@@ -203,9 +238,29 @@ export function paintThinkingLevel(
 	text: string,
 	animated = false,
 ): string {
+	return paintThinkingSpans(theme, level, [{ text }], animated);
+}
+
+/**
+ * Paint a level indicator composed of `ThinkingSpan`s — the form for callers
+ * whose indicator is more than the level's name. Styled spans form one
+ * continuous tier run: on the rainbow tiers the gradient (and the `max`
+ * sheen) flows straight across them — pi-model-picker's gauge joins its
+ * level's name this way — while `styled: false` spans pass through verbatim.
+ * On the solid tier each styled span gets the level's theme colour.
+ */
+export function paintThinkingSpans(
+	theme: ThinkingPalette,
+	level: ModelThinkingLevel,
+	spans: ThinkingSpan[],
+	animated = false,
+): string {
 	const style = RAINBOW_STYLES[level];
-	if (style) return rainbow(text, style, animated);
-	return theme.fg(THINKING_LEVEL_COLORS[level], text);
+	if (style) return rainbowSpans(spans, style, animated);
+	const color = THINKING_LEVEL_COLORS[level];
+	return spans
+		.map((span) => (span.styled === false ? span.text : theme.fg(color, span.text)))
+		.join("");
 }
 
 /**

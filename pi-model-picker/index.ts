@@ -51,8 +51,9 @@ import { formatPricing, getPricing } from "../lib/pricing.ts";
 import {
 	loadThinkingAnimatePreference,
 	paintThinkingLevel,
-	THINKING_LEVEL_COLORS,
+	paintThinkingSpans,
 	THINKING_SHEEN_STEP_MS,
+	type ThinkingSpan,
 } from "../lib/thinking-colors.ts";
 
 const ALL_LEVELS: ModelThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -152,9 +153,10 @@ const ICON_COLOR = {
 
 /**
  * Relative reasoning effort per level, used to fill the gauge (0..6). The
- * gauge is painted in the level's base colour from the shared scheme; the
- * level NAME gets the full treatment via paintThinkingLevel, so high/xhigh/max
- * preview here exactly as pi-context-footer renders them.
+ * gauge rides the shared scheme together with the level name: solid-tier
+ * levels paint it in the base colour, and for high/xhigh/max the filled
+ * cells join the rainbow run — sheen included for max — so the whole
+ * indicator previews exactly as pi-context-footer renders the level.
  */
 const LEVEL_INTENSITY: Record<ModelThinkingLevel, number> = {
 	off: 0,
@@ -852,14 +854,19 @@ function pickModel(
 /* Stage 2: thinking level picker                                             */
 /* -------------------------------------------------------------------------- */
 
-/** Filled/empty gauge showing relative reasoning effort, in the level's colour. */
-export function levelGauge(level: ModelThinkingLevel, theme: PickerTheme): string {
+/**
+ * The intensity gauge showing relative reasoning effort, as shared-scheme
+ * spans: the filled cells are styled so they join the level's tier run (part
+ * of the rainbow for high/xhigh/max, sheen included for max), while the empty
+ * cells pass through dim, so the meter keeps meaning what it says.
+ */
+export function levelGauge(level: ModelThinkingLevel, theme: PickerTheme): ThinkingSpan[] {
 	const filled = LEVEL_INTENSITY[level];
 	const empty = GAUGE_WIDTH - filled;
-	return (
-		(filled > 0 ? theme.fg(THINKING_LEVEL_COLORS[level], ICON.gaugeOn.repeat(filled)) : "") +
-		(empty > 0 ? theme.fg("dim", ICON.gaugeOff.repeat(empty)) : "")
-	);
+	const spans: ThinkingSpan[] = [];
+	if (filled > 0) spans.push({ text: ICON.gaugeOn.repeat(filled) });
+	if (empty > 0) spans.push({ text: theme.fg("dim", ICON.gaugeOff.repeat(empty)), styled: false });
+	return spans;
 }
 
 const LEVEL_NAME_WIDTH = 7; // "minimal"
@@ -906,10 +913,18 @@ function pickThinkingLevel(
 					// description is not left unpainted by the resets our coloured cells
 					// end with (the shared rainbow closes with a full \x1b[0m).
 					const tail = isSelected ? theme.getFgAnsi("accent") : "";
+					// The gauge's filled cells join the level's name as ONE tier run —
+					// for high/xhigh/max the bar is part of the rainbow, sheen
+					// included for max — instead of sitting beside it in a flat
+					// colour.
+					const spans: ThinkingSpan[] = [
+						...levelGauge(level, theme),
+						{ text: gap, styled: false },
+						{ text: padEndTo(level, LEVEL_NAME_WIDTH) },
+					];
 					return (
 						[
-							levelGauge(level, theme),
-							paintThinkingLevel(theme, level, padEndTo(level, LEVEL_NAME_WIDTH), animating),
+							paintThinkingSpans(theme, level, spans, animating),
 							isCurrent ? theme.fg("accent", ICON.current) : " ",
 						].join(gap) + tail
 					);

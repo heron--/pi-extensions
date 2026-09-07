@@ -214,10 +214,16 @@ THINKING_LEVEL_COLORS[level];                                  // base colour on
 
 Three details worth not re-discovering:
 
-- `THINKING_LEVEL_COLORS` is for level-*tinted instruments* that are not the
-  label itself — the picker's intensity gauge keeps a single base colour per
-  level. Level labels go through `paintThinkingLevel`, or they drift out of
-  sync with the footer.
+- `paintThinkingSpans` composes a level indicator out of spans: styled spans
+  join the tier treatment as ONE run — the palette, and the `max` sheen, flow
+  straight across them — while `styled: false` spans pass through verbatim
+  for caller-styled segments (the picker's dim empty gauge cells, fixed
+  gaps). `paintThinkingLevel` is the single-string form. The picker's gauge
+  joins its level's name this way, so `high`/`xhigh`/`max` read as one block.
+- `THINKING_LEVEL_COLORS` is for level-*tinted instruments* outside a painted
+  indicator; inside one, the solid tier reaches the same colours through the
+  paint helpers. Either way callers never re-map levels by hand — that is
+  how the two extensions drifted apart before this module existed.
 - `animated` governs only the `max` gloss: it advances one
   `THINKING_SHEEN_STEP_MS` per frame while true, and stays pinned at the head
   of the label while false. Pass true only while driving repaints at that
