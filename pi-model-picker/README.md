@@ -8,6 +8,9 @@ level in one flow.
   `provider/id` and display name (e.g. typing `sonnet` finds
   `anthropic/claude-sonnet-4-5`). Fixed-width columns show capability icons,
   id, and context window; the current model is marked and preselected.
+  Models sort by capability tier within a provider group where the family has
+  one (Anthropic: fable > opus > sonnet > haiku); unknown tiers keep registry
+  order after the mapped ones.
 - **Stage 2** — pick a reasoning level from the levels the selected model
   actually supports (derived from `reasoning` + `thinkingLevelMap`), with a
   colour-coded intensity gauge. The gauge's filled cells and the level name
@@ -86,6 +89,9 @@ Stage 2 keys: `↑↓` navigate · `Enter` select · `Esc` back to models.
 
 - The model list mirrors the session-scoped set (the `--models` CLI flag /
   `enabledModels` setting); with no scoping, all available models are listed.
+- Intra-group tier ordering lives in `MODEL_TIER_PATTERNS` in `index.ts`.
+  Tier is not a field on pi's `Model` object, so it is mapped by id pattern;
+  only families with a provider-documented hierarchy belong there.
 - If a scoped pattern pinned a thinking level (e.g. `anthropic/*:high`), that
   level is preselected in stage 2.
 - Unsupported levels are hidden in stage 2; `pi.setThinkingLevel()` clamps to

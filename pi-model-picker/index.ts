@@ -526,12 +526,59 @@ type PickerRow =
 	| { kind: "model"; entry: ModelEntry; value: string };
 
 /**
+ * Capability-tier ordering within a provider group: id pattern → rank, lower
+ * is stronger. pi's Model object carries no tier field, so the mapping lives
+ * here. Only families with a provider-documented hierarchy belong on this
+ * table — ranking sibling models by benchmark vibes is a product decision,
+ * not a data cleanup, so add families deliberately.
+ */
+const MODEL_TIER_PATTERNS: readonly (readonly [RegExp, number])[] = [
+	// Anthropic: fable is the flagship line, then opus > sonnet > haiku.
+	[/\bfable\b/i, 0],
+	[/\bopus\b/i, 1],
+	[/\bsonnet\b/i, 2],
+	[/\bhaiku\b/i, 3],
+];
+
+/**
+ * Capability tier for a model id, lower = stronger. Unknown families are
+ * Number.POSITIVE_INFINITY, which sorts after every mapped tier.
+ */
+export function modelTier(id: string): number {
+	for (const [pattern, tier] of MODEL_TIER_PATTERNS) {
+		if (pattern.test(id)) return tier;
+	}
+	return Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Sort one provider group by capability tier (opus before sonnet before
+ * haiku, …). Ids with no known tier keep their registry order, after the
+ * mapped ones — the pre-sort index makes that explicit rather than leaning
+ * on Array#sort stability.
+ */
+export function sortGroupByTier(group: ModelEntry[]): ModelEntry[] {
+	if (group.length < 2) return group;
+	return group
+		.map((entry, index) => ({ entry, index }))
+		.sort((a, b) => {
+			const ta = modelTier(a.entry.model.id);
+			const tb = modelTier(b.entry.model.id);
+			if (ta !== tb) return ta < tb ? -1 : 1;
+			return a.index - b.index;
+		})
+		.map((decorated) => decorated.entry);
+}
+
+/**
  * Filtered entries grouped under a per-provider header row.
  *
  * Provider order follows first appearance in the registry (which respects
- * --models / enabledModels ordering) rather than being alphabetised, and models
- * keep their original order within a group. Headers are recomputed per filter
- * pass so a provider whose models all filter out drops its heading too.
+ * --models / enabledModels ordering) rather than being alphabetised. Within
+ * a group, models sort by capability tier where the family has one (see
+ * sortGroupByTier) and keep registry order otherwise. Headers are recomputed
+ * per filter pass so a provider whose models all filter out drops its heading
+ * too.
  */
 export function groupRows(entries: ModelEntry[], filter: string): PickerRow[] {
 	const order: string[] = [];
@@ -557,7 +604,7 @@ export function groupRows(entries: ModelEntry[], filter: string): PickerRow[] {
 			count: group.length,
 			value: HEADER_VALUE + provider,
 		});
-		for (const entry of group) {
+		for (const entry of sortGroupByTier(group)) {
 			rows.push({ kind: "model", entry, value: modelId(entry.model) });
 		}
 	}
