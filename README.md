@@ -194,6 +194,55 @@ Two implementation details worth not re-discovering:
 If `@pydantic/genai-prices` isn't installed, estimates return `null` instead of
 throwing — the extension keeps working, just without them.
 
+### `lib/thinking-colors.ts`
+
+The thinking-level colour scheme, shared by `pi-context-footer` (the
+`thinking:level` label in the frame) and `pi-model-picker` (the stage-2 level
+rows), so a given level looks the same everywhere it appears.
+
+Two tiers, mirroring the escalation they encode:
+
+- `off`/`minimal`/`low`/`medium` — pi's own `thinking*` theme colours.
+- `high`/`xhigh`/`max` — the `pi-powerline-footer` rainbow, escalating: `high`
+  the plain gradient, `xhigh` bold over per-character backgrounds derived from
+  each character's own foreground, `max` bold with a travelling white gloss.
+
+```ts
+paintThinkingLevel(theme, level, "thinking:high", animated); // the whole scheme
+THINKING_LEVEL_COLORS[level];                                  // base colour only
+```
+
+Three details worth not re-discovering:
+
+- `paintThinkingSpans` composes a level indicator out of spans: styled spans
+  join the tier treatment as ONE run — the palette, and the `max` sheen, flow
+  straight across them — while `styled: false` spans and any spaces past the
+  last colored character pass through after a reset, so `xhigh`'s background
+  stops at its own cells instead of tinting the gauge's empty cell or the
+  padding after the name. `paintThinkingLevel` is the single-string form.
+  The picker's gauge joins its level's name this way, so `high`/`xhigh`/`max`
+  read as one block.
+- `THINKING_LEVEL_COLORS` is for level-*tinted instruments* outside a painted
+  indicator; inside one, the solid tier reaches the same colours through the
+  paint helpers. Either way callers never re-map levels by hand — that is
+  how the two extensions drifted apart before this module existed.
+- `animated` governs only the `max` gloss: it advances one
+  `THINKING_SHEEN_STEP_MS` per frame while true, and stays pinned at the head
+  of the label while false. While true the gloss enters at the head, travels
+  to the tail, and rests on the plain rainbow for `THINKING_SHEEN_HOLD_MS`
+  (2s) before the next pass — a periodic glint, not a constant chase.
+  Pass true only while driving repaints at that cadence — both callers do:
+  the footer keeps a `requestRender` interval while its frame carries `max`,
+  and the picker keeps one while its level list is open and a `max` row is
+  offered (cleared on every exit path).
+- One machine-wide preference governs the gloss everywhere: `/context-footer
+  animate on|off` writes it via `saveThinkingAnimatePreference`, and the picker
+  re-reads it (`loadThinkingAnimatePreference`) each time its list opens, so
+  the one command covers both extensions without a picker toggle of its own.
+- The rainbow tiers close with a full `\x1b[0m` reset, so anything styled after
+  painted text on the same row must re-establish its own attributes — both
+  callers already do this.
+
 ## Adding an extension
 
 1. `mkdir pi-my-thing` with an `index.ts` and a `package.json` carrying a `pi`

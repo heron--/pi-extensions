@@ -48,6 +48,13 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { formatPricing, getPricing } from "../lib/pricing.ts";
+import {
+	loadThinkingAnimatePreference,
+	paintThinkingLevel,
+	paintThinkingSpans,
+	THINKING_SHEEN_STEP_MS,
+	type ThinkingSpan,
+} from "../lib/thinking-colors.ts";
 
 const ALL_LEVELS: ModelThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
@@ -144,18 +151,13 @@ const ICON_COLOR = {
 	current: "warning",
 } as const;
 
-/** Per-level colour, matching pi's own thinking-level palette. */
-const LEVEL_COLOR = {
-	off: "thinkingOff",
-	minimal: "thinkingMinimal",
-	low: "thinkingLow",
-	medium: "thinkingMedium",
-	high: "thinkingHigh",
-	xhigh: "thinkingXhigh",
-	max: "thinkingMax",
-} as const;
-
-/** Relative reasoning effort per level, used to fill the gauge (0..6). */
+/**
+ * Relative reasoning effort per level, used to fill the gauge (0..6). The
+ * gauge rides the shared scheme together with the level name: solid-tier
+ * levels paint it in the base colour, and for high/xhigh/max the filled
+ * cells join the rainbow run — sheen included for max — so the whole
+ * indicator previews exactly as pi-context-footer renders the level.
+ */
 const LEVEL_INTENSITY: Record<ModelThinkingLevel, number> = {
 	off: 0,
 	minimal: 1,
@@ -852,14 +854,19 @@ function pickModel(
 /* Stage 2: thinking level picker                                             */
 /* -------------------------------------------------------------------------- */
 
-/** Filled/empty gauge showing relative reasoning effort, in the level's colour. */
-export function levelGauge(level: ModelThinkingLevel, theme: PickerTheme): string {
+/**
+ * The intensity gauge showing relative reasoning effort, as shared-scheme
+ * spans: the filled cells are styled so they join the level's tier run (part
+ * of the rainbow for high/xhigh/max, sheen included for max), while the empty
+ * cells pass through dim, so the meter keeps meaning what it says.
+ */
+export function levelGauge(level: ModelThinkingLevel, theme: PickerTheme): ThinkingSpan[] {
 	const filled = LEVEL_INTENSITY[level];
 	const empty = GAUGE_WIDTH - filled;
-	return (
-		(filled > 0 ? theme.fg(LEVEL_COLOR[level], ICON.gaugeOn.repeat(filled)) : "") +
-		(empty > 0 ? theme.fg("dim", ICON.gaugeOff.repeat(empty)) : "")
-	);
+	const spans: ThinkingSpan[] = [];
+	if (filled > 0) spans.push({ text: ICON.gaugeOn.repeat(filled) });
+	if (empty > 0) spans.push({ text: theme.fg("dim", ICON.gaugeOff.repeat(empty)), styled: false });
+	return spans;
 }
 
 const LEVEL_NAME_WIDTH = 7; // "minimal"
@@ -903,20 +910,55 @@ function pickThinkingLevel(
 					const isCurrent = level === current;
 					const gap = " ".repeat(CELL_GAP);
 					// See composeModelPrimary: re-assert accent so the selected row's
-					// description is not left unpainted by our foreground-only resets.
+					// description is not left unpainted by the resets our coloured cells
+					// end with (the shared rainbow closes with a full \x1b[0m).
 					const tail = isSelected ? theme.getFgAnsi("accent") : "";
+					// The gauge's filled cells join the level's name as ONE tier run —
+					// for high/xhigh/max the bar is part of the rainbow, sheen
+					// included for max — instead of sitting beside it in a flat
+					// colour.
+					const spans: ThinkingSpan[] = [
+						...levelGauge(level, theme),
+						{ text: gap, styled: false },
+						{ text: padEndTo(level, LEVEL_NAME_WIDTH) },
+					];
 					return (
 						[
-							levelGauge(level, theme),
-							theme.fg(LEVEL_COLOR[level], padEndTo(level, LEVEL_NAME_WIDTH)),
+							paintThinkingSpans(theme, level, spans, animating),
 							isCurrent ? theme.fg("accent", ICON.current) : " ",
 						].join(gap) + tail
 					);
 				},
 			},
 		);
-		selectList.onSelect = (item) => done(item.value as ModelThinkingLevel);
-		selectList.onCancel = () => done(null);
+
+		// The shared `max` gloss travels only while something repaints, and an
+		// idle overlay repaints nothing. While this list is open and a `max` row
+		// is on it, drive the repaints at the shared cadence — the same 80ms
+		// ticker the footer keeps while its frame carries the gloss — so the
+		// row previews `max` exactly as the footer will render it. The shared
+		// `/context-footer animate` preference governs both; it is read fresh
+		// here each time this list opens.
+		const animating = loadThinkingAnimatePreference() && levels.includes("max");
+		let sheenTicker: ReturnType<typeof setInterval> | null = animating
+			? setInterval(() => tui.requestRender(), THINKING_SHEEN_STEP_MS)
+			: null;
+		const stopSheenTicker = () => {
+			if (sheenTicker === null) return;
+			clearInterval(sheenTicker);
+			sheenTicker = null;
+		};
+		// Every exit path funnels through here — Enter (onSelect), Esc/Ctrl+C
+		// (onCancel), and pi's own teardown (dispose) — so the interval can
+		// never outlive the overlay: a live one would paint into a closed
+		// overlay and pin the event loop open at quit.
+		const finish = (result: ModelThinkingLevel | null) => {
+			stopSheenTicker();
+			done(result);
+		};
+
+		selectList.onSelect = (item) => finish(item.value as ModelThinkingLevel);
+		selectList.onCancel = () => finish(null);
 
 		// Default selection: pinned level > current level > "high" > first.
 		const defaultLevel =
@@ -954,7 +996,7 @@ function pickThinkingLevel(
 					lines.push("");
 					lines.push(
 						truncateToWidth(
-							`  ${theme.fg(LEVEL_COLOR[level], level)}${theme.fg("dim", "  ·  ")}${theme.fg("muted", detail)}`,
+							`  ${paintThinkingLevel(theme, level, level, animating)}${theme.fg("dim", "  ·  ")}${theme.fg("muted", detail)}`,
 							w,
 							"…",
 						),
@@ -979,6 +1021,11 @@ function pickThinkingLevel(
 				// SelectList handles up/down (wrapping), Enter (confirm), Esc/Ctrl+C (cancel).
 				selectList.handleInput(data);
 				tui.requestRender();
+			},
+			dispose() {
+				// Belt and braces with finish(): covers any teardown path that
+				// does not route through the SelectList's own callbacks.
+				stopSheenTicker();
 			},
 		};
 	});

@@ -21,7 +21,8 @@ pi-extensions/
 │   └── link-extensions.mjs  # idempotently links every extension into both
 │                             # discovery locations (by convention, not a list)
 ├── lib/
-│   └── pricing.ts            # shared helper, imported as "../lib/pricing.ts"
+│   ├── pricing.ts            # shared helper, imported as "../lib/pricing.ts"
+│   └── thinking-colors.ts    # shared thinking-level colour scheme + animate pref
 ├── pi-recap/           # extension: away-and-back recap, rotating cheap models
 ├── pi-context-footer/        # extension: continuous prompt border + status items
 ├── pi-model-picker/          # extension: /model-picker, and takes over /model

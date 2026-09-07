@@ -1,19 +1,23 @@
-import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ModelThinkingLevel, Usage } from "@earendil-works/pi-ai";
 import type {
 	CustomEditor as CustomEditorType,
 	ExtensionAPI,
 	ExtensionContext,
 	ReadonlyFooterDataProvider,
 	Theme,
-	ThemeColor,
 } from "@earendil-works/pi-coding-agent";
-import { CustomEditor, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename } from "node:path";
 import type { TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { estimateUsageCost } from "../lib/pricing.ts";
+import {
+	loadThinkingAnimatePreference,
+	paintThinkingLevel,
+	saveThinkingAnimatePreference,
+	THINKING_SHEEN_STEP_MS,
+} from "../lib/thinking-colors.ts";
 
 const ICON_MODEL = String.fromCodePoint(0xf068c);
 const ICON_FOLDER = "\uf115";
@@ -56,51 +60,6 @@ const TRAIL_WIDTH = 1 + RULE_RUN + 1;
 /** Below this the frame cannot hold a rule plus a segment, so it is skipped. */
 const MIN_FRAMED_WIDTH = 24;
 
-const THINKING_COLOR: Record<string, ThemeColor> = {
-	minimal: "thinkingMinimal",
-	low: "thinkingLow",
-	medium: "thinkingMedium",
-};
-
-// Matches pi-powerline-footer's high-thinking gradient exactly; the last
-// entry repeats the first so a full 8-character cycle ends where it began.
-const RAINBOW_COLORS = [
-	"#b281d6", "#d787af", "#febc38", "#e4c00f",
-	"#89d281", "#00afaf", "#178fb9", "#b281d6",
-];
-
-/** How strongly the traveling highlight brightens a character, by distance from its center. */
-const SHEEN_FALLOFF = [0.85, 0.5, 0.2] as const;
-/**
- * How far `xhigh`'s per-character background is dimmed from its foreground: the
- * tint keeps 30% of the character's brightness, so it reads as hue-matched
- * depth behind the glyph rather than a second palette.
- */
-const BACKGROUND_DIM = 0.7;
-/**
- * One highlight step per 80ms, the cadence of pi's own working spinner. While
- * the gloss is on screen the extension asks for a repaint each step itself —
- * pi repaints on demand, so without this the shimmer would only move when
- * something else happened to trigger a render.
- */
-const SHEEN_STEP_MS = 80;
-
-interface RainbowStyle {
-	/** Emit bold alongside each character's own color. */
-	bold?: boolean;
-	/** Back each character with a dark tint derived from its own foreground color. */
-	background?: boolean;
-	/** Overlay the traveling holographic highlight used by `max`. */
-	sheen?: boolean;
-}
-
-/** Per-level rainbow treatment; `high` is the look `pi-powerline-footer` ships. */
-const RAINBOW_STYLES: Readonly<Record<string, RainbowStyle | undefined>> = {
-	high: {},
-	xhigh: { bold: true, background: true },
-	max: { bold: true, sheen: true },
-};
-
 let footerData: ReadonlyFooterDataProvider | undefined;
 
 /** The TUI the shimmer's repaint loop drives, captured from the editor factory. */
@@ -123,54 +82,17 @@ function syncSheenTicker(active: boolean): void {
 		return;
 	}
 	if (sheenTicker === null) {
-		sheenTicker = setInterval(() => tickerTui?.requestRender(), SHEEN_STEP_MS);
+		sheenTicker = setInterval(() => tickerTui?.requestRender(), THINKING_SHEEN_STEP_MS);
 	}
 }
 
 /**
  * Whether the `max` shimmer may animate at all. A machine preference rather
  * than a session choice, so it persists; `/context-footer animate` flips it.
+ * One preference for the whole scheme — it governs the model picker's
+ * level-list gloss too — persisted through the shared lib helpers.
  */
 let animate = true;
-
-/**
- * Where the animation preference lives: pi's own agent-config directory, so
- * a customized agent dir (PI_CODING_AGENT_DIR) is respected without this file
- * re-implementing the resolution.
- *
- * Not under `<agent dir>/extensions/pi-context-footer/`, because this
- * extension is installed by symlink: that path resolves into the git checkout,
- * and the config would land in the repo.
- */
-function configFile(): string {
-	return join(getAgentDir(), "pi-context-footer", "config.json");
-}
-
-interface StoredConfig {
-	/** Whether the `max` shimmer may animate. Absent means on, the default. */
-	animate?: boolean;
-}
-
-function loadConfig(): void {
-	try {
-		const stored = JSON.parse(readFileSync(configFile(), "utf8")) as StoredConfig;
-		if (typeof stored.animate === "boolean") animate = stored.animate;
-	} catch {
-		// No config, or an unreadable one. Defaults are not worth an error.
-	}
-}
-
-function saveConfig(): boolean {
-	try {
-		const file = configFile();
-		mkdirSync(dirname(file), { recursive: true });
-		const body: StoredConfig = { animate };
-		writeFileSync(file, `${JSON.stringify(body, null, 2)}\n`, "utf8");
-		return true;
-	} catch {
-		return false;
-	}
-}
 
 type Paint = (text: string) => string;
 
@@ -195,90 +117,12 @@ type Align = "left" | "right";
 type Padding = "full" | "none";
 const PADDINGS = new Set<Padding>(["full", "none"]);
 
-function hexToRgb(hex: string): [number, number, number] {
-	const value = hex.slice(1);
-	return [
-		Number.parseInt(value.slice(0, 2), 16),
-		Number.parseInt(value.slice(2, 4), 16),
-		Number.parseInt(value.slice(4, 6), 16),
-	];
-}
-
-/** Foreground SGR for `hex`, optionally bold with a derived background. Each colored character's whole style rides inside its own escape, so consecutive characters never inherit each other's color; the reset in `rainbow()` keeps the label from painting past its end. */
-function hexToAnsi(hex: string, bold = false, background?: string): string {
-	const [red, green, blue] = hexToRgb(hex);
-	const back = background === undefined ? "" : `;48;2;${hexToRgb(background).join(";")}`;
-	return `\x1b[${bold ? "1;" : ""}38;2;${red};${green};${blue}${back}m`;
-}
-
-/** Blend a palette color toward white — the highlight is a gloss over the rainbow, not a color of its own. */
-function towardWhite(hex: string, amount: number): string {
-	const mix = (channel: number) =>
-		Math.round(channel + (255 - channel) * amount)
-			.toString(16)
-			.padStart(2, "0");
-	const [red, green, blue] = hexToRgb(hex);
-	return `#${mix(red)}${mix(green)}${mix(blue)}`;
-}
-
-/** Dim a palette color toward black — `xhigh`'s background is derived from the character's own foreground. */
-function towardBlack(hex: string, amount: number): string {
-	const dim = (channel: number) =>
-		Math.round(channel * (1 - amount))
-			.toString(16)
-			.padStart(2, "0");
-	const [red, green, blue] = hexToRgb(hex);
-	return `#${dim(red)}${dim(green)}${dim(blue)}`;
-}
-
-function rainbow(text: string, style: RainbowStyle, animated: boolean): string {
-	const bold = style.bold ?? false;
-	const characters = [...text];
-	const coloredTotal = characters.filter((c) => c !== " " && c !== ":").length;
-	const sheen = style.sheen === true && coloredTotal > 0;
-	let center = 0;
-	if (sheen) {
-		// The highlight laps the label: measured on colored characters only, it
-		// slides off the right edge as it enters on the left, so the loop has no
-		// seam. It advances only while `animated` — the same predicate that runs
-		// the repaint ticker — so a gloss that is not being driven stays pinned
-		// at the head of the label instead of jumping on unrelated renders.
-		center = animated
-			? Math.floor(Date.now() / SHEEN_STEP_MS) % coloredTotal
-			: 0;
-	}
-
-	let result = "";
-	let colorIndex = 0;
-	let position = 0;
-	for (const character of characters) {
-		// Spaces and the colon are emitted bare, inheriting the previous
-		// character's attributes — the look `high` has always had. With
-		// `xhigh`'s backgrounds that means the colon shares its neighbor's
-		// tint, so the block reads as one continuous label.
-		if (character === " " || character === ":") {
-			result += character;
-			continue;
-		}
-		let color = RAINBOW_COLORS[colorIndex % RAINBOW_COLORS.length]!;
-		if (sheen) {
-			const offset = Math.abs(position - center);
-			const amount = SHEEN_FALLOFF[Math.min(offset, coloredTotal - offset)] ?? 0;
-			if (amount > 0) color = towardWhite(color, amount);
-		}
-		const back = style.background === true ? towardBlack(color, BACKGROUND_DIM) : undefined;
-		result += `${hexToAnsi(color, bold, back)}${character}`;
-		colorIndex++;
-		position++;
-	}
-	return `${result}\x1b[0m`;
-}
-
-function thinkingLabel(theme: Theme, level: string, animated: boolean): string {
-	const text = `thinking:${level}`;
-	const style = RAINBOW_STYLES[level];
-	if (style) return rainbow(text, style, animated);
-	return theme.fg(THINKING_COLOR[level] ?? "thinkingOff", text);
+/**
+ * The thinking-level label, painted with the shared scheme from
+ * lib/thinking-colors.ts so it matches the model picker's level rows exactly.
+ */
+function thinkingLabel(theme: Theme, level: ModelThinkingLevel, animated: boolean): string {
+	return paintThinkingLevel(theme, level, `thinking:${level}`, animated);
 }
 
 function formatTokens(count: number): string {
@@ -775,7 +619,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
-		loadConfig();
+		animate = loadThinkingAnimatePreference();
 		if (ctx.mode === "tui") install(ctx);
 	});
 
@@ -821,7 +665,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 				animate = nextAnimate;
 				// The command's own notify repaints, so the ticker re-syncs itself.
 				ctx.ui.notify(
-					saveConfig()
+					saveThinkingAnimatePreference(animate)
 						? `Context footer animation ${nextAnimate ? "enabled" : "disabled"}`
 						: `Context footer animation ${nextAnimate ? "enabled" : "disabled"} for this session only (config file not writable)`,
 					"info",
