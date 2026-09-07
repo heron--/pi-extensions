@@ -422,11 +422,11 @@ function renderGauge(theme: Theme, percent: number | null): string {
 		+ theme.fg("dim", GAUGE_EMPTY.repeat(GAUGE_WIDTH - filledCount));
 }
 
-/** The session name as a left-anchored segment, or null when none is set. */
+/** The session name as a right-anchored segment, or null when none is set. */
 function sessionNameSegment(ctx: ExtensionContext, theme: Theme): string | null {
 	const name = ctx.sessionManager.getSessionName();
 	if (!name) return null;
-	return theme.fg("syntaxFunction", `${ICON_SESSION} ${name}`);
+	return theme.fg("accent", `${ICON_SESSION} ${name}`);
 }
 
 /** The upper border carries identity and current context health. */
@@ -539,11 +539,11 @@ function buildBorderRow(
 	rightCorner: string,
 	align: Align,
 	segments: string[],
-	leftLead: string[] = [],
+	rightTrail: string[] = [],
 ): string {
 	const present = segments.filter((segment) => segment.trim().length > 0);
-	const leadPresent = leftLead.filter((segment) => segment.trim().length > 0);
-	if (present.length === 0 && leadPresent.length === 0) {
+	const trailPresent = rightTrail.filter((segment) => segment.trim().length > 0);
+	if (present.length === 0 && trailPresent.length === 0) {
 		return paint(leftCorner + RULE.repeat(width - FRAME_WIDTH) + rightCorner);
 	}
 
@@ -555,32 +555,32 @@ function buildBorderRow(
 		body = truncateToWidth(body, budget, "…") + LINK_CLOSE;
 	}
 
-	// A left-anchored lead (the session name) sits right after the corner; the
-	// right-aligned run keeps its place after it, so the bottom row can carry a
-	// name at the left edge without giving up the right-aligned status run.
-	// The lead implies a right-aligned body, so `align` is not consulted here.
-	if (leadPresent.length > 0) {
-		let leadBody = leadPresent.join(paint(` ${RULE.repeat(RULE_RUN)} `));
+	// A right-anchored trail (the session name) sits just before the corner; the
+	// left-aligned run keeps its place before it, so the top row can carry a name
+	// at the right edge without giving up the left-aligned status run. The trail
+	// implies a left-aligned body, so `align` is not consulted here.
+	if (trailPresent.length > 0) {
+		let trailBody = trailPresent.join(paint(` ${RULE.repeat(RULE_RUN)} `));
 		// Fixed overhead between the corner rules: corner + rule + space on each
-		// side of the fill run (10 cells) once a lead is present.
+		// side of the fill run (10 cells) once a trail is present.
 		const contentBudget = width - LEAD_WIDTH - TRAIL_WIDTH - (RULE_RUN + 2);
-		let bodyBudget = contentBudget - visibleWidth(leadBody);
+		let bodyBudget = contentBudget - visibleWidth(trailBody);
 		if (bodyBudget < 0) {
-			// The lead alone is too wide; truncate it and give the body nothing.
+			// The trail alone is too wide; truncate it and give the body nothing.
 			body = "";
-			leadBody = truncateToWidth(leadBody, contentBudget, "…") + LINK_CLOSE;
+			trailBody = truncateToWidth(trailBody, contentBudget, "…") + LINK_CLOSE;
 		} else if (visibleWidth(body) > bodyBudget) {
 			body = truncateToWidth(body, bodyBudget, "…") + LINK_CLOSE;
 		}
 		if (visibleWidth(body) === 0) {
-			// No right-aligned body survives: render the lead as a plain left-aligned
+			// No left-aligned body survives: render the trail as a plain right-aligned
 			// run so the row is a single broken rule rather than a notch beside an
 			// empty status slot.
-			const fill = width - LEAD_WIDTH - visibleWidth(leadBody) - (TRAIL_WIDTH - RULE_RUN);
-			return `${paint(leftCorner + RULE.repeat(RULE_RUN))} ${leadBody}${paint(` ${RULE.repeat(fill)}${rightCorner}`)}`;
+			const fill = width - LEAD_WIDTH - visibleWidth(trailBody) - (TRAIL_WIDTH - RULE_RUN);
+			return `${paint(leftCorner + RULE.repeat(fill))} ${trailBody}${paint(` ${RULE.repeat(RULE_RUN)}${rightCorner}`)}`;
 		}
-		const fill = width - LEAD_WIDTH - visibleWidth(leadBody) - visibleWidth(body) - (TRAIL_WIDTH + RULE_RUN);
-		return `${paint(leftCorner + RULE.repeat(RULE_RUN))} ${leadBody}${paint(` ${RULE.repeat(fill)}`)} ${body}${paint(` ${RULE.repeat(RULE_RUN)}${rightCorner}`)}`;
+		const fill = width - LEAD_WIDTH - visibleWidth(body) - visibleWidth(trailBody) - (TRAIL_WIDTH + RULE_RUN);
+		return `${paint(leftCorner + RULE.repeat(RULE_RUN))} ${body}${paint(` ${RULE.repeat(fill)}`)} ${trailBody}${paint(` ${RULE.repeat(RULE_RUN)}${rightCorner}`)}`;
 	}
 
 	// One rule run is fixed at the item end; the other absorbs the remainder.
@@ -613,7 +613,7 @@ function frameEditor(
 	padding: Padding,
 	topSegments: string[],
 	bottomSegments: string[],
-	bottomLead: string[],
+	topTrail: string[],
 ): string[] {
 	const innerWidth = width - FRAME_WIDTH - GUTTER_X * 2;
 	const lines = baseRender(innerWidth);
@@ -634,7 +634,7 @@ function frameEditor(
 		buildBorderRow(width, paint, CORNER_TOP_LEFT, CORNER_TOP_RIGHT, "left", [
 			...(upperNotice ? [upperNotice] : []),
 			...topSegments,
-		]),
+		], topTrail),
 	);
 
 	if (padding === "full") framed.push(gutter);
@@ -658,7 +658,7 @@ function frameEditor(
 		buildBorderRow(width, paint, CORNER_BOTTOM_LEFT, CORNER_BOTTOM_RIGHT, "right", [
 			...(trailing.length === 0 && lowerNotice ? [lowerNotice] : []),
 			...bottomSegments,
-		], bottomLead),
+		]),
 	);
 	return framed;
 }
@@ -673,8 +673,8 @@ function renderPlainFooter(ctx: ExtensionContext, theme: Theme, width: number): 
 	const separator = theme.fg("borderMuted", `  ${RULE.repeat(RULE_RUN)}  `);
 	// No repaint ticker drives the plain rows, so the gloss never animates here.
 	const sessionName = sessionNameSegment(ctx, theme);
-	const bottom = sessionName ? [sessionName, ...buildBottomSegments(ctx, theme, footerData)] : buildBottomSegments(ctx, theme, footerData);
-	const rows = [buildTopSegments(ctx, theme, false), bottom];
+	const top = sessionName ? [...buildTopSegments(ctx, theme, false), sessionName] : buildTopSegments(ctx, theme, false);
+	const rows = [top, buildBottomSegments(ctx, theme, footerData)];
 
 	return rows.map((segments) => {
 		const row = segments.filter((segment) => segment.trim().length > 0).join(separator);
