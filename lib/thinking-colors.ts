@@ -97,7 +97,7 @@ export const THINKING_SHEEN_STEP_MS = 80;
  * exits at the tail, and rests for this long before the next pass — a periodic
  * glint rather than a constant chase.
  */
-export const THINKING_SHEEN_HOLD_MS = 1250;
+export const THINKING_SHEEN_HOLD_MS = 2000;
 
 interface RainbowStyle {
 	/** Emit bold alongside each character's own color. */
