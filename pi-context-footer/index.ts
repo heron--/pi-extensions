@@ -426,7 +426,7 @@ function renderGauge(theme: Theme, percent: number | null): string {
 function sessionNameSegment(ctx: ExtensionContext, theme: Theme): string | null {
 	const name = ctx.sessionManager.getSessionName();
 	if (!name) return null;
-	return theme.fg("syntaxType", `${ICON_SESSION} ${name}`);
+	return theme.fg("syntaxFunction", `${ICON_SESSION} ${name}`);
 }
 
 /** The upper border carries identity and current context health. */
