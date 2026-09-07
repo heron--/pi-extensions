@@ -91,6 +91,14 @@ const BACKGROUND_DIM = 0.7;
  */
 export const THINKING_SHEEN_STEP_MS = 80;
 
+/**
+ * How long the label holds on the plain rainbow between passes of the gloss:
+ * the shimmer enters at the head, travels one cell per THINKING_SHEEN_STEP_MS,
+ * exits at the tail, and rests for this long before the next pass — a periodic
+ * glint rather than a constant chase.
+ */
+export const THINKING_SHEEN_HOLD_MS = 1250;
+
 interface RainbowStyle {
 	/** Emit bold alongside each character's own color. */
 	bold?: boolean;
@@ -172,16 +180,24 @@ function rainbowSpans(spans: ThinkingSpan[], style: RainbowStyle, animated: bool
 	const coloredTotal = coloredLength(spans);
 	const sheen = style.sheen === true && coloredTotal > 0;
 	let center = 0;
+	let gloss = false;
 	if (sheen) {
-		// The highlight laps the label: measured on colored characters only, it
-		// slides off the right edge as it enters on the left, so the loop has no
-		// seam. It advances only while `animated` — the same predicate a caller
-		// uses to run its repaint ticker — so a gloss that is not being driven
-		// stays pinned at the head of the label instead of jumping on unrelated
-		// renders.
-		center = animated
-			? Math.floor(Date.now() / THINKING_SHEEN_STEP_MS) % coloredTotal
-			: 0;
+		if (animated) {
+			// The gloss enters at the head, advances one cell per
+			// THINKING_SHEEN_STEP_MS, exits at the tail, and then the label holds
+			// on the plain rainbow for THINKING_SHEEN_HOLD_MS before the next
+			// pass — a periodic glint, not a constant chase. Measured on colored
+			// characters only, and only while `animated`: the same predicate a
+			// caller uses to run its repaint ticker drives it.
+			const sweepMs = coloredTotal * THINKING_SHEEN_STEP_MS;
+			const phase = Date.now() % (sweepMs + THINKING_SHEEN_HOLD_MS);
+			gloss = phase < sweepMs;
+			center = Math.floor(phase / THINKING_SHEEN_STEP_MS);
+		} else {
+			// A gloss that is not being driven stays pinned at the head of the
+			// label instead of jumping on unrelated renders.
+			gloss = true;
+		}
 	}
 
 	let result = "";
@@ -212,9 +228,10 @@ function rainbowSpans(spans: ThinkingSpan[], style: RainbowStyle, animated: bool
 				continue;
 			}
 			let color = RAINBOW_COLORS[colorIndex % RAINBOW_COLORS.length]!;
-			if (sheen) {
-				const offset = Math.abs(position - center);
-				const amount = SHEEN_FALLOFF[Math.min(offset, coloredTotal - offset)] ?? 0;
+			if (gloss) {
+				// No lapping wrap: the gloss enters and exits with the sweep, so the
+			// distance to its centre is all the falloff needs.
+				const amount = SHEEN_FALLOFF[Math.abs(position - center)] ?? 0;
 				if (amount > 0) color = towardWhite(color, amount);
 			}
 			const back = style.background === true ? towardBlack(color, BACKGROUND_DIM) : undefined;

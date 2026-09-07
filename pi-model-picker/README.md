@@ -14,7 +14,8 @@ level in one flow.
   are painted as one shared-scheme run from
   [`lib/thinking-colors.ts`](../README.md#libthinking-colorsts), so for
   `high`/`xhigh`/`max` the bar is part of the rainbow — the `max` gloss even
-  travels across gauge and name while the list is open, governed by the same
+  sweeps across gauge and name, resting on the plain rainbow between passes,
+  governed by the same
   [`/context-footer animate`](../pi-context-footer/README.md) preference as
   the footer. Shows the provider-mapped value for the highlighted level. Esc
   goes **back to stage 1**.

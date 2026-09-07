@@ -88,7 +88,8 @@ pi's corresponding thinking colors; `high` uses its exact purple → pink →
 yellow → green → cyan → blue gradient. Above that the treatment escalates on
 the same palette: `xhigh` is the same gradient, bold, with each character
 backed by a dark tint derived from its own color, and `max` — bold — adds a
-white gloss that travels across the characters, one step per 80ms. pi repaints on demand — there is no idle frame loop — so while the gloss
+white gloss that sweeps across the characters, one step per 80ms, then rests
+on the plain rainbow for ~1.25s before the next pass. pi repaints on demand — there is no idle frame loop — so while the gloss
 is on screen the extension keeps an 80ms `requestRender` interval of its own,
 the same mechanism pi's working spinner uses, and the shimmer runs at the same
 speed whether you are typing, the agent is working, or the prompt is idle.

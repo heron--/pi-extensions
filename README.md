@@ -228,10 +228,13 @@ Three details worth not re-discovering:
   how the two extensions drifted apart before this module existed.
 - `animated` governs only the `max` gloss: it advances one
   `THINKING_SHEEN_STEP_MS` per frame while true, and stays pinned at the head
-  of the label while false. Pass true only while driving repaints at that
-  cadence — both callers do: the footer keeps a `requestRender` interval while
-  its frame carries `max`, and the picker keeps one while its level list is
-  open and a `max` row is offered (cleared on every exit path).
+  of the label while false. While true the gloss enters at the head, travels
+  to the tail, and rests on the plain rainbow for `THINKING_SHEEN_HOLD_MS`
+  (1.25s) before the next pass — a periodic glint, not a constant chase.
+  Pass true only while driving repaints at that cadence — both callers do:
+  the footer keeps a `requestRender` interval while its frame carries `max`,
+  and the picker keeps one while its level list is open and a `max` row is
+  offered (cleared on every exit path).
 - One machine-wide preference governs the gloss everywhere: `/context-footer
   animate on|off` writes it via `saveThinkingAnimatePreference`, and the picker
   re-reads it (`loadThinkingAnimatePreference`) each time its list opens, so
