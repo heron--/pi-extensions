@@ -16,7 +16,7 @@ interrupted only where a status item sits in the rule:
 │                                                                                 │
 │ what shape should the border take?                                              │
 │                                                                                 │
-╰───────  devin.marsh/context-footer ── #4 ── $0.04 ── ⇡47k ⇣5 ── 󰌿 write unlocked ──╯
+╰── 󰓹 my-feature-work ─────────────────────────── devin.marsh/context-footer ── #4 ── $0.04 ──⇡47k ⇣5 ──╯
 ```
 
 ## Padding
@@ -40,9 +40,9 @@ label no longer interrupts the rule, it sits beneath it.
 
 The **top run** carries identity and context health: model, thinking level,
 working directory, context gauge and window. The **bottom run** carries the
-remaining session items: git branch, its pull request, session cost,
-cache-inclusive input/output token totals, and background-task state when
-active.
+remaining session items: the session name (left-anchored, when one is set),
+git branch, its pull request, session cost, cache-inclusive input/output token
+totals, and background-task state when active.
 
 ### Pull request
 
@@ -53,13 +53,21 @@ branch without a pull request does not spawn `gh` again. A pull request opened
 mid-session therefore appears on the next pi run. If `gh` is missing,
 unauthenticated, or slow, the segment is simply absent.
 
+### Session name
+
+When a session has a display name (set with `pi --name <name>` or the RPC
+`set_session_name`), it is anchored at the bottom-left corner of the frame,
+marked with the Nerd Font `nf-md-tag` glyph. A session without a name shows no
+segment at all — the bottom run stays right-aligned as before.
+
 Items are separated by short rule segments, so the border reads as continuous
 line broken by labels rather than as a line with a separate status bar attached.
 The top run is left-aligned and the bottom run right-aligned, so the long
 unbroken stretch of each rule falls on the opposite corner from the other's —
 which gives the input more apparent room than packing both runs left. When a
-run is wider than the terminal, its content is truncated with `…` and the frame
-still closes.
+session name is set it is anchored at the bottom-left corner, ahead of the
+right-aligned run. When a run is wider than the terminal, its content is
+truncated with `…` and the frame still closes.
 
 ### Cases the frame absorbs
 

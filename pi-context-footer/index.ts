@@ -21,6 +21,7 @@ const ICON_BRANCH = "\uf126";
 const ICON_GAUGE = "\uf1c0";
 const ICON_LOCK = String.fromCodePoint(0xf033e); // nf-md-lock
 const ICON_LOCK_OPEN = String.fromCodePoint(0xf033f); // nf-md-lock_open
+const ICON_SESSION = String.fromCodePoint(0xf04f9); // nf-md-tag
 
 const GAUGE_WIDTH = 8;
 const GAUGE_FILLED = "█";
@@ -421,6 +422,13 @@ function renderGauge(theme: Theme, percent: number | null): string {
 		+ theme.fg("dim", GAUGE_EMPTY.repeat(GAUGE_WIDTH - filledCount));
 }
 
+/** The session name as a left-anchored segment, or null when none is set. */
+function sessionNameSegment(ctx: ExtensionContext, theme: Theme): string | null {
+	const name = ctx.sessionManager.getSessionName();
+	if (!name) return null;
+	return theme.fg("syntaxType", `${ICON_SESSION} ${name}`);
+}
+
 /** The upper border carries identity and current context health. */
 function buildTopSegments(ctx: ExtensionContext, theme: Theme, animated: boolean): string[] {
 	const model = ctx.model?.name || ctx.model?.id || "no-model";
@@ -531,9 +539,11 @@ function buildBorderRow(
 	rightCorner: string,
 	align: Align,
 	segments: string[],
+	lead: string[] = [],
 ): string {
 	const present = segments.filter((segment) => segment.trim().length > 0);
-	if (present.length === 0) {
+	const leadPresent = lead.filter((segment) => segment.trim().length > 0);
+	if (present.length === 0 && leadPresent.length === 0) {
 		return paint(leftCorner + RULE.repeat(width - FRAME_WIDTH) + rightCorner);
 	}
 
@@ -543,6 +553,26 @@ function buildBorderRow(
 		// Truncation can cut a hyperlink before its terminator, which would leave
 		// the rest of the row linked. Closing again costs no width.
 		body = truncateToWidth(body, budget, "…") + LINK_CLOSE;
+	}
+
+	// A left-anchored lead (the session name) sits right after the corner; the
+	// right-aligned run keeps its place after it, so the bottom row can carry a
+	// name at the left edge without giving up the right-aligned status run.
+	if (leadPresent.length > 0) {
+		let leadBody = leadPresent.join(paint(` ${RULE.repeat(RULE_RUN)} `));
+		// Fixed overhead between the corner rules: corner + rule + space on each
+		// side of the fill run (10 cells) once a lead is present.
+		const contentBudget = width - LEAD_WIDTH - TRAIL_WIDTH - (RULE_RUN + 2);
+		let bodyBudget = contentBudget - visibleWidth(leadBody);
+		if (bodyBudget < 0) {
+			// The lead alone is too wide; truncate it and give the body nothing.
+			body = "";
+			leadBody = truncateToWidth(leadBody, contentBudget, "…") + LINK_CLOSE;
+		} else if (visibleWidth(body) > bodyBudget) {
+			body = truncateToWidth(body, bodyBudget, "…") + LINK_CLOSE;
+		}
+		const fill = width - LEAD_WIDTH - visibleWidth(leadBody) - visibleWidth(body) - (TRAIL_WIDTH + RULE_RUN);
+		return `${paint(leftCorner + RULE.repeat(RULE_RUN))} ${leadBody}${paint(` ${RULE.repeat(fill)}`)} ${body}${paint(` ${RULE.repeat(RULE_RUN)}${rightCorner}`)}`;
 	}
 
 	// One rule run is fixed at the item end; the other absorbs the remainder.
@@ -575,6 +605,7 @@ function frameEditor(
 	padding: Padding,
 	topSegments: string[],
 	bottomSegments: string[],
+	bottomLead: string[],
 ): string[] {
 	const innerWidth = width - FRAME_WIDTH - GUTTER_X * 2;
 	const lines = baseRender(innerWidth);
@@ -619,7 +650,7 @@ function frameEditor(
 		buildBorderRow(width, paint, CORNER_BOTTOM_LEFT, CORNER_BOTTOM_RIGHT, "right", [
 			...(trailing.length === 0 && lowerNotice ? [lowerNotice] : []),
 			...bottomSegments,
-		]),
+		], bottomLead),
 	);
 	return framed;
 }
@@ -633,7 +664,9 @@ function frameEditor(
 function renderPlainFooter(ctx: ExtensionContext, theme: Theme, width: number): string[] {
 	const separator = theme.fg("borderMuted", `  ${RULE.repeat(RULE_RUN)}  `);
 	// No repaint ticker drives the plain rows, so the gloss never animates here.
-	const rows = [buildTopSegments(ctx, theme, false), buildBottomSegments(ctx, theme, footerData)];
+	const sessionName = sessionNameSegment(ctx, theme);
+	const bottom = sessionName ? [sessionName, ...buildBottomSegments(ctx, theme, footerData)] : buildBottomSegments(ctx, theme, footerData);
+	const rows = [buildTopSegments(ctx, theme, false), bottom];
 
 	return rows.map((segments) => {
 		const row = segments.filter((segment) => segment.trim().length > 0).join(separator);
@@ -722,6 +755,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 					padding,
 					buildTopSegments(ctx, theme, animated),
 					buildBottomSegments(ctx, theme, footerData),
+					[sessionNameSegment(ctx, theme)].filter((s): s is string => s !== null),
 				);
 			};
 
