@@ -426,7 +426,10 @@ function renderGauge(theme: Theme, percent: number | null): string {
 function sessionNameSegment(ctx: ExtensionContext, theme: Theme): string | null {
 	const name = ctx.sessionManager.getSessionName();
 	if (!name) return null;
-	return theme.fg("accent", `${ICON_SESSION} ${name}`);
+	// `emphasisText` is a theme color pi's ThemeColor union does not know about
+	// yet (the schema is lenient at runtime, so the cast is safe); it resolves to
+	// claude pink in the frontier-funds theme.
+	return theme.fg("emphasisText" as ThemeColor, `${ICON_SESSION} ${name}`);
 }
 
 /** The upper border carries identity and current context health. */

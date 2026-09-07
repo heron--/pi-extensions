@@ -58,8 +58,9 @@ unauthenticated, or slow, the segment is simply absent.
 When a session has a display name (set with `pi --name <name>` or the RPC
 `set_session_name`), it is anchored at the top-right corner of the frame,
 marked with the Nerd Font `nf-md-tag` glyph and painted with the theme's
-accent color — the same as the money figure. A session without a name shows no
-segment at all — the top run stays left-aligned as before.
+`emphasisText` color (claude pink in the frontier-funds theme). A session
+without a name shows no segment at all — the top run stays left-aligned as
+before.
 
 Items are separated by short rule segments, so the border reads as continuous
 line broken by labels rather than as a line with a separate status bar attached.
