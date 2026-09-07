@@ -135,6 +135,13 @@ const ICON = {
 	reasoning: "✦", // spark         → extended reasoning
 	absent: "·", // capability not supported
 	current: "●", // the model/level currently active
+	/**
+	 * Hollow counterpart of `current`'s filled circle → the "off" row of the
+	 * stage-2 DeepSeek toggle. NOT `absent`: "off" is a real, selectable
+	 * option, not a missing capability — and a middle dot beside ✦ reads as
+	 * a stray pixel rather than a state.
+	 */
+	off: "○",
 	gaugeOn: "▰",
 	gaugeOff: "▱",
 } as const;
@@ -1218,12 +1225,15 @@ function pickDeepSeekThinking(
 					const tail = isSelected ? theme.getFgAnsi("accent") : "";
 					// Solid colours, deliberately NOT the shared thinking-level scheme:
 					// "on"/"off" is not a pi level, so it wears no tier's rainbow.
-					// "on" takes the ✦ reasoning icon's colour; "off" matches how
-					// the ladder paints "off" (thinkingOff).
+					// "on" takes the ✦ reasoning icon's colour. "off" paints dim, not
+					// the scheme's thinkingOff: themes may map that colour to rule
+					// shades meant for barely-visible separators, and a selectable
+					// row must stay legible — dim matches the ladder's empty gauge
+					// cells, which carry "off" the same quiet way.
 					const glyph = isOn
 						? theme.fg(ICON_COLOR.reasoning, ICON.reasoning)
-						: theme.fg("dim", ICON.absent);
-					const nameColor: PickerColor = isOn ? ICON_COLOR.reasoning : "thinkingOff";
+						: theme.fg("dim", ICON.off);
+					const nameColor: PickerColor = isOn ? ICON_COLOR.reasoning : "dim";
 					return (
 						[
 							glyph,
@@ -1271,7 +1281,7 @@ function pickDeepSeekThinking(
 					lines.push("");
 					lines.push(
 						truncateToWidth(
-							`  ${theme.fg(isOn ? ICON_COLOR.reasoning : "thinkingOff", selected.value as string)}${theme.fg("dim", "  ·  ")}${theme.fg("muted", deepSeekWireDetail(model, isOn ? "on" : "off", onLevel))}`,
+							`  ${theme.fg(isOn ? ICON_COLOR.reasoning : "dim", selected.value as string)}${theme.fg("dim", "  ·  ")}${theme.fg("muted", deepSeekWireDetail(model, isOn ? "on" : "off", onLevel))}`,
 							w,
 							"…",
 						),
