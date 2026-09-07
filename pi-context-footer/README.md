@@ -95,10 +95,10 @@ transition that could show or hide the label — a level change,
 render, so no subscriptions are needed to keep it truthful, and
 `session_shutdown` stops it so it can never pin the event loop at exit. The
 shimmer can be switched off with `/context-footer animate off` (persisted;
-see Usage). Only
-foreground color ever changes, so the label cannot shift the layout or leak
-attributes into the rest of the border; below 24 columns the plain footer
-carries it statically. The model marker is the Nerd Font `nf-md-skull` glyph.
+see Usage). The gloss's animation only ever changes foreground color, so the
+shimmer cannot shift the layout or leak attributes into the rest of the
+border; below 24 columns the plain footer carries the label with the gloss
+pinned, never moving. The model marker is the Nerd Font `nf-md-skull` glyph.
 
 ## Cost
 
@@ -155,8 +155,7 @@ discovery directory.
 /context-footer on         enable it
 /context-footer off        disable it
 /context-footer pad none   set the padding (see above)
-/context-footer animate        report whether the shimmer animates
-/context-footer animate off   stop the traveling gloss
+/context-footer animate [on|off]   report or toggle the traveling gloss
 ```
 
 The animation preference is a machine setting rather than a session choice,

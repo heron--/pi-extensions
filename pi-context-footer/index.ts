@@ -7,10 +7,9 @@ import type {
 	Theme,
 	ThemeColor,
 } from "@earendil-works/pi-coding-agent";
-import { CustomEditor } from "@earendil-works/pi-coding-agent";
+import { CustomEditor, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -134,18 +133,16 @@ function syncSheenTicker(active: boolean): void {
 let animate = true;
 
 /**
- * Where the animation preference lives.
+ * Where the animation preference lives: pi's own agent-config directory, so
+ * a customized agent dir (PI_CODING_AGENT_DIR) is respected without this file
+ * re-implementing the resolution.
  *
  * Not under `<agent dir>/extensions/pi-context-footer/`, because this
  * extension is installed by symlink: that path resolves into the git checkout,
  * and the config would land in the repo.
  */
 function configFile(): string {
-	const configured = process.env.PI_AGENT_DIR;
-	const agentDir = configured
-		? configured.replace(/^~(?=$|\/)/, homedir())
-		: join(homedir(), ".pi", "agent");
-	return join(agentDir, "pi-context-footer", "config.json");
+	return join(getAgentDir(), "pi-context-footer", "config.json");
 }
 
 interface StoredConfig {
@@ -206,7 +203,7 @@ function hexToRgb(hex: string): [number, number, number] {
 	];
 }
 
-/** Foreground SGR for `hex`, optionally bold with a derived background. The whole style rides inside each character's own escape, so no attribute is left dangling on the skipped characters. */
+/** Foreground SGR for `hex`, optionally bold with a derived background. Each colored character's whole style rides inside its own escape, so consecutive characters never inherit each other's color; the reset in `rainbow()` keeps the label from painting past its end. */
 function hexToAnsi(hex: string, bold = false, background?: string): string {
 	const [red, green, blue] = hexToRgb(hex);
 	const back = background === undefined ? "" : `;48;2;${hexToRgb(background).join(";")}`;
@@ -233,7 +230,7 @@ function towardBlack(hex: string, amount: number): string {
 	return `#${dim(red)}${dim(green)}${dim(blue)}`;
 }
 
-function rainbow(text: string, style: RainbowStyle = {}): string {
+function rainbow(text: string, style: RainbowStyle, animated: boolean): string {
 	const bold = style.bold ?? false;
 	const characters = [...text];
 	const coloredTotal = characters.filter((c) => c !== " " && c !== ":").length;
@@ -242,9 +239,10 @@ function rainbow(text: string, style: RainbowStyle = {}): string {
 	if (sheen) {
 		// The highlight laps the label: measured on colored characters only, it
 		// slides off the right edge as it enters on the left, so the loop has no
-		// seam. With animation disabled it stays pinned at the head of the label
-		// instead — the static form of the same effect.
-		center = animate
+		// seam. It advances only while `animated` — the same predicate that runs
+		// the repaint ticker — so a gloss that is not being driven stays pinned
+		// at the head of the label instead of jumping on unrelated renders.
+		center = animated
 			? Math.floor(Date.now() / SHEEN_STEP_MS) % coloredTotal
 			: 0;
 	}
@@ -275,10 +273,10 @@ function rainbow(text: string, style: RainbowStyle = {}): string {
 	return `${result}\x1b[0m`;
 }
 
-function thinkingLabel(theme: Theme, level: string): string {
+function thinkingLabel(theme: Theme, level: string, animated: boolean): string {
 	const text = `thinking:${level}`;
 	const style = RAINBOW_STYLES[level];
-	if (style) return rainbow(text, style);
+	if (style) return rainbow(text, style, animated);
 	return theme.fg(THINKING_COLOR[level] ?? "thinkingOff", text);
 }
 
@@ -424,7 +422,7 @@ function renderGauge(theme: Theme, percent: number | null): string {
 }
 
 /** The upper border carries identity and current context health. */
-function buildTopSegments(ctx: ExtensionContext, theme: Theme): string[] {
+function buildTopSegments(ctx: ExtensionContext, theme: Theme, animated: boolean): string[] {
 	const model = ctx.model?.name || ctx.model?.id || "no-model";
 	const sessionCwd = ctx.sessionManager.getCwd();
 	const cwd = basename(sessionCwd) || sessionCwd;
@@ -436,7 +434,7 @@ function buildTopSegments(ctx: ExtensionContext, theme: Theme): string[] {
 
 	const segments = [theme.fg("syntaxType", `${ICON_MODEL} ${model}`)];
 	if (ctx.model?.reasoning && ctx.thinkingLevel) {
-		segments.push(thinkingLabel(theme, ctx.thinkingLevel));
+		segments.push(thinkingLabel(theme, ctx.thinkingLevel, animated));
 	}
 	segments.push(theme.fg("syntaxFunction", `${ICON_FOLDER} ${cwd}`));
 	segments.push(
@@ -634,7 +632,8 @@ function frameEditor(
  */
 function renderPlainFooter(ctx: ExtensionContext, theme: Theme, width: number): string[] {
 	const separator = theme.fg("borderMuted", `  ${RULE.repeat(RULE_RUN)}  `);
-	const rows = [buildTopSegments(ctx, theme), buildBottomSegments(ctx, theme, footerData)];
+	// No repaint ticker drives the plain rows, so the gloss never animates here.
+	const rows = [buildTopSegments(ctx, theme, false), buildBottomSegments(ctx, theme, footerData)];
 
 	return rows.map((segments) => {
 		const row = segments.filter((segment) => segment.trim().length > 0).join(separator);
@@ -686,8 +685,9 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 
 		const previousFactory = ctx.ui.getEditorComponent();
 		ctx.ui.setEditorComponent((tui, editorTheme, keybindings) => {
-			// The shimmer's repaint loop needs the TUI, and the frame this factory
-			// wraps is the only thing that ever draws the gloss.
+			// The shimmer's repaint loop needs the TUI. The frame this factory wraps
+			// is where the gloss animates; the narrow plain footer draws it too,
+			// but never moving.
 			tickerTui = tui;
 			const editor = previousFactory
 				? previousFactory(tui, editorTheme, keybindings)
@@ -695,16 +695,17 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 			const baseRender = editor.render.bind(editor);
 
 			editor.render = (width: number): string[] => {
-				// The ticker runs only while the animated gloss is being drawn; with
-				// animation off the gloss renders statically, and below the framed
-				// width the plain footer carries it statically too.
-				syncSheenTicker(
+				// One predicate drives both the ticker and the gloss: the highlight
+				// advances only while the ticker runs, so a gloss that is not being
+				// driven never jumps to a new position on an unrelated render — it
+				// stays pinned at the head of the label, as in the plain footer.
+				const animated =
 					enabled
 						&& animate
 						&& width >= MIN_FRAMED_WIDTH
 						&& !!ctx.model?.reasoning
-						&& ctx.thinkingLevel === "max",
-				);
+						&& ctx.thinkingLevel === "max";
+				syncSheenTicker(animated);
 				// Too narrow for a rule plus a label: leave pi's own rows alone.
 				if (!enabled || width < MIN_FRAMED_WIDTH) return baseRender(width);
 
@@ -719,7 +720,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 					theme,
 					paint,
 					padding,
-					buildTopSegments(ctx, theme),
+					buildTopSegments(ctx, theme, animated),
 					buildBottomSegments(ctx, theme, footerData),
 				);
 			};
