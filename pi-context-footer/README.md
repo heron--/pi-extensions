@@ -4,7 +4,6 @@ A small [pi](https://github.com/earendil-works/pi-coding-agent) extension that
 draws a continuous border around the prompt editor and sets session status
 items into the rule itself, inspired by
 [`pi-powerline-footer`](https://github.com/nicobailon/pi-powerline-footer).
-It does not add a separate widget above the prompt or alter prompt-text rendering.
 
 ## Layout
 
