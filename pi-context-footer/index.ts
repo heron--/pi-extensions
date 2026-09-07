@@ -9,7 +9,9 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
-import { basename } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import type { TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { estimateUsageCost } from "../lib/pricing.ts";
@@ -125,6 +127,53 @@ function syncSheenTicker(active: boolean): void {
 	}
 }
 
+/**
+ * Whether the `max` shimmer may animate at all. A machine preference rather
+ * than a session choice, so it persists; `/context-footer animate` flips it.
+ */
+let animate = true;
+
+/**
+ * Where the animation preference lives.
+ *
+ * Not under `<agent dir>/extensions/pi-context-footer/`, because this
+ * extension is installed by symlink: that path resolves into the git checkout,
+ * and the config would land in the repo.
+ */
+function configFile(): string {
+	const configured = process.env.PI_AGENT_DIR;
+	const agentDir = configured
+		? configured.replace(/^~(?=$|\/)/, homedir())
+		: join(homedir(), ".pi", "agent");
+	return join(agentDir, "pi-context-footer", "config.json");
+}
+
+interface StoredConfig {
+	/** Whether the `max` shimmer may animate. Absent means on, the default. */
+	animate?: boolean;
+}
+
+function loadConfig(): void {
+	try {
+		const stored = JSON.parse(readFileSync(configFile(), "utf8")) as StoredConfig;
+		if (typeof stored.animate === "boolean") animate = stored.animate;
+	} catch {
+		// No config, or an unreadable one. Defaults are not worth an error.
+	}
+}
+
+function saveConfig(): boolean {
+	try {
+		const file = configFile();
+		mkdirSync(dirname(file), { recursive: true });
+		const body: StoredConfig = { animate };
+		writeFileSync(file, `${JSON.stringify(body, null, 2)}\n`, "utf8");
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 type Paint = (text: string) => string;
 
 /**
@@ -192,8 +241,12 @@ function rainbow(text: string, style: RainbowStyle = {}): string {
 	let center = 0;
 	if (sheen) {
 		// The highlight laps the label: measured on colored characters only, it
-		// slides off the right edge as it enters on the left, so the loop has no seam.
-		center = Math.floor(Date.now() / SHEEN_STEP_MS) % coloredTotal;
+		// slides off the right edge as it enters on the left, so the loop has no
+		// seam. With animation disabled it stays pinned at the head of the label
+		// instead — the static form of the same effect.
+		center = animate
+			? Math.floor(Date.now() / SHEEN_STEP_MS) % coloredTotal
+			: 0;
 	}
 
 	let result = "";
@@ -642,13 +695,15 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 			const baseRender = editor.render.bind(editor);
 
 			editor.render = (width: number): string[] => {
-				// The ticker runs only while the gloss is actually being drawn; below
-			// the framed width the plain footer carries the label statically.
+				// The ticker runs only while the animated gloss is being drawn; with
+				// animation off the gloss renders statically, and below the framed
+				// width the plain footer carries it statically too.
 				syncSheenTicker(
-						enabled
-							&& width >= MIN_FRAMED_WIDTH
-							&& !!ctx.model?.reasoning
-							&& ctx.thinkingLevel === "max",
+					enabled
+						&& animate
+						&& width >= MIN_FRAMED_WIDTH
+						&& !!ctx.model?.reasoning
+						&& ctx.thinkingLevel === "max",
 				);
 				// Too narrow for a rule plus a label: leave pi's own rows alone.
 				if (!enabled || width < MIN_FRAMED_WIDTH) return baseRender(width);
@@ -674,6 +729,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
+		loadConfig();
 		if (ctx.mode === "tui") install(ctx);
 	});
 
@@ -684,7 +740,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("context-footer", {
-		description: "Toggle the context-footer border, or set its padding",
+		description: "Toggle the context-footer border, set its padding, or toggle the thinking shimmer",
 		handler: async (args, ctx) => {
 			const [verb, value, ...extra] = (args ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
 
@@ -702,8 +758,33 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 				return;
 			}
 
+			if (verb === "animate") {
+				if (value === undefined) {
+					ctx.ui.notify(`Context footer animation is ${animate ? "on" : "off"}`, "info");
+					return;
+				}
+				if (extra.length > 0 || (value !== "on" && value !== "off")) {
+					ctx.ui.notify("Usage: /context-footer animate [on|off]", "warning");
+					return;
+				}
+				const nextAnimate = value === "on";
+				if (nextAnimate === animate) {
+					ctx.ui.notify(`Context footer animation is already ${animate ? "on" : "off"}`, "info");
+					return;
+				}
+				animate = nextAnimate;
+				// The command's own notify repaints, so the ticker re-syncs itself.
+				ctx.ui.notify(
+					saveConfig()
+						? `Context footer animation ${nextAnimate ? "enabled" : "disabled"}`
+						: `Context footer animation ${nextAnimate ? "enabled" : "disabled"} for this session only (config file not writable)`,
+					"info",
+				);
+				return;
+			}
+
 			if (value !== undefined || (verb !== undefined && verb !== "on" && verb !== "off")) {
-				ctx.ui.notify("Usage: /context-footer [on|off|pad full|pad none]", "warning");
+				ctx.ui.notify("Usage: /context-footer [on|off|pad full|pad none|animate on|animate off]", "warning");
 				return;
 			}
 

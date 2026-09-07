@@ -93,7 +93,9 @@ The ticker is started and stopped from the editor's render path: every
 transition that could show or hide the label — a level change,
 `/context-footer`, a resize, a model without reasoning — is followed by a
 render, so no subscriptions are needed to keep it truthful, and
-`session_shutdown` stops it so it can never pin the event loop at exit. Only
+`session_shutdown` stops it so it can never pin the event loop at exit. The
+shimmer can be switched off with `/context-footer animate off` (persisted;
+see Usage). Only
 foreground color ever changes, so the label cannot shift the layout or leak
 attributes into the rest of the border; below 24 columns the plain footer
 carries it statically. The model marker is the Nerd Font `nf-md-skull` glyph.
@@ -153,7 +155,15 @@ discovery directory.
 /context-footer on         enable it
 /context-footer off        disable it
 /context-footer pad none   set the padding (see above)
+/context-footer animate        report whether the shimmer animates
+/context-footer animate off   stop the traveling gloss
 ```
+
+The animation preference is a machine setting rather than a session choice,
+so it persists across sessions in `<agent dir>/pi-context-footer/config.json`.
+With animation off the gloss is not removed — it stays pinned at the head of
+the label, the static form of the same effect, and the repaint loop stays
+down.
 
 `off` leaves the editor wrapper installed but inert, which avoids removing a
 subsequently installed editor integration such as the `/model` interceptor, and
