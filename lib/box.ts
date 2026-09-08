@@ -54,6 +54,20 @@ export const TEE_L = "├";
 export const TEE_R = "┤";
 /** A background applied per row survives an `\x1b[39m` but not an `\x1b[0m`. */
 export const BG_RESET = "\x1b[49m";
+
+/**
+ * Apply `bgAnsi` across a whole row, re-asserted after every reset inside it
+ * that clears a background — full `\x1b[0m` and bg-only `\x1b[49m` alike — which
+ * a plain wrap cannot survive. The boxes' rows carry content that
+ * legitimately emits both: the rainbow thinking badge closes with a full
+ * reset (see lib/thinking-colors.ts), the editor's cursor styling uses one,
+ * and pi's own message body ends each row with `\x1b[49m`. Only the background
+ * is re-asserted: the reset's fg/attribute clearing was intended.
+ */
+export function groundRow(row: string, bgAnsi: string): string {
+	const reassert = (reset: string) => `${reset}${bgAnsi}`;
+	return `${bgAnsi}${row.replace(/\x1b\[0m|\x1b\[49m/g, reassert)}${BG_RESET}`;
+}
 /**
  * Closing an OSC 8 hyperlink after a truncation cut. Truncation can cut a link
  * before its terminator, leaving the rest of the row linked; closing again

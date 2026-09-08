@@ -25,7 +25,15 @@
 import { getAgentDir, UserMessageComponent, type Theme } from "@earendil-works/pi-coding-agent";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { CORNER_BL, CORNER_BR, CORNER_TL, CORNER_TR, labelRuleRow, railRow } from "../lib/box.ts";
+import {
+	CORNER_BL,
+	CORNER_BR,
+	CORNER_TL,
+	CORNER_TR,
+	groundRow,
+	labelRuleRow,
+	railRow,
+} from "../lib/box.ts";
 
 /**
  * nf-fa-crow — the house bestiary grows a bird (spider, skull, flower, crow).
@@ -120,22 +128,30 @@ function renderBoxed(this: UserMessageComponent, originalRender: (width: number)
 	if (body.length === 0) return originalRender.call(this, w);
 
 	const rule = (text: string) => theme!.fg("border", text);
-	const label = theme.bold(theme.fg("accent", `${ICON_USER} ${LABEL_USER}`));
+	// Two spaces: the crow's glyph has tighter bearings than the recap's
+	// supplementary-plane markers, and one space reads as a collision.
+	const label = theme.bold(theme.fg("accent", `${ICON_USER}  ${LABEL_USER}`));
+	// The whole box sits on the same ground as its content (groundRow keeps it
+	// across the full resets pi's markdown and the OSC markers emit), so the
+	// rules and rails read as part of the box, not stickers on a strip.
+	const ground = (row: string) => groundRow(row, theme!.getBgAnsi("userMessageBg"));
 
 	const rows = [
 		// A blank row above the box, so it breathes against the previous entry.
 		"",
-		labelRuleRow({
-			width: w,
-			paint: rule,
-			cornerL: CORNER_TL,
-			cornerR: CORNER_TR,
-			label,
-			side: "left",
-			padLabel: true,
-		}),
-		...body.map((line) => railRow({ line, paint: rule, padX: 0 })),
-		labelRuleRow({ width: w, paint: rule, cornerL: CORNER_BL, cornerR: CORNER_BR }),
+		ground(
+			labelRuleRow({
+				width: w,
+				paint: rule,
+				cornerL: CORNER_TL,
+				cornerR: CORNER_TR,
+				label,
+				side: "left",
+				padLabel: true,
+			}),
+		),
+		...body.map((line) => ground(railRow({ line, paint: rule, padX: 0 }))),
+		ground(labelRuleRow({ width: w, paint: rule, cornerL: CORNER_BL, cornerR: CORNER_BR })),
 	];
 
 	// pi's zone markers, moved out to the box: the shell-integration zones

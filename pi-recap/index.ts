@@ -9,11 +9,11 @@ import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
-	BG_RESET,
 	CORNER_BL,
 	CORNER_BR,
 	CORNER_TL,
 	CORNER_TR,
+	groundRow,
 	labelRuleRow,
 	railRow,
 } from "../lib/box.ts";
@@ -401,11 +401,11 @@ function renderFrame(theme: Theme, recap: RecapResult, width: number): string[] 
 	if (width < MIN_BOX_WIDTH) return [];
 
 	const { body, next } = splitNext(recap.text);
-	// A row's background must be applied around the whole row: the fg
-	// resets inside it are `\x1b[39m`, which leave a background alone.
-	// The user-prompt background, so the recap sits on the same ground as the
-	// messages around it — and it is the darker of the two, which the prose needs.
-	const filled = (row: string) => `${theme.getBgAnsi("userMessageBg")}${row}${BG_RESET}`;
+	// A row's background must be applied around the whole row, re-asserted
+	// after any full reset inside it (lib/box.ts groundRow). The user-prompt
+	// background, so the recap sits on the same ground as the messages around
+	// it — and it is the darker of the two, which the prose needs.
+	const filled = (row: string) => groundRow(row, theme.getBgAnsi("userMessageBg"));
 	const rule = (text: string) => theme.fg("border", text);
 	const label = (text: string) => theme.bold(theme.fg("customMessageLabel", text));
 	const prose = (text: string) => theme.italic(theme.fg("customMessageText", text));
