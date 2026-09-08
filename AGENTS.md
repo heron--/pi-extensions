@@ -21,8 +21,10 @@ pi-extensions/
 │   └── link-extensions.mjs  # idempotently links every extension into both
 │                             # discovery locations (by convention, not a list)
 ├── lib/
+│   ├── box.ts                # shared box/frame row generation (the house layout)
 │   ├── pricing.ts            # shared helper, imported as "../lib/pricing.ts"
 │   └── thinking-colors.ts    # shared thinking-level colour scheme + animate pref
+├── pi-user-message/          # extension: the user's message in the house box
 ├── pi-recap/           # extension: away-and-back recap, rotating cheap models
 ├── pi-context-footer/        # extension: continuous prompt border + status items
 ├── pi-model-picker/          # extension: /model-picker, and takes over /model
@@ -89,7 +91,7 @@ next launch (this happened during the `pi-throttle-stream` → `pi-typewriter`
 rename).
 
 Currently symlinked, both locations: `pi-recap`, `pi-context-footer`, `pi-model-picker`,
-`pi-typewriter`, `pi-write-lock`, `lib`.
+`pi-typewriter`, `pi-user-message`, `pi-write-lock`, `lib`.
 
 ## The `lib` symlink rule
 
