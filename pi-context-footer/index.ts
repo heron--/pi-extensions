@@ -14,6 +14,7 @@ import type { TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { estimateUsageCost } from "../lib/pricing.ts";
 import {
+	BG_RESET,
 	CORNER_BL as CORNER_BOTTOM_LEFT,
 	CORNER_BR as CORNER_BOTTOM_RIGHT,
 	CORNER_TL as CORNER_TOP_LEFT,
@@ -437,7 +438,12 @@ function frameEditor(
 			...bottomSegments,
 		]),
 	);
-	return framed;
+	// The prompt box sits on the same dark ground as the recap and
+	// user-message boxes (userMessageBg), so all three read as one family.
+	// Applied around each whole row: the \x1b[39m foreground resets inside it
+	// leave a background alone, so the ground holds while content recolours.
+	const ground = (row: string) => `${theme.getBgAnsi("userMessageBg")}${row}${BG_RESET}`;
+	return framed.map(ground);
 }
 
 /**
