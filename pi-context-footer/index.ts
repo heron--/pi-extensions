@@ -5,6 +5,7 @@ import type {
 	ExtensionContext,
 	ReadonlyFooterDataProvider,
 	Theme,
+	ThemeColor,
 } from "@earendil-works/pi-coding-agent";
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
