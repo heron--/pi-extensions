@@ -14,6 +14,7 @@ import type { TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { estimateUsageCost } from "../lib/pricing.ts";
 import {
+	fgFromBg,
 	groundRow,
 	CORNER_BL as CORNER_BOTTOM_LEFT,
 	CORNER_BR as CORNER_BOTTOM_RIGHT,
@@ -444,7 +445,14 @@ function frameEditor(
 	// the badge's rainbow close, the editor's cursor styling — which a plain
 	// wrap cannot survive.
 	const ground = (row: string) => groundRow(row, theme.getBgAnsi("userMessageBg"));
-	return framed.map(ground);
+	// Breathing room above the widget rule: a row of lower-quarter blocks
+	// inked in the ground color, so the box fades in below the transcript
+	// instead of starting at a hard rule. NOT grounded — its air is the
+	// terminal's own background, only the ink carries the color.
+	// theme.fg only accepts foreground (ThemeColor) names and throws on a
+	// background-only one, so the ground's ANSI code is recolored by hand.
+	const softTop = `${fgFromBg(theme.getBgAnsi("userMessageBg"))}${"▂".repeat(width)}\x1b[39m`;
+	return [softTop, ...framed.map(ground)];
 }
 
 /**

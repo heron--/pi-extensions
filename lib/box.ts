@@ -68,6 +68,16 @@ export function groundRow(row: string, bgAnsi: string): string {
 	const reassert = (reset: string) => `${reset}${bgAnsi}`;
 	return `${bgAnsi}${row.replace(/\x1b\[0m|\x1b\[49m/g, reassert)}${BG_RESET}`;
 }
+
+/**
+ * Recolor a background ANSI code (`\x1b[48;...m`) as the matching foreground
+ * (`\x1b[38;...m`) — for painting ink in a color the theme only defines as a
+ * background (e.g. a box's ground tone), since `Theme.fg` only accepts the
+ * `ThemeColor` foreground palette and throws on a `ThemeBg` name.
+ */
+export function fgFromBg(bgAnsi: string): string {
+	return bgAnsi.replace("48;", "38;");
+}
 /**
  * Closing an OSC 8 hyperlink after a truncation cut. Truncation can cut a link
  * before its terminator, leaving the rest of the row linked; closing again
