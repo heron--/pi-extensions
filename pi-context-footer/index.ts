@@ -452,7 +452,11 @@ function frameEditor(
 	// theme.fg only accepts foreground (ThemeColor) names and throws on a
 	// background-only one, so the ground's ANSI code is recolored by hand.
 	const softTop = `${fgFromBg(theme.getBgAnsi("userMessageBg"))}${"▂".repeat(width)}\x1b[39m`;
-	return [softTop, ...framed.map(ground)];
+	// The mirror at the bottom: upper blocks inked in the ground color, so
+	// the box fades out above whatever follows instead of ending at a hard
+	// rule. Also NOT grounded — same reasoning as the top.
+	const softBottom = `${fgFromBg(theme.getBgAnsi("userMessageBg"))}${"▔".repeat(width)}\x1b[39m`;
+	return [softTop, ...framed.map(ground), softBottom];
 }
 
 /**
