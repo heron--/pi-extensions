@@ -14,6 +14,20 @@ import type { TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { estimateUsageCost } from "../lib/pricing.ts";
 import {
+	CORNER_BL as CORNER_BOTTOM_LEFT,
+	CORNER_BR as CORNER_BOTTOM_RIGHT,
+	CORNER_TL as CORNER_TOP_LEFT,
+	CORNER_TR as CORNER_TOP_RIGHT,
+	RULE,
+	TEE_L as TEE_LEFT,
+	TEE_R as TEE_RIGHT,
+	frameRuleRow,
+	isRuleRow,
+	railRow,
+} from "../lib/box.ts";
+/** The plain footer's segment separator; the framed runs use lib/box.ts. */
+const RULE_RUN = 2;
+import {
 	loadThinkingAnimatePreference,
 	paintThinkingLevel,
 	saveThinkingAnimatePreference,
@@ -40,24 +54,10 @@ const STATUS_KEYS = new Set(["background-tasks", WRITE_LOCK_STATUS_KEY]);
 const LINK_OPEN = "\x1b]8;;";
 const LINK_CLOSE = "\x1b]8;;\x07";
 
-const RULE = "─";
-const RAIL = "│";
-const CORNER_TOP_LEFT = "╭";
-const CORNER_TOP_RIGHT = "╮";
-const CORNER_BOTTOM_LEFT = "╰";
-const CORNER_BOTTOM_RIGHT = "╯";
-const TEE_LEFT = "├";
-const TEE_RIGHT = "┤";
-
 /** Width of the two rails the frame steals from the editor's own render width. */
 const FRAME_WIDTH = 2;
 /** Columns of air between each rail and the input, paid for the same way. */
 const GUTTER_X = 1;
-/** Rules on each side of a status item, so the run reads as broken, not ended. */
-const RULE_RUN = 2;
-/** `╭── ` before the first item, ` ──╮` after the last. */
-const LEAD_WIDTH = 1 + RULE_RUN + 1;
-const TRAIL_WIDTH = 1 + RULE_RUN + 1;
 /** Below this the frame cannot hold a rule plus a segment, so it is skipped. */
 const MIN_FRAMED_WIDTH = 24;
 
@@ -104,8 +104,6 @@ type Paint = (text: string) => string;
  * unbroken stretch of each rule falls on the opposite corner from the other's.
  * That reads as more room around the input than packing both runs left does.
  */
-type Align = "left" | "right";
-
 /**
  * Whether a blank rail row separates the input from the rule.
  *
@@ -366,13 +364,6 @@ function stripAnsi(text: string): string {
  * swapping in a `─── ↑ N more ───` marker when the input itself is scrolled.
  * Those two rows are the ones this extension turns into a framed border.
  */
-function isRuleRow(line: string, width: number): boolean {
-	const stripped = stripAnsi(line);
-	if (visibleWidth(stripped) !== width) return false;
-	if (!stripped.startsWith(RULE)) return false;
-	return /^─+$/.test(stripped) || /[↑↓]/.test(stripped);
-}
-
 /** Pull `↑ 3 more` out of a scroll marker so the frame can carry it as a segment. */
 function scrollNotice(theme: Theme, line: string): string | null {
 	const match = /([↑↓])\s+(\d+)\s+more/.exec(stripAnsi(line));
@@ -381,80 +372,11 @@ function scrollNotice(theme: Theme, line: string): string | null {
 }
 
 /**
- * One horizontal run of the frame: a continuous rule broken only by the
- * segments handed in. The result is always exactly `width` cells wide, which is
- * what keeps pi's render-width assertion from tearing the screen down.
- *
- * Callers pass a `width` of at least `MIN_FRAMED_WIDTH`.
- */
-function buildBorderRow(
-	width: number,
-	paint: Paint,
-	leftCorner: string,
-	rightCorner: string,
-	align: Align,
-	segments: string[],
-	rightTrail: string[] = [],
-): string {
-	const present = segments.filter((segment) => segment.trim().length > 0);
-	const trailPresent = rightTrail.filter((segment) => segment.trim().length > 0);
-	if (present.length === 0 && trailPresent.length === 0) {
-		return paint(leftCorner + RULE.repeat(width - FRAME_WIDTH) + rightCorner);
-	}
-
-	const budget = width - LEAD_WIDTH - TRAIL_WIDTH;
-	let body = present.join(paint(` ${RULE.repeat(RULE_RUN)} `));
-	if (visibleWidth(body) > budget) {
-		// Truncation can cut a hyperlink before its terminator, which would leave
-		// the rest of the row linked. Closing again costs no width.
-		body = truncateToWidth(body, budget, "…") + LINK_CLOSE;
-	}
-
-	// A right-anchored trail (the session name) sits just before the corner; the
-	// left-aligned run keeps its place before it, so the top row can carry a name
-	// at the right edge without giving up the left-aligned status run. The trail
-	// implies a left-aligned body, so `align` is not consulted here.
-	if (trailPresent.length > 0) {
-		let trailBody = trailPresent.join(paint(` ${RULE.repeat(RULE_RUN)} `));
-		// Fixed overhead between the corner rules: corner + rule + space on each
-		// side of the fill run (10 cells) once a trail is present.
-		const contentBudget = width - LEAD_WIDTH - TRAIL_WIDTH - (RULE_RUN + 2);
-		let bodyBudget = contentBudget - visibleWidth(trailBody);
-		if (bodyBudget < 0) {
-			// The trail alone is too wide; truncate it and give the body nothing.
-			body = "";
-			trailBody = truncateToWidth(trailBody, contentBudget, "…") + LINK_CLOSE;
-		} else if (visibleWidth(body) > bodyBudget) {
-			body = truncateToWidth(body, bodyBudget, "…") + LINK_CLOSE;
-		}
-		if (visibleWidth(body) === 0) {
-			// No left-aligned body survives: render the trail as a plain right-aligned
-			// run so the row is a single broken rule rather than a notch beside an
-			// empty status slot.
-			const fill = width - LEAD_WIDTH - visibleWidth(trailBody) - (TRAIL_WIDTH - RULE_RUN);
-			return `${paint(leftCorner + RULE.repeat(fill))} ${trailBody}${paint(` ${RULE.repeat(RULE_RUN)}${rightCorner}`)}`;
-		}
-		const fill = width - LEAD_WIDTH - visibleWidth(body) - visibleWidth(trailBody) - (TRAIL_WIDTH + RULE_RUN);
-		return `${paint(leftCorner + RULE.repeat(RULE_RUN))} ${body}${paint(` ${RULE.repeat(fill)}`)} ${trailBody}${paint(` ${RULE.repeat(RULE_RUN)}${rightCorner}`)}`;
-	}
-
-	// One rule run is fixed at the item end; the other absorbs the remainder.
-	const fill = width - LEAD_WIDTH - visibleWidth(body) - (TRAIL_WIDTH - RULE_RUN);
-	const leadRun = align === "left" ? RULE_RUN : fill;
-	const trailRun = align === "left" ? fill : RULE_RUN;
-	return `${paint(leftCorner + RULE.repeat(leadRun))} ${body}${paint(` ${RULE.repeat(trailRun)}${rightCorner}`)}`;
-}
-
-/** Set one of pi's own rows between the rails, without reflowing it. */
-function railRow(line: string, paint: Paint): string {
-	const gutter = " ".repeat(GUTTER_X);
-	return `${paint(RAIL)}${gutter}${line}${gutter}${paint(RAIL)}`;
-}
-
-/**
  * Draws a continuous border around pi's prompt editor, with status items set
  * into the top and bottom runs of the rule. This is deliberately not a widget:
- * the labels are part of the prompt's own frame.
+ * the labels are part of the prompt's own frame. The rule rows themselves
+ * come from ../lib/box.ts — the shared house layout, so the prompt frame, the
+ * recap box, and the user-message box are built from the same generators.
  *
  * The editor is rendered narrow so the rails and their gutters have somewhere
  * to live. Prefixing full-width rows instead overflows the terminal, and pi
@@ -482,11 +404,11 @@ function frameEditor(
 
 	const hasUpperRule = isRuleRow(lines[0]!, innerWidth);
 	const framed: string[] = [];
-	const gutter = railRow(" ".repeat(innerWidth), paint);
+	const gutter = railRow({ line: " ".repeat(innerWidth), paint, padX: GUTTER_X });
 
 	const upperNotice = hasUpperRule ? scrollNotice(theme, lines[0]!) : null;
 	framed.push(
-		buildBorderRow(width, paint, CORNER_TOP_LEFT, CORNER_TOP_RIGHT, "left", [
+		frameRuleRow(width, paint, CORNER_TOP_LEFT, CORNER_TOP_RIGHT, "left", [
 			...(upperNotice ? [upperNotice] : []),
 			...topSegments,
 		], topTrail),
@@ -494,7 +416,7 @@ function frameEditor(
 
 	if (padding === "full") framed.push(gutter);
 	for (let index = hasUpperRule ? 1 : 0; index < lowerRuleIndex; index++) {
-		framed.push(railRow(lines[index]!, paint));
+		framed.push(railRow({ line: lines[index]!, paint, padX: GUTTER_X }));
 	}
 	if (padding === "full") framed.push(gutter);
 
@@ -504,13 +426,13 @@ function frameEditor(
 		// Keep the completion list inside the frame: the lower rule becomes a
 		// divider and the status run moves below the list.
 		framed.push(
-			buildBorderRow(width, paint, TEE_LEFT, TEE_RIGHT, "right", lowerNotice ? [lowerNotice] : []),
+			frameRuleRow(width, paint, TEE_LEFT, TEE_RIGHT, "right", lowerNotice ? [lowerNotice] : []),
 		);
-		for (const line of trailing) framed.push(railRow(line, paint));
+		for (const line of trailing) framed.push(railRow({ line, paint, padX: GUTTER_X }));
 	}
 
 	framed.push(
-		buildBorderRow(width, paint, CORNER_BOTTOM_LEFT, CORNER_BOTTOM_RIGHT, "right", [
+		frameRuleRow(width, paint, CORNER_BOTTOM_LEFT, CORNER_BOTTOM_RIGHT, "right", [
 			...(trailing.length === 0 && lowerNotice ? [lowerNotice] : []),
 			...bottomSegments,
 		]),
