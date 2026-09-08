@@ -123,10 +123,10 @@ const PADDINGS = new Set<Padding>(["full", "none"]);
  * lib/thinking-colors.ts so it matches the model picker's level rows exactly —
  * except "off", which paints dim rather than the scheme's thinkingOff color.
  * Themes may map that color to rule shades meant for barely-visible
- * separators, and pi tints the whole editor frame with that same quiet color
- * at "off" (updateEditorBorderColor), so the frame stays faint there by
- * design and this badge is the state's one legible announcement. The model
- * picker's DeepSeek toggle rows paint "off" dim for the same reason.
+ * separators, and the frame itself is no longer thinking-tinted (see the
+ * editor wrapper), so this badge is the off state's only announcement and
+ * has to stay legible. The model picker's DeepSeek toggle rows paint "off"
+ * dim for the same reason.
  */
 function thinkingLabel(theme: Theme, level: ModelThinkingLevel, animated: boolean): string {
 	if (level === "off") return theme.fg("dim", `thinking:${level}`);
@@ -606,9 +606,18 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 				if (!enabled || width < MIN_FRAMED_WIDTH) return baseRender(width);
 
 				const theme = ctx.ui.theme;
-				// Track the editor's own border color so the frame follows pi's
-				// bash-mode and thinking-level tinting instead of fighting it.
-				const paint: Paint = editor.borderColor ?? ((text: string) => theme.fg("border", text));
+				// The frame is chrome, not signal: it paints the theme's border
+				// colour and does not follow pi's thinking-level tint, which can be
+				// near-invisible where a theme maps thinkingOff to a rule shade —
+				// the badge in the top run carries the thinking state. Bash mode is
+				// the one exception: it keeps pi's tint, detected with the same
+				// predicate pi applies on every text change ("!" at the head of the
+				// input), because "you are about to run a shell command" is a
+				// frame-level cue pi's own editor still has.
+				const bashMode = editor.getText().trimStart().startsWith("!");
+				const paint: Paint = bashMode
+					? (editor.borderColor ?? ((text: string) => theme.fg("border", text)))
+					: (text: string) => theme.fg("border", text);
 
 				return frameEditor(
 					baseRender,

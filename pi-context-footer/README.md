@@ -84,19 +84,21 @@ truncated with `…` and the frame still closes.
 
 ### Colors
 
-The frame is painted with the editor's *own* border color, so it keeps following
-pi's bash-mode and thinking-level tinting instead of overriding it. The pull
-request number uses the theme's link color and the money figure the theme's
-accent color.
+The frame is chrome, not signal: it paints the theme's `border` color and does
+not follow pi's thinking-level tint, which can be near-invisible where a theme
+maps `thinkingOff` to a rule shade — the badge in the top run carries the
+thinking state. Bash mode is the one exception: the frame keeps pi's green
+tint, detected with the same predicate pi itself uses — `!` at the head of the
+input. The pull request number uses the theme's link color and the money
+figure the theme's accent color.
 
 The thinking-level scheme lives in
 [`lib/thinking-colors.ts`](../README.md#libthinking-colorsts), shared with
 `pi-model-picker` so a level looks identical in the picker's level list and in
 the border. One deliberate exception: the `off` badge paints dim rather than
-the scheme's `thinkingOff` color. Themes may map that color to rule shades
-meant for barely-visible separators — and pi tints the whole editor frame with
-that same quiet color at `off`, so the frame stays faint there by design and
-the badge is the state's one legible announcement. The model picker's
+the scheme's `thinkingOff` color, which themes may map to rule shades meant
+for barely-visible separators — with the frame itself untinted, the badge is
+the off state's only announcement, so it stays legible. The model picker's
 DeepSeek toggle rows paint `off` dim for the same reason. Thinking colors match `pi-powerline-footer`: `minimal`, `low`, and `medium` use
 pi's corresponding thinking colors; `high` uses its exact purple → pink →
 yellow → green → cyan → blue gradient. Above that the treatment escalates on
