@@ -27,8 +27,12 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { CORNER_BL, CORNER_BR, CORNER_TL, CORNER_TR, labelRuleRow, railRow } from "../lib/box.ts";
 
-/** nf-fa-user-secret — the mustachioed spy. Single-cell, verified. */
-const ICON_USER = "\uf2bd";
+/**
+ * nf-fa-crow — the house bestiary grows a bird (spider, skull, flower, crow).
+ * U+EDEA in Nerd Fonts v3's remapped FA range: verified present in the
+ * terminal font's cmap and single-cell with visibleWidth().
+ */
+const ICON_USER = "\uedea";
 const LABEL_USER = "User";
 /** Below this the box cannot hold a rule plus its label: pi's native message. */
 const MIN_BOX_WIDTH = 12;

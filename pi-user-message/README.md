@@ -1,10 +1,11 @@
 # user-message
 
 A [pi](https://github.com/earendil-works/pi-coding-agent) extension that draws
-the user's message in the house box:
+the user's message in the house box, under the house crow (, nf-fa-crow —
+the bestiary already has spider, skull, and flower):
 
 ```text
-╭ ● User ────────────────────────────────────╮
+╭  User ────────────────────────────────────╮
 │ what shape should the border take?         │
 ╰────────────────────────────────────────────╯
 ```
