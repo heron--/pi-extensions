@@ -92,7 +92,12 @@ accent color.
 The thinking-level scheme lives in
 [`lib/thinking-colors.ts`](../README.md#libthinking-colorsts), shared with
 `pi-model-picker` so a level looks identical in the picker's level list and in
-the border. Thinking colors match `pi-powerline-footer`: `minimal`, `low`, and `medium` use
+the border. One deliberate exception: the `off` badge paints dim rather than
+the scheme's `thinkingOff` color. Themes may map that color to rule shades
+meant for barely-visible separators — and pi tints the whole editor frame with
+that same quiet color at `off`, so the frame stays faint there by design and
+the badge is the state's one legible announcement. The model picker's
+DeepSeek toggle rows paint `off` dim for the same reason. Thinking colors match `pi-powerline-footer`: `minimal`, `low`, and `medium` use
 pi's corresponding thinking colors; `high` uses its exact purple → pink →
 yellow → green → cyan → blue gradient. Above that the treatment escalates on
 the same palette: `xhigh` is the same gradient, bold, with each character

@@ -120,9 +120,16 @@ const PADDINGS = new Set<Padding>(["full", "none"]);
 
 /**
  * The thinking-level label, painted with the shared scheme from
- * lib/thinking-colors.ts so it matches the model picker's level rows exactly.
+ * lib/thinking-colors.ts so it matches the model picker's level rows exactly —
+ * except "off", which paints dim rather than the scheme's thinkingOff color.
+ * Themes may map that color to rule shades meant for barely-visible
+ * separators, and pi tints the whole editor frame with that same quiet color
+ * at "off" (updateEditorBorderColor), so the frame stays faint there by
+ * design and this badge is the state's one legible announcement. The model
+ * picker's DeepSeek toggle rows paint "off" dim for the same reason.
  */
 function thinkingLabel(theme: Theme, level: ModelThinkingLevel, animated: boolean): string {
+	if (level === "off") return theme.fg("dim", `thinking:${level}`);
 	return paintThinkingLevel(theme, level, `thinking:${level}`, animated);
 }
 
