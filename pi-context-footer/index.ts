@@ -557,8 +557,8 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 				// frame-level cue pi's own editor still has.
 				const bashMode = editor.getText().trimStart().startsWith("!");
 				const paint: Paint = bashMode
-					? (editor.borderColor ?? ((text: string) => theme.fg("border", text)))
-					: (text: string) => theme.fg("border", text);
+					? (editor.borderColor ?? ((text: string) => theme.fg("syntaxType", text)))
+					: (text: string) => theme.fg("syntaxType", text);
 
 				return frameEditor(
 					baseRender,

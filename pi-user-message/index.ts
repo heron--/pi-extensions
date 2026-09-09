@@ -127,7 +127,7 @@ function renderBoxed(this: UserMessageComponent, originalRender: (width: number)
 	const body = containerRender.render!.call(this, w - 2) as string[];
 	if (body.length === 0) return originalRender.call(this, w);
 
-	const rule = (text: string) => theme!.fg("border", text);
+	const rule = (text: string) => theme!.fg("accent", text);
 	// Two spaces: the crow's glyph has tighter bearings than the recap's
 	// supplementary-plane markers, and one space reads as a collision.
 	const label = theme.bold(theme.fg("accent", `${ICON_USER}  ${LABEL_USER}`));

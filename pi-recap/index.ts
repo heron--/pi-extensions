@@ -406,9 +406,9 @@ function renderFrame(theme: Theme, recap: RecapResult, width: number): string[] 
 	// background, so the recap sits on the same ground as the messages around
 	// it — and it is the darker of the two, which the prose needs.
 	const filled = (row: string) => groundRow(row, theme.getBgAnsi("userMessageBg"));
-	const rule = (text: string) => theme.fg("border", text);
-	const label = (text: string) => theme.bold(theme.fg("customMessageLabel", text));
-	const prose = (text: string) => theme.italic(theme.fg("customMessageText", text));
+	const rule = (text: string) => theme.fg("warning", text);
+	const label = (text: string) => theme.bold(theme.fg("warning", text));
+	const prose = (text: string) => theme.italic(theme.fg("warning", text));
 
 	const inner = width - 2;
 	const content = Math.max(1, inner - PAD_X * 2);
@@ -477,8 +477,8 @@ function renderFrame(theme: Theme, recap: RecapResult, width: number): string[] 
 /** Flush left, no box — the same content with nothing drawn around it. */
 function renderClean(theme: Theme, recap: RecapResult, width: number): string[] {
 	const { body, next } = splitNext(recap.text);
-	const label = (text: string) => theme.bold(theme.fg("customMessageLabel", text));
-	const prose = (text: string) => theme.italic(theme.fg("customMessageText", text));
+	const label = (text: string) => theme.bold(theme.fg("warning", text));
+	const prose = (text: string) => theme.italic(theme.fg("warning", text));
 
 	// Marker and label sit flush left; each block's wrapped lines hang under
 	// where its own text began, so the indent resets between blocks.
