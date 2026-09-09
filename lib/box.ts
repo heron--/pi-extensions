@@ -17,12 +17,13 @@
  *     corner (`╭ label ────╮`, `╰──── label╯`). The user-message and recap
  *     boxes.
  *
- * `railRow` puts the rails on content rows for all three, and `isRuleRow`
- * recognizes a rule row when hunting for one.
+ * `railRow` puts the rails on content rows for all three.
  *
- * Everything here returns rows of EXACTLY the requested visible width — the
- * caller's width budget is respected or truncated, never overflowed, because
- * pi's TUI tears the whole screen down on an over-wide row.
+ * The width contract is explicit per function, because pi tears the whole
+ * TUI down on an over-wide row: the rule builders and the guarded railRow
+ * enforce exact width (truncating); railVerbatim delegates it to the caller
+ * by design — pre-rendered rows (pi's editor, pi's message body) cannot be
+ * reflowed, and the caller guarantees they fit.
  *
  * Backgrounds are applied per row by the caller (`bg` on `railRow` wraps the
  * whole row): a background applied around a row survives the `\x1b[39m`
@@ -31,13 +32,6 @@
  */
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-
-/** SGR sequences and OSC payloads — the widths the eye sees are what count. */
-const ANSI_PATTERN = /\x1b\[[0-9;?]*[a-zA-Z]|\x1b[\]_][^\x07\x1b]*(?:\x07|\x1b\\)/g;
-
-function stripAnsi(text: string): string {
-	return text.replace(ANSI_PATTERN, "");
-}
 
 /* -------------------------------------------------------------------------- */
 /* Geometry constants                                                          */
@@ -62,7 +56,9 @@ export const BG_RESET = "\x1b[49m";
  * legitimately emits both: the rainbow thinking badge closes with a full
  * reset (see lib/thinking-colors.ts), the editor's cursor styling uses one,
  * and pi's own message body ends each row with `\x1b[49m`. Only the background
- * is re-asserted: the reset's fg/attribute clearing was intended.
+ * is re-asserted: the reset's fg/attribute clearing was intended. The contract
+ * covers those two canonical sequences; SGR synonyms (\x1b[m, \x1b[00m) are
+ * not recognized — pi emits the canonical forms.
  */
 export function groundRow(row: string, bgAnsi: string): string {
 	const reassert = (reset: string) => `${reset}${bgAnsi}`;
@@ -198,48 +194,45 @@ export function labelRuleRow(opts: {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Set `line` between the rails. The line is placed verbatim — pre-rendered
- * ANSI rows keep their styling, and the caller guarantees the width contract:
- *
- * - with `padTo`, the content is right-padded so the railed row is exactly
- *   `padTo + 2 * padX + 2` cells (the transcript boxes, whose content is
- *   caller-wrapped prose);
- * - without it, the line must already be exactly as wide as the space
- *   between the rails (the footer's editor rows and the user message's
- *   natively rendered body).
+ * Set `line` between the rails, guarded: the content is right-padded to
+ * `padTo`, and a line that overruns it is ellipsized — the railed row is
+ * always exactly `padTo + 2 * padX + 2` cells, never overflowed.
  *
  * `bg` wraps the whole row, so foreground resets inside the line leave the
- * background alone.
+ * background alone (groundRow at the caller re-asserts it after full resets,
+ * including the ellipsis cut's).
  */
 export function railRow(opts: {
 	line: string;
 	paint: BoxPaint;
 	/** Columns of air between a rail and the content. Default 1. */
 	padX?: number;
-	/** Right-pad the content to this visible width. */
-	padTo?: number;
+	/** The content's width budget: padded to fit, ellipsized if overlong. */
+	padTo: number;
 	/** Wrap the finished row in a background (the `\x1b[49m` trick). */
 	bg?: (row: string) => string;
 }): string {
 	const { line, paint, padX = 1, padTo, bg } = opts;
 	const pad = " ".repeat(padX);
-	const content = padTo === undefined ? line : line + " ".repeat(Math.max(0, padTo - visibleWidth(line)));
+	const content =
+		visibleWidth(line) > padTo
+			? truncateToWidth(line, padTo, "…")
+			: line + " ".repeat(Math.max(0, padTo - visibleWidth(line)));
 	const row = `${paint(RAIL)}${pad}${content}${pad}${paint(RAIL)}`;
 	return bg ? bg(row) : row;
 }
 
-/* -------------------------------------------------------------------------- */
-/* Rule-row detection                                                          */
-/* -------------------------------------------------------------------------- */
-
 /**
- * Whether a pre-rendered row is one of pi's full-width rule rows (or a scroll
- * marker, which replaces a rule row). The footer hunts for these to know
- * where the editor's frame can sit.
+ * Set a pre-rendered row between the rails, verbatim — the loud delegation
+ * contract: pi's editor rows and message body cannot be reflowed, so the
+ * CALLER guarantees the line is exactly the intended inner width. Nothing
+ * here truncates or pads; an over-wide line overflows, and pi tears the TUI
+ * down. Use railRow whenever the content can be guarded.
  */
-export function isRuleRow(line: string, width: number): boolean {
-	const stripped = stripAnsi(line);
-	if (visibleWidth(stripped) !== width) return false;
-	if (!stripped.startsWith(RULE)) return false;
-	return /^─+$/.test(stripped) || /[↑↓]/.test(stripped);
+export function railVerbatim(opts: { line: string; paint: BoxPaint; padX?: number }): string {
+	const { line, paint, padX = 1 } = opts;
+	const pad = " ".repeat(padX);
+	return `${paint(RAIL)}${pad}${line}${pad}${paint(RAIL)}`;
 }
+
+

@@ -24,8 +24,7 @@ import {
 	TEE_L as TEE_LEFT,
 	TEE_R as TEE_RIGHT,
 	frameRuleRow,
-	isRuleRow,
-	railRow,
+	railVerbatim,
 } from "../lib/box.ts";
 /** The plain footer's segment separator; the framed runs use lib/box.ts. */
 const RULE_RUN = 2;
@@ -366,6 +365,14 @@ function stripAnsi(text: string): string {
  * swapping in a `─── ↑ N more ───` marker when the input itself is scrolled.
  * Those two rows are the ones this extension turns into a framed border.
  */
+/** Whether a pre-rendered row is one of pi's full-width rule rows (or a scroll marker, which replaces a rule row) — the footer hunts for these to know where the frame can sit. */
+function isRuleRow(line: string, width: number): boolean {
+	const stripped = stripAnsi(line);
+	if (visibleWidth(stripped) !== width) return false;
+	if (!stripped.startsWith(RULE)) return false;
+	return /^─+$/.test(stripped) || /[↑↓]/.test(stripped);
+}
+
 /** Pull `↑ 3 more` out of a scroll marker so the frame can carry it as a segment. */
 function scrollNotice(theme: Theme, line: string): string | null {
 	const match = /([↑↓])\s+(\d+)\s+more/.exec(stripAnsi(line));
@@ -406,7 +413,7 @@ function frameEditor(
 
 	const hasUpperRule = isRuleRow(lines[0]!, innerWidth);
 	const framed: string[] = [];
-	const gutter = railRow({ line: " ".repeat(innerWidth), paint, padX: GUTTER_X });
+	const gutter = railVerbatim({ line: " ".repeat(innerWidth), paint, padX: GUTTER_X });
 
 	const upperNotice = hasUpperRule ? scrollNotice(theme, lines[0]!) : null;
 	framed.push(
@@ -418,7 +425,7 @@ function frameEditor(
 
 	if (padding === "full") framed.push(gutter);
 	for (let index = hasUpperRule ? 1 : 0; index < lowerRuleIndex; index++) {
-		framed.push(railRow({ line: lines[index]!, paint, padX: GUTTER_X }));
+		framed.push(railVerbatim({ line: lines[index]!, paint, padX: GUTTER_X }));
 	}
 	if (padding === "full") framed.push(gutter);
 
@@ -430,7 +437,7 @@ function frameEditor(
 		framed.push(
 			frameRuleRow(width, paint, TEE_LEFT, TEE_RIGHT, "right", lowerNotice ? [lowerNotice] : []),
 		);
-		for (const line of trailing) framed.push(railRow({ line, paint, padX: GUTTER_X }));
+		for (const line of trailing) framed.push(railVerbatim({ line, paint, padX: GUTTER_X }));
 	}
 
 	framed.push(
