@@ -21,8 +21,10 @@ pi-extensions/
 │   └── link-extensions.mjs  # idempotently links every extension into both
 │                             # discovery locations (by convention, not a list)
 ├── lib/
+│   ├── box.ts                # shared box/frame row generation (the house layout)
 │   ├── pricing.ts            # shared helper, imported as "../lib/pricing.ts"
 │   └── thinking-colors.ts    # shared thinking-level colour scheme + animate pref
+├── pi-user-message/          # extension: the user's message in the house box
 ├── pi-recap/           # extension: away-and-back recap, rotating cheap models
 ├── pi-context-footer/        # extension: continuous prompt border + status items
 ├── pi-model-picker/          # extension: /model-picker, and takes over /model
@@ -89,7 +91,7 @@ next launch (this happened during the `pi-throttle-stream` → `pi-typewriter`
 rename).
 
 Currently symlinked, both locations: `pi-recap`, `pi-context-footer`, `pi-model-picker`,
-`pi-typewriter`, `pi-write-lock`, `lib`.
+`pi-typewriter`, `pi-user-message`, `pi-write-lock`, `lib`.
 
 ## The `lib` symlink rule
 
@@ -193,10 +195,14 @@ worth knowing before touching that seam:
   `visibleWidth()` of everything before it, so prefixing a rail shifts the
   hardware cursor correctly and needs no extra bookkeeping. `visibleWidth()`
   does understand the marker's APC escape, so it does not distort widths.
-- Paint the border with `editor.borderColor`, not a fixed theme color. Pi
-  reassigns that property on the *active* editor to signal bash mode and
-  thinking level (`updateEditorBorderColor`), so reading it per render keeps a
-  custom frame in step instead of overriding pi's own signalling.
+- The frame paints the theme's `border` colour, NOT `editor.borderColor` — the
+  thinking level is the badge's job, not the frame's, and a thinking tint can
+  be near-invisible where a theme maps `thinkingOff` to a rule shade. Bash
+  mode is the exception and does follow `editor.borderColor`: pi reassigns that
+  property on the *active* editor to signal bash mode and thinking level
+  (`updateEditorBorderColor`), so read it per render, and detect bash mode with
+  the same predicate pi applies on every text change — `!` at the head of the
+  input.
 - `autocompleteState` and the row layout are private; do not reach for them.
   Structure detection off the returned rows is enough and does not break when
   pi's internals move.

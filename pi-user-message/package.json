@@ -1,0 +1,19 @@
+{
+  "name": "pi-user-message",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pi extension: the user's message in the house box — the same rounded frame as the recap and the prompt, drawn from lib/box.ts.",
+  "type": "module",
+  "main": "index.ts",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "keywords": [
+    "pi",
+    "pi-package",
+    "user-message",
+    "layout"
+  ]
+}
