@@ -32,7 +32,7 @@ import {
 	CORNER_TR,
 	groundRow,
 	labelRuleRow,
-	railRow,
+	railVerbatim,
 } from "../lib/box.ts";
 
 /**
@@ -150,7 +150,7 @@ function renderBoxed(this: UserMessageComponent, originalRender: (width: number)
 				padLabel: true,
 			}),
 		),
-		...body.map((line) => ground(railRow({ line, paint: rule, padX: 0 }))),
+		...body.map((line) => ground(railVerbatim({ line, paint: rule, padX: 0 }))),
 		ground(labelRuleRow({ width: w, paint: rule, cornerL: CORNER_BL, cornerR: CORNER_BR })),
 	];
 
@@ -176,18 +176,30 @@ function patch(): void {
 		prototype.__userMessageOriginalRender = prototype.render;
 	}
 	const originalRender = prototype.__userMessageOriginalRender;
-	prototype.render = function (this: UserMessageComponent, width: number): string[] {
+	const wrapper = function (this: UserMessageComponent, width: number): string[] {
 		return renderBoxed.call(this, originalRender, width);
 	};
+	installedWrapper = wrapper;
+	prototype.render = wrapper;
 	prototype.__userMessagePatchedBy = PATCH_OWNER;
 }
 
+/** The wrapper currently installed on the prototype, so unpatch can recognize it. */
+let installedWrapper: ((width: number) => string[]) | undefined;
+
 function unpatch(): void {
 	const prototype = UserMessageComponent.prototype as PatchedUserMessagePrototype;
-	const originalRender = prototype.__userMessageOriginalRender;
-	if (typeof originalRender === "function") prototype.render = originalRender;
-	delete prototype.__userMessageOriginalRender;
-	delete prototype.__userMessagePatchedBy;
+	// Ownership-safe restore: only when OUR wrapper is still the installed
+	// render. Another extension may have chained on top (its original points at
+	// our wrapper) — restoring underneath it would break its restore chain, so
+	// in that case we leave the prototype untouched and drop only our reference.
+	if (installedWrapper && prototype.render === installedWrapper) {
+		const originalRender = prototype.__userMessageOriginalRender;
+		if (typeof originalRender === "function") prototype.render = originalRender;
+		delete prototype.__userMessageOriginalRender;
+		delete prototype.__userMessagePatchedBy;
+	}
+	installedWrapper = undefined;
 }
 
 const PATCH_OWNER = Symbol("pi-user-message");
