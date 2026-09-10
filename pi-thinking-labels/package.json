@@ -1,0 +1,19 @@
+{
+  "name": "pi-thinking-labels",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pi extension: labels thinking blocks in the transcript, painted with the shared thinking-level scheme, and strips the labels before they reach the model.",
+  "type": "module",
+  "main": "index.ts",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "keywords": [
+    "pi",
+    "pi-package",
+    "thinking",
+    "labels"
+  ]
+}
