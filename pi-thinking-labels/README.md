@@ -19,6 +19,9 @@ Thinking: first, restate the constraint…
   `message_end` the persisted message, `context` sanitizes. API-aware: only
   transports that emit thinking blocks are labelled (the OpenAI reasoning
   APIs and the anthropic family; other `openai-*` transports are excluded).
+- **Sanitization is unconditional.** The toggle only governs whether new
+  labels are painted; the `context` cleanup strips stored labels (ours or
+  upstream's) before every LLM call even when the extension is off.
 - **Idempotent under a double pass.** It replaces `pi-tool-display`'s
   always-on labelling (part 02 of retiring it); while both run, the artifact
   stripper removes whichever label landed first, so exactly one shows.

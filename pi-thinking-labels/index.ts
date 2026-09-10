@@ -199,17 +199,22 @@ function labelThinkingBlocks(message: AssistantMessage, theme: Theme, level: Mod
 	if (mapped.changed) message.content = mapped.content as AssistantMessage["content"];
 }
 
-/** Strip presentation artifacts from every assistant thinking block, in place. */
+/**
+ * Strip presentation artifacts from every assistant thinking block, in place —
+ * unconditionally, exactly as upstream does: label-only or ANSI-only content
+ * reduces to empty text rather than being restored, so nothing painted ever
+ * reaches the model. This runs regardless of the display toggle: the toggle
+ * governs painting, not cleanup — labels already stored in earlier turns (and
+ * upstream's, which keep landing while pi-tool-display is installed) must be
+ * stripped even when this extension is off.
+ */
 function sanitizeContextMessages(messages: AgentMessage[]): void {
 	let changed = false;
 	const next = messages.map((message) => {
 		if (message.role !== "assistant") return message;
 		const content = (message as AssistantMessage).content as unknown;
 		if (!Array.isArray(content)) return message;
-		const mapped = mapThinkingContent(content, (thinking) => {
-			const bare = stripThinkingPresentationArtifacts(thinking).trim();
-			return bare ? bare : thinking;
-		});
+		const mapped = mapThinkingContent(content, stripThinkingPresentationArtifacts);
 		if (!mapped.changed) return message;
 		changed = true;
 		return { ...message, content: mapped.content } as AssistantMessage;
@@ -288,7 +293,9 @@ export default function thinkingLabelsExtension(pi: ExtensionAPI): void {
 	pi.on("message_end", (event, ctx) => label(event, ctx));
 
 	pi.on("context", (event, ctx) => {
-		if (!enabled) return;
+		// NOT gated on the toggle: sanitization is the cleanup half of the
+		// contract, and stored labels (ours or upstream's) must never reach the
+		// model even when painting is off.
 		try {
 			sanitizeContextMessages(event.messages);
 		} catch (error) {
