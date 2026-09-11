@@ -185,11 +185,16 @@ function noteDelta(charCount: number, now: number): void {
 	pace.lastDeltaAt = now;
 	pace.deltasSeen++;
 	if (pace.deferred) return;
-	if (pace.deltasSeen === 1) return; // gap from message start, not between deltas
-	if (gap <= STEADY_GAP_MAX_MS) pace.steadyMs += gap;
-	else pace.pauseMs += gap;
-	if (charCount > STEADY_DELTA_MAX_CHARS) pace.pauseMs += 300; // a visible jump costs like a pause
-	else pace.steadyChars += charCount;
+	if (charCount > STEADY_DELTA_MAX_CHARS) {
+		pace.pauseMs += 300; // a visible jump costs like a pause
+	} else {
+		pace.steadyChars += charCount;
+		if (pace.deltasSeen > 1) {
+			// the first delta's gap is time from message start, not between deltas
+			if (gap <= STEADY_GAP_MAX_MS) pace.steadyMs += gap;
+			else pace.pauseMs += gap;
+		}
+	}
 	if (pace.deltasSeen >= MIN_DELTAS && pace.steadyMs >= DEFER_STEADY_MS && pace.pauseMs <= PAUSE_BUDGET_MS) {
 		pace.deferred = true;
 	}
@@ -363,6 +368,10 @@ function findOrCreate(messageType: string, markdown: string, isStreaming: boolea
 
 	// New block (e.g. a second thinking run later in the same message).
 	const entry: RevealState = { source: markdown, revealed: 0, carry: 0, lastTickAt: performance.now() };
+	// A block born after the deferral has no pre-flip backlog to drain: it
+	// starts caught up so it passes through exactly like the rest of the
+	// deferred message, instead of getting swept at the boost cap.
+	if (pace.deferred) entry.revealed = markdown.length;
 	list.push(entry);
 	// Bound growth in pathological cases (shouldn't normally exceed a couple entries).
 	if (list.length > 8) list.shift();
