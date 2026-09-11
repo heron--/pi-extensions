@@ -28,6 +28,35 @@
  * cheaper public API for this. It only runs while there's backlog left to
  * reveal, and stops the instant the display catches up.
  *
+ * --- Self-paced models: defer to the model's own streaming ---
+ *
+ * Some models (GLM 5.3 in particular) already pace their own output: deltas
+ * arrive steadily every few tens of milliseconds, so the raw stream looks
+ * like a typewriter before this extension does anything. Holding that back
+ * a second time — at our slower cps, with the tick loop forcing rebuilds on
+ * top of the model's own delta-driven renders — doubles the render work and
+ * adds pure lag.
+ *
+ * So each streaming message accumulates STEADY TIME: the wall-clock covered
+ * by inter-delta gaps small enough to read as continuous typing. Pauses
+ * (long gaps) and jump-sized deltas draw from a fixed pause budget instead
+ * of erasing progress — one hiccup doesn't condemn an otherwise self-paced
+ * message. Measured on real streams, self-paced models (GLM 5.3, Flash)
+ * spend 75-100% of stream time in sub-300ms gaps and hiccup once or twice,
+ * while Opus spends 99% of its wall time in 300ms-2.5s gaps: its pause
+ * budget is gone in ~1.4s, long before it could ever qualify. When >=
+ * MIN_DELTAS deltas have arrived with >= DEFER_STEADY_MS of steady time and
+ * pause budget to spare, the message defers: text passes through as it
+ * arrives. Any backlog that survived the flip sweeps at the boost cap —
+ * fast but smooth — instead of dumping on screen at once. The decision is
+ * one-way for the message; bursty streams never trip it, so their
+ * typewriter behavior is unchanged.
+ *
+ * While a run is building toward that threshold, the reveal rate temporarily
+ * matches the model's arrival rate (capped at BOOST_MAX_CPS, still smooth at
+ * 60fps) so that flipping to deferred never dumps a pile of held-back text
+ * on screen at once.
+ *
  * --- Escape hatch: skip the effect for the current message ---
  *
  * Press Escape while a message is typing out to show the rest of THAT
@@ -54,6 +83,8 @@
  *   - `/typewriter <cps>` changes it for the running session.
  *   - `/typewriter off` / `/typewriter on` toggles it entirely.
  *   - Escape mid-message: one-off skip for just that message (see above).
+ *   - Self-paced models (GLM 5.3 in particular): automatically defers to
+ *     the model's own streaming pace for that message (see above).
  *
  * Run with: pi -e ~/Projects/heron--/pi-extensions/pi-typewriter/index.ts
  * (or drop the file into ~/.pi/agent/extensions/ for global auto-load)
@@ -74,6 +105,36 @@ const MAX_CPS = 400;
 
 /** How often the tick loop forces a redraw while there's backlog to drain. */
 const TICK_MS = 33; // ~30/sec, matches the TUI's own ~60fps render granularity well enough
+
+/**
+ * Self-paced stream detection. Steady time (sum of inter-delta gaps up to
+ * STEADY_GAP_MAX_MS) accrues per message; pauses (longer gaps) and jump-sized
+ * deltas draw from a fixed pause budget. Thresholds are calibrated from real
+ * captures: self-paced streams (GLM 5.3, Flash) spend 75-100% of stream time
+ * in sub-300ms gaps, while Opus spends 99% of its wall time in
+ * 300ms-2.5s gaps — its pause budget is exhausted in ~1.4s, long before it
+ * could ever qualify, so it never defers. Real tool-loop messages are short
+ * (1-7s of streaming, thinking pauses of seconds inside), so the bar is
+ * deliberately low: 10 deltas and 600ms of steady time.
+ */
+const STEADY_GAP_MAX_MS = 300;
+const STEADY_DELTA_MAX_CHARS = 48;
+const DEFER_STEADY_MS = 600;
+const PAUSE_BUDGET_MS = 1200;
+const MIN_DELTAS = 10;
+/** Once the CURRENT stretch is provably steady (no pause or jump since it
+ * started), reveal at the model's own pace (bounded) so pre-defer backlog
+ * stays near zero even on messages whose pauses disqualify deferral. A
+ * backlog accumulated before the stretch looked real drains over ~this many
+ * seconds. */
+const BOOST_STRETCH_MS = 400;
+const BOOST_STRETCH_DELTAS = 10;
+const BOOST_MAX_CPS = 700; // ~12 chars/frame at 60fps: fast but smooth
+const BOOST_DRAIN_SECONDS = 0.5;
+/** The tick never forces a redraw within this window after a delta: pi just
+ * re-rendered for that delta, so pinging on top is the double-render this
+ * extension exists to avoid. The timer then only animates true silence. */
+const PING_FRESH_MS = 150;
 
 function parseCps(raw: string | undefined): number | undefined {
 	if (!raw) return undefined;
@@ -97,6 +158,107 @@ const state = {
 let skipCurrentMessage = false;
 
 /**
+ * Per-assistant-message streaming-pace stats, used to detect models that
+ * pace their own output (see "Self-paced models" in the header). Fed from
+ * message_update deltas — the provider's actual arrival pattern — not from
+ * transformer calls, which also fire for tick-forced redraws.
+ */
+interface StreamPace {
+	deltasSeen: number;
+	lastDeltaAt: number;
+	/** Time covered by gaps small enough to count as steady cadence. */
+	steadyMs: number;
+	/** Pause budget spent on long gaps and jump-sized deltas. */
+	pauseMs: number;
+	/** Characters that arrived during steady gaps (for the arrival-rate estimate). */
+	steadyChars: number;
+	/** The current unbroken steady stretch (resets on any pause or jump). */
+	stretchDeltas: number;
+	stretchMs: number;
+	stretchChars: number;
+	deferred: boolean;
+}
+
+function freshPace(): StreamPace {
+	return {
+		deltasSeen: 0,
+		lastDeltaAt: performance.now(),
+		steadyMs: 0,
+		pauseMs: 0,
+		steadyChars: 0,
+		stretchDeltas: 0,
+		stretchMs: 0,
+		stretchChars: 0,
+		deferred: false,
+	};
+}
+
+let pace = freshPace();
+
+/**
+ * Record one provider delta (text or thinking) and update the pace verdict.
+ * Deferral is deliberate about what disqualifies: pauses and jump-sized
+ * deltas only draw down a budget instead of resetting progress, so one
+ * hiccup doesn't condemn an otherwise self-paced message to full re-pacing —
+ * while bursty streams burn the budget almost immediately and never defer.
+ */
+function noteDelta(charCount: number, now: number): void {
+	const gap = now - pace.lastDeltaAt;
+	pace.lastDeltaAt = now;
+	pace.deltasSeen++;
+	if (pace.deferred) return;
+	const jump = charCount > STEADY_DELTA_MAX_CHARS;
+	if (pace.deltasSeen > 1) {
+		// the first delta's gap is time from message start, not between deltas
+		if (gap <= STEADY_GAP_MAX_MS) {
+			pace.steadyMs += gap;
+			pace.stretchMs += gap;
+		} else {
+			pace.pauseMs += gap;
+			pace.stretchDeltas = 0;
+			pace.stretchMs = 0;
+			pace.stretchChars = 0;
+		}
+	}
+	if (jump) {
+		pace.pauseMs += 300; // a visible jump costs like a pause
+		pace.stretchDeltas = 0;
+		pace.stretchMs = 0;
+		pace.stretchChars = 0;
+	} else {
+		pace.steadyChars += charCount;
+		pace.stretchDeltas++;
+		pace.stretchChars += charCount;
+	}
+	if (pace.deltasSeen >= MIN_DELTAS && pace.steadyMs >= DEFER_STEADY_MS && pace.pauseMs < PAUSE_BUDGET_MS) {
+		pace.deferred = true;
+		// Entries carrying backlog at flip time sweep it at the boost cap;
+		// everything else (and all post-flip growth) passes through exactly.
+		for (const list of revealLists.values()) {
+			for (const e of list) e.sweeping = e.revealed < e.source.length;
+		}
+	}
+}
+
+/**
+ * Reveal rate right now: the configured cps, or — while the CURRENT stretch
+ * is provably steady (no pause or jump since it started) — the model's own
+ * arrival rate (bounded), plus enough catch-up to drain whatever backlog
+ * piled up before the stretch looked real. Contiguity is the point: a
+ * stream with real pauses in it (bursty models) must never ride its
+ * burst-arrival rate, or bursts would dump on screen.
+ */
+function effectiveCps(backlogChars: number): number {
+	if (pace.stretchDeltas >= BOOST_STRETCH_DELTAS && pace.stretchMs >= BOOST_STRETCH_MS) {
+		const arrivalCps = pace.stretchChars / (pace.stretchMs / 1000);
+		let rate = Math.max(state.cps, arrivalCps);
+		if (backlogChars > 0) rate = Math.max(rate, arrivalCps + backlogChars / BOOST_DRAIN_SECONDS);
+		return Math.min(BOOST_MAX_CPS, rate);
+	}
+	return state.cps;
+}
+
+/**
  * Tracks reveal progress for one in-flight streamed block (an assistant
  * "text" section, or a run of "thinking" blocks). Keyed by matching against
  * previously seen source text rather than by message id, because
@@ -112,6 +274,9 @@ interface RevealState {
 	source: string;
 	/** Whole characters already shown. */
 	revealed: number;
+	/** Set at deferral time when this entry still had held-back text; the
+	 * residual then sweeps at the boost cap and the flag clears on catch-up. */
+	sweeping?: boolean;
 	/** Fractional characters banked between calls (0..1). */
 	carry: number;
 	/** performance.now() of the last time this entry advanced. */
@@ -127,6 +292,7 @@ const revealLists = new Map<string, RevealState[]>();
 function resetReveal(): void {
 	revealLists.clear();
 	skipCurrentMessage = false;
+	pace = freshPace();
 }
 
 function hasBacklog(): boolean {
@@ -245,6 +411,10 @@ function findOrCreate(messageType: string, markdown: string, isStreaming: boolea
 
 	// New block (e.g. a second thinking run later in the same message).
 	const entry: RevealState = { source: markdown, revealed: 0, carry: 0, lastTickAt: performance.now() };
+	// A block born after the deferral has no pre-flip backlog to drain: it
+	// starts caught up so it passes through exactly like the rest of the
+	// deferred message, instead of getting swept at the boost cap.
+	if (pace.deferred) entry.revealed = markdown.length;
 	list.push(entry);
 	// Bound growth in pathological cases (shouldn't normally exceed a couple entries).
 	if (list.length > 8) list.shift();
@@ -252,11 +422,11 @@ function findOrCreate(messageType: string, markdown: string, isStreaming: boolea
 }
 
 /** Advance one entry's reveal position by real elapsed time, one character's worth of carry at a time. */
-function advance(entry: RevealState, now: number): void {
+function advance(entry: RevealState, now: number, cps: number): void {
 	const elapsedMs = now - entry.lastTickAt;
 	entry.lastTickAt = now;
 	if (elapsedMs <= 0) return;
-	entry.carry += (elapsedMs / 1000) * state.cps;
+	entry.carry += (elapsedMs / 1000) * cps;
 	const wholeChars = Math.floor(entry.carry);
 	if (wholeChars <= 0) return;
 	entry.carry -= wholeChars;
@@ -271,7 +441,33 @@ function typewriterTransform(markdown: string, context: MarkdownTransformContext
 	const entry = findOrCreate(context.messageType, markdown, context.isStreaming);
 	if (!entry) return markdown; // static content
 
-	advance(entry, performance.now());
+	const now = performance.now();
+
+	// Self-paced model: text shows as it arrives. Only backlog that existed at
+	// flip time sweeps — at the boost cap, tick-animated, fast but smooth —
+	// instead of dumping on screen at once. The sweep boundary moves through
+	// the residual AND any growth behind it: rendering is a prefix slice, so
+	// newer text past a hidden middle region cannot show before the boundary
+	// reaches it. With drain (700cps) outpacing a self-paced arrival the
+	// boundary catches up quickly; freezing the target instead would dump the
+	// accumulated growth the moment the flag cleared.
+	if (pace.deferred) {
+		if (entry.sweeping && entry.revealed < markdown.length) {
+			advance(entry, now, BOOST_MAX_CPS);
+			if (entry.revealed >= markdown.length) entry.sweeping = false;
+		} else {
+			entry.sweeping = false;
+			entry.revealed = markdown.length;
+			entry.carry = 0;
+			entry.lastTickAt = now;
+			return markdown;
+		}
+		if (entry.revealed <= 0) return "";
+		if (entry.revealed >= markdown.length) return markdown;
+		return markdown.slice(0, entry.revealed);
+	}
+
+	advance(entry, now, effectiveCps(Math.max(0, markdown.length - entry.revealed)));
 
 	if (entry.revealed <= 0) return "";
 	if (entry.revealed >= markdown.length) return markdown;
@@ -289,11 +485,18 @@ function stopTicking(): void {
 
 function ensureTicking(ctx: ExtensionContext): void {
 	if (tickInterval || !state.enabled || !ctx.hasUI || skipCurrentMessage) return;
+	// Deferred pass-through growth never needs the timer — it reveals itself
+	// on the next render. Anything else gets one even if the (one-render
+	// stale) reveal state looks caught up: the delta that just arrived may
+	// have created backlog that only the tick can drain if the stream now
+	// pauses. The tick itself re-checks hasBacklog() and stops when done.
+	if (pace.deferred && !hasBacklog()) return;
 	tickInterval = setInterval(() => {
 		if (!hasBacklog()) {
 			stopTicking();
 			return;
 		}
+		if (performance.now() - pace.lastDeltaAt < PING_FRESH_MS) return;
 		ctx.ui.setHiddenThinkingLabel();
 	}, TICK_MS);
 }
@@ -339,10 +542,13 @@ export default function typewriterExtension(pi: ExtensionAPI): void {
 	// Every real delta both feeds typewriterTransform directly AND is a good
 	// moment to make sure the tick loop is running (idempotent if already on).
 	pi.on("message_update", async (event, ctx) => {
+		const eventType = event.assistantMessageEvent.type;
+		if (eventType === "text_delta" || eventType === "thinking_delta") {
+			noteDelta(event.assistantMessageEvent.delta.length, performance.now());
+		}
 		// The model has moved on to text or a tool call: thinking for this
 		// message is done for good, so stop letting it lag behind at the
 		// typewriter's pace and snap it to fully revealed immediately.
-		const eventType = event.assistantMessageEvent.type;
 		if (eventType === "text_start" || eventType === "toolcall_start") completeThinkingReveal();
 		ensureTicking(ctx);
 	});
@@ -370,7 +576,9 @@ export default function typewriterExtension(pi: ExtensionAPI): void {
 			}
 			if (arg === "") {
 				ctx.ui.notify(
-					state.enabled ? `Typewriter effect: ${state.cps} chars/sec` : "Typewriter effect: off",
+					state.enabled
+						? `Typewriter effect: ${state.cps} chars/sec${pace.deferred ? " (deferring to the model's own streaming pace)" : ""}`
+						: "Typewriter effect: off",
 					"info",
 				);
 				return;

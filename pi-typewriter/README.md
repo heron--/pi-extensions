@@ -36,6 +36,44 @@ it is doing more work than a purpose-built render timer would.
 `/typewriter off` disables the tick loop entirely if you ever notice it
 costing something.
 
+## Self-paced models: deferring to the model's own streaming
+
+Some models (GLM 5.3 in particular) pace their own output: deltas arrive
+steadily every few tens of milliseconds, so the raw stream already looks like
+a typewriter before this extension touches anything. Re-pacing that a second
+time at 110 chars/sec — with the tick loop forcing rebuilds on top of the
+model's own delta-driven renders — doubles the rendering work and adds pure
+lag.
+
+Each streaming message therefore accumulates **steady time**: the wall-clock
+time covered by inter-delta gaps small enough to read as continuous typing
+(under 300 ms). Pauses (longer gaps) and jump-sized deltas (over ~50 chars)
+draw from a fixed pause budget instead of erasing progress, so one hiccup
+doesn't condemn an otherwise self-paced message. Measured on real streams,
+self-paced models (GLM 5.3, Flash) spend 75–100% of stream time in sub-300 ms
+gaps and hiccup once or twice, while Opus spends 99% of its wall time in
+300 ms–2.5 s gaps — its pause budget is exhausted within ~1.4 s, long before
+it could ever qualify. When at least 10 deltas have arrived with at least
+600 ms of steady time and pause budget to spare, the rest of that message
+defers to the model: text shows as it arrives, and `/typewriter` reports it.
+Any backlog that survived the flip sweeps at the boost cap (fast but smooth)
+rather than appearing all at once. Bursty streams never trip the detector, so
+their typewriter behavior is unchanged.
+
+Two more guards keep the fallback cheap even when a message doesn't defer:
+the tick loop never forces a redraw within 150 ms of a delta (a dense stream
+re-renders itself per delta, so pinging on top is the double-render this
+extension exists to avoid — the timer only animates true silence), and while
+the current stretch is provably steady (no pause or jump in the last 400 ms
+across at least 10 deltas) the reveal rate temporarily matches the model's
+arrival rate instead of crawling at the configured pace.
+
+While a run is still building toward that threshold, the reveal rate
+temporarily matches the model's arrival rate (capped at 700 chars/sec, still
+smooth at 60 fps) plus catch-up for backlog piled up before the run looked
+real, so the moment of flipping to deferred has as little held-back text as
+possible.
+
 This is display-only: the real message content, session file, and what's
 sent back to the model are never touched.
 
