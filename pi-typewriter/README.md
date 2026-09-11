@@ -45,19 +45,26 @@ time at 110 chars/sec — with the tick loop forcing rebuilds on top of the
 model's own delta-driven renders — doubles the rendering work and adds pure
 lag.
 
-Each streaming message is therefore watched for a steady delta cadence: a run
-of deltas whose inter-arrival gaps all stay small (under 300 ms). Measured on
-real streams, GLM 5.3 sustains multi-second runs of ~23 ms gaps, while bursty
-models (Opus) never sustain one past ~75 ms before a long pause breaks the
-run. When a steady run proves itself — at least 20 deltas spanning at least
-1.2 seconds — the rest of that message defers to the model: text shows as it
-arrives, the tick loop stays off, and `/typewriter` reports it. Bursty
-streams never trip the detector, so their typewriter behavior is unchanged.
+Each streaming message therefore accumulates **steady time**: the wall-clock
+time covered by inter-delta gaps small enough to read as continuous typing
+(under 300 ms). Pauses (longer gaps) and jump-sized deltas (over ~50 chars)
+draw from a fixed pause budget instead of erasing progress, so one hiccup
+doesn't condemn an otherwise self-paced message. Measured on real streams,
+self-paced models (GLM 5.3, Flash) spend 75–100% of stream time in sub-300 ms
+gaps and hiccup once or twice, while Opus spends 99% of its wall time in
+300 ms–2.5 s gaps — its pause budget is exhausted within ~1.4 s, long before
+it could ever qualify. When at least 20 deltas have arrived with at least
+1.2 seconds of steady time and pause budget to spare, the rest of that
+message defers to the model: text shows as it arrives, and `/typewriter`
+reports it. Any backlog that survived the flip sweeps at the boost cap (fast
+but smooth) rather than appearing all at once. Bursty streams never trip the
+detector, so their typewriter behavior is unchanged.
 
 While a run is still building toward that threshold, the reveal rate
-temporarily matches the model's arrival rate (capped at 600 chars/sec, still
-smooth at 60 fps), so the moment of flipping to deferred never dumps a pile
-of held-back text at once.
+temporarily matches the model's arrival rate (capped at 700 chars/sec, still
+smooth at 60 fps) plus catch-up for backlog piled up before the run looked
+real, so the moment of flipping to deferred has as little held-back text as
+possible.
 
 This is display-only: the real message content, session file, and what's
 sent back to the model are never touched.

@@ -37,15 +37,20 @@
  * top of the model's own delta-driven renders — doubles the render work and
  * adds pure lag.
  *
- * So each streaming message is watched for a STEADY delta cadence: a run of
- * deltas whose inter-arrival gaps all stay small. Measured on real streams,
- * GLM 5.3 sustains multi-second runs of ~23ms gaps, while bursty models
- * (Opus) never get past tens of milliseconds before a long pause shatters
- * the run. When a run proves steady (>= MIN_RUN_DELTAS deltas spanning
- * >= DEFER_AFTER_MS), the message defers: text passes through as it
- * arrives, and the tick loop stays off. The decision is one-way for the
- * message; bursty streams never trip it, so their typewriter behavior is
- * unchanged.
+ * So each streaming message accumulates STEADY TIME: the wall-clock covered
+ * by inter-delta gaps small enough to read as continuous typing. Pauses
+ * (long gaps) and jump-sized deltas draw from a fixed pause budget instead
+ * of erasing progress — one hiccup doesn't condemn an otherwise self-paced
+ * message. Measured on real streams, self-paced models (GLM 5.3, Flash)
+ * spend 75-100% of stream time in sub-300ms gaps and hiccup once or twice,
+ * while Opus spends 99% of its wall time in 300ms-2.5s gaps: its pause
+ * budget is gone in ~1.4s, long before it could ever qualify. When >=
+ * MIN_DELTAS deltas have arrived with >= DEFER_STEADY_MS of steady time and
+ * pause budget to spare, the message defers: text passes through as it
+ * arrives. Any backlog that survived the flip sweeps at the boost cap —
+ * fast but smooth — instead of dumping on screen at once. The decision is
+ * one-way for the message; bursty streams never trip it, so their
+ * typewriter behavior is unchanged.
  *
  * While a run is building toward that threshold, the reveal rate temporarily
  * matches the model's arrival rate (capped at BOOST_MAX_CPS, still smooth at
@@ -102,19 +107,24 @@ const MAX_CPS = 400;
 const TICK_MS = 33; // ~30/sec, matches the TUI's own ~60fps render granularity well enough
 
 /**
- * Self-paced stream detection. A steady run is a sequence of deltas whose
- * inter-arrival gaps all stay under STEADY_GAP_MAX_MS. Thresholds are
- * calibrated from real captures: GLM 5.3 sustains steady runs of 2.4-2.7s
- * across 150-200 deltas, while Opus's longest run stays at ~73ms across 13
- * deltas (its burst pauses are 300ms-2.5s and shatter the run).
+ * Self-paced stream detection. Steady time (sum of inter-delta gaps up to
+ * STEADY_GAP_MAX_MS) accrues per message; pauses (longer gaps) and jump-sized
+ * deltas draw from a fixed pause budget. Thresholds are calibrated from real
+ * captures: self-paced streams (GLM 5.3, Flash) spend 75-100% of stream time
+ * in sub-300ms gaps and hiccup at most once or twice (largest pause 1184ms,
+ * largest delta 32 chars), while Opus spends 99% of its wall time in
+ * 300ms-2.5s gaps — its pause budget is exhausted in ~1.4s while its steady
+ * time would need 10s+ to reach the defer bar, so it never defers.
  */
 const STEADY_GAP_MAX_MS = 300;
-const DEFER_AFTER_MS = 1200;
-const MIN_RUN_DELTAS = 20;
-/** Once a run looks real, reveal at the model's own pace (bounded) so the
- * flip to deferred happens with no visible dump of held-back text. A backlog
- * accumulated before the run was trusted drains over ~this many seconds. */
-const BOOST_AFTER_MS = 400;
+const STEADY_DELTA_MAX_CHARS = 48;
+const DEFER_STEADY_MS = 1200;
+const PAUSE_BUDGET_MS = 1200;
+const MIN_DELTAS = 20;
+/** Once the stream looks self-paced, reveal at the model's own pace (bounded)
+ * so the flip to deferred happens with as little held-back text as possible.
+ * A backlog accumulated before that point drains over ~this many seconds. */
+const BOOST_STEADY_MS = 400;
 const BOOST_MAX_CPS = 700; // ~12 chars/frame at 60fps: fast but smooth
 const BOOST_DRAIN_SECONDS = 0.5;
 
@@ -148,23 +158,27 @@ let skipCurrentMessage = false;
 interface StreamPace {
 	deltasSeen: number;
 	lastDeltaAt: number;
-	/** Wall-time span of the current steady run (sum of its gaps). */
-	runSpanMs: number;
-	runDeltas: number;
-	runChars: number;
+	/** Time covered by gaps small enough to count as steady cadence. */
+	steadyMs: number;
+	/** Pause budget spent on long gaps and jump-sized deltas. */
+	pauseMs: number;
+	/** Characters that arrived during steady gaps (for the arrival-rate estimate). */
+	steadyChars: number;
 	deferred: boolean;
 }
 
 function freshPace(): StreamPace {
-	return { deltasSeen: 0, lastDeltaAt: performance.now(), runSpanMs: 0, runDeltas: 0, runChars: 0, deferred: false };
+	return { deltasSeen: 0, lastDeltaAt: performance.now(), steadyMs: 0, pauseMs: 0, steadyChars: 0, deferred: false };
 }
 
 let pace = freshPace();
 
 /**
- * Record one provider delta (text or thinking). While the current steady run
- * is still below the defer threshold this also decides whether the run
- * continues, resets, or crosses into deferred mode.
+ * Record one provider delta (text or thinking) and update the pace verdict.
+ * Deferral is deliberate about what disqualifies: pauses and jump-sized
+ * deltas only draw down a budget instead of resetting progress, so one
+ * hiccup doesn't condemn an otherwise self-paced message to full re-pacing —
+ * while bursty streams burn the budget almost immediately and never defer.
  */
 function noteDelta(charCount: number, now: number): void {
 	const gap = now - pace.lastDeltaAt;
@@ -172,30 +186,26 @@ function noteDelta(charCount: number, now: number): void {
 	pace.deltasSeen++;
 	if (pace.deferred) return;
 	if (pace.deltasSeen === 1) return; // gap from message start, not between deltas
-	if (gap > STEADY_GAP_MAX_MS) {
-		pace.runSpanMs = 0;
-		pace.runDeltas = 0;
-		pace.runChars = 0;
-		return;
-	}
-	pace.runSpanMs += gap;
-	pace.runDeltas++;
-	pace.runChars += charCount;
-	if (pace.runDeltas >= MIN_RUN_DELTAS && pace.runSpanMs >= DEFER_AFTER_MS) {
+	if (gap <= STEADY_GAP_MAX_MS) pace.steadyMs += gap;
+	else pace.pauseMs += gap;
+	if (charCount > STEADY_DELTA_MAX_CHARS) pace.pauseMs += 300; // a visible jump costs like a pause
+	else pace.steadyChars += charCount;
+	if (pace.deltasSeen >= MIN_DELTAS && pace.steadyMs >= DEFER_STEADY_MS && pace.pauseMs <= PAUSE_BUDGET_MS) {
 		pace.deferred = true;
-		stopTicking();
 	}
 }
 
 /**
- * Reveal rate right now: the configured cps, or — while a steady run is
- * building but not yet deferred — the model's own arrival rate (bounded),
- * plus enough catch-up to drain whatever backlog piled up before the run
- * looked real, so the later flip to deferred is seamless.
+ * Reveal rate right now: the configured cps, or — while the stream looks
+ * self-paced but hasn't deferred yet — the model's own arrival rate
+ * (bounded), plus enough catch-up to drain whatever backlog piled up before
+ * that, so the flip to deferred has as little residual as possible. Requires
+ * a spotless pause record: one real pause and the stream falls back to the
+ * configured cps until it has proven itself again via the defer verdict.
  */
 function effectiveCps(backlogChars: number): number {
-	if (pace.runDeltas >= MIN_RUN_DELTAS && pace.runSpanMs >= BOOST_AFTER_MS) {
-		const arrivalCps = pace.runChars / (pace.runSpanMs / 1000);
+	if (pace.pauseMs === 0 && pace.deltasSeen >= MIN_DELTAS && pace.steadyMs >= BOOST_STEADY_MS) {
+		const arrivalCps = pace.steadyChars / (pace.steadyMs / 1000);
 		let rate = Math.max(state.cps, arrivalCps);
 		if (backlogChars > 0) rate = Math.max(rate, arrivalCps + backlogChars / BOOST_DRAIN_SECONDS);
 		return Math.min(BOOST_MAX_CPS, rate);
@@ -381,13 +391,20 @@ function typewriterTransform(markdown: string, context: MarkdownTransformContext
 
 	const now = performance.now();
 
-	// Self-paced model: show its text as it arrives and keep the reveal
-	// state caught up so hasBacklog() stays false (tick loop, Escape hatch).
+	// Self-paced model: text shows as it arrives. Any backlog that survived
+	// the flip (arrival briefly outpacing the boost cap) sweeps at the boost
+	// cap — tick-animated, fast but smooth — instead of dumping on screen.
 	if (pace.deferred) {
-		entry.revealed = markdown.length;
-		entry.carry = 0;
-		entry.lastTickAt = now;
-		return markdown;
+		if (entry.revealed >= markdown.length) {
+			entry.revealed = markdown.length;
+			entry.carry = 0;
+			entry.lastTickAt = now;
+			return markdown;
+		}
+		advance(entry, now, BOOST_MAX_CPS);
+		if (entry.revealed <= 0) return "";
+		if (entry.revealed >= markdown.length) return markdown;
+		return markdown.slice(0, entry.revealed);
 	}
 
 	advance(entry, now, effectiveCps(Math.max(0, markdown.length - entry.revealed)));
@@ -407,7 +424,7 @@ function stopTicking(): void {
 }
 
 function ensureTicking(ctx: ExtensionContext): void {
-	if (tickInterval || !state.enabled || !ctx.hasUI || skipCurrentMessage || pace.deferred) return;
+	if (tickInterval || !state.enabled || !ctx.hasUI || skipCurrentMessage || !hasBacklog()) return;
 	tickInterval = setInterval(() => {
 		if (!hasBacklog()) {
 			stopTicking();
