@@ -53,12 +53,20 @@ doesn't condemn an otherwise self-paced message. Measured on real streams,
 self-paced models (GLM 5.3, Flash) spend 75–100% of stream time in sub-300 ms
 gaps and hiccup once or twice, while Opus spends 99% of its wall time in
 300 ms–2.5 s gaps — its pause budget is exhausted within ~1.4 s, long before
-it could ever qualify. When at least 20 deltas have arrived with at least
-1.2 seconds of steady time and pause budget to spare, the rest of that
-message defers to the model: text shows as it arrives, and `/typewriter`
-reports it. Any backlog that survived the flip sweeps at the boost cap (fast
-but smooth) rather than appearing all at once. Bursty streams never trip the
-detector, so their typewriter behavior is unchanged.
+it could ever qualify. When at least 10 deltas have arrived with at least
+600 ms of steady time and pause budget to spare, the rest of that message
+defers to the model: text shows as it arrives, and `/typewriter` reports it.
+Any backlog that survived the flip sweeps at the boost cap (fast but smooth)
+rather than appearing all at once. Bursty streams never trip the detector, so
+their typewriter behavior is unchanged.
+
+Two more guards keep the fallback cheap even when a message doesn't defer:
+the tick loop never forces a redraw within 150 ms of a delta (a dense stream
+re-renders itself per delta, so pinging on top is the double-render this
+extension exists to avoid — the timer only animates true silence), and while
+the current stretch is provably steady (no pause or jump in the last 400 ms
+across at least 10 deltas) the reveal rate temporarily matches the model's
+arrival rate instead of crawling at the configured pace.
 
 While a run is still building toward that threshold, the reveal rate
 temporarily matches the model's arrival rate (capped at 700 chars/sec, still
