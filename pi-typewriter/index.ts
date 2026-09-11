@@ -407,8 +407,12 @@ function typewriterTransform(markdown: string, context: MarkdownTransformContext
 
 	// Self-paced model: text shows as it arrives. Only backlog that existed at
 	// flip time sweeps — at the boost cap, tick-animated, fast but smooth —
-	// instead of dumping on screen at once; everything else passes through
-	// exactly, including all post-flip growth.
+	// instead of dumping on screen at once. The sweep boundary moves through
+	// the residual AND any growth behind it: rendering is a prefix slice, so
+	// newer text past a hidden middle region cannot show before the boundary
+	// reaches it. With drain (700cps) outpacing a self-paced arrival the
+	// boundary catches up quickly; freezing the target instead would dump the
+	// accumulated growth the moment the flag cleared.
 	if (pace.deferred) {
 		if (entry.sweeping && entry.revealed < markdown.length) {
 			advance(entry, now, BOOST_MAX_CPS);
