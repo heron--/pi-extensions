@@ -185,18 +185,20 @@ function noteDelta(charCount: number, now: number): void {
 	pace.lastDeltaAt = now;
 	pace.deltasSeen++;
 	if (pace.deferred) return;
-	if (charCount > STEADY_DELTA_MAX_CHARS) {
-		pace.pauseMs += 300; // a visible jump costs like a pause
-	} else {
-		pace.steadyChars += charCount;
-		if (pace.deltasSeen > 1) {
-			// the first delta's gap is time from message start, not between deltas
-			if (gap <= STEADY_GAP_MAX_MS) pace.steadyMs += gap;
-			else pace.pauseMs += gap;
-		}
+	if (pace.deltasSeen > 1) {
+		// the first delta's gap is time from message start, not between deltas
+		if (gap <= STEADY_GAP_MAX_MS) pace.steadyMs += gap;
+		else pace.pauseMs += gap;
 	}
-	if (pace.deltasSeen >= MIN_DELTAS && pace.steadyMs >= DEFER_STEADY_MS && pace.pauseMs <= PAUSE_BUDGET_MS) {
+	if (charCount > STEADY_DELTA_MAX_CHARS) pace.pauseMs += 300; // a visible jump costs like a pause
+	else pace.steadyChars += charCount;
+	if (pace.deltasSeen >= MIN_DELTAS && pace.steadyMs >= DEFER_STEADY_MS && pace.pauseMs < PAUSE_BUDGET_MS) {
 		pace.deferred = true;
+		// Entries carrying backlog at flip time sweep it at the boost cap;
+		// everything else (and all post-flip growth) passes through exactly.
+		for (const list of revealLists.values()) {
+			for (const e of list) e.sweeping = e.revealed < e.source.length;
+		}
 	}
 }
 
@@ -234,6 +236,9 @@ interface RevealState {
 	source: string;
 	/** Whole characters already shown. */
 	revealed: number;
+	/** Set at deferral time when this entry still had held-back text; the
+	 * residual then sweeps at the boost cap and the flag clears on catch-up. */
+	sweeping?: boolean;
 	/** Fractional characters banked between calls (0..1). */
 	carry: number;
 	/** performance.now() of the last time this entry advanced. */
@@ -400,17 +405,21 @@ function typewriterTransform(markdown: string, context: MarkdownTransformContext
 
 	const now = performance.now();
 
-	// Self-paced model: text shows as it arrives. Any backlog that survived
-	// the flip (arrival briefly outpacing the boost cap) sweeps at the boost
-	// cap — tick-animated, fast but smooth — instead of dumping on screen.
+	// Self-paced model: text shows as it arrives. Only backlog that existed at
+	// flip time sweeps — at the boost cap, tick-animated, fast but smooth —
+	// instead of dumping on screen at once; everything else passes through
+	// exactly, including all post-flip growth.
 	if (pace.deferred) {
-		if (entry.revealed >= markdown.length) {
+		if (entry.sweeping && entry.revealed < markdown.length) {
+			advance(entry, now, BOOST_MAX_CPS);
+			if (entry.revealed >= markdown.length) entry.sweeping = false;
+		} else {
+			entry.sweeping = false;
 			entry.revealed = markdown.length;
 			entry.carry = 0;
 			entry.lastTickAt = now;
 			return markdown;
 		}
-		advance(entry, now, BOOST_MAX_CPS);
 		if (entry.revealed <= 0) return "";
 		if (entry.revealed >= markdown.length) return markdown;
 		return markdown.slice(0, entry.revealed);
