@@ -446,7 +446,13 @@ function stopTicking(): void {
 }
 
 function ensureTicking(ctx: ExtensionContext): void {
-	if (tickInterval || !state.enabled || !ctx.hasUI || skipCurrentMessage || !hasBacklog()) return;
+	if (tickInterval || !state.enabled || !ctx.hasUI || skipCurrentMessage) return;
+	// Deferred pass-through growth never needs the timer — it reveals itself
+	// on the next render. Anything else gets one even if the (one-render
+	// stale) reveal state looks caught up: the delta that just arrived may
+	// have created backlog that only the tick can drain if the stream now
+	// pauses. The tick itself re-checks hasBacklog() and stops when done.
+	if (pace.deferred && !hasBacklog()) return;
 	tickInterval = setInterval(() => {
 		if (!hasBacklog()) {
 			stopTicking();
