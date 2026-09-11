@@ -36,6 +36,29 @@ it is doing more work than a purpose-built render timer would.
 `/typewriter off` disables the tick loop entirely if you ever notice it
 costing something.
 
+## Self-paced models: deferring to the model's own streaming
+
+Some models (GLM 5.3 in particular) pace their own output: deltas arrive
+steadily every few tens of milliseconds, so the raw stream already looks like
+a typewriter before this extension touches anything. Re-pacing that a second
+time at 110 chars/sec — with the tick loop forcing rebuilds on top of the
+model's own delta-driven renders — doubles the rendering work and adds pure
+lag.
+
+Each streaming message is therefore watched for a steady delta cadence: a run
+of deltas whose inter-arrival gaps all stay small (under 300 ms). Measured on
+real streams, GLM 5.3 sustains multi-second runs of ~23 ms gaps, while bursty
+models (Opus) never sustain one past ~75 ms before a long pause breaks the
+run. When a steady run proves itself — at least 20 deltas spanning at least
+1.2 seconds — the rest of that message defers to the model: text shows as it
+arrives, the tick loop stays off, and `/typewriter` reports it. Bursty
+streams never trip the detector, so their typewriter behavior is unchanged.
+
+While a run is still building toward that threshold, the reveal rate
+temporarily matches the model's arrival rate (capped at 600 chars/sec, still
+smooth at 60 fps), so the moment of flipping to deferred never dumps a pile
+of held-back text at once.
+
 This is display-only: the real message content, session file, and what's
 sent back to the model are never touched.
 

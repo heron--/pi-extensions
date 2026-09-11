@@ -28,6 +28,30 @@
  * cheaper public API for this. It only runs while there's backlog left to
  * reveal, and stops the instant the display catches up.
  *
+ * --- Self-paced models: defer to the model's own streaming ---
+ *
+ * Some models (GLM 5.3 in particular) already pace their own output: deltas
+ * arrive steadily every few tens of milliseconds, so the raw stream looks
+ * like a typewriter before this extension does anything. Holding that back
+ * a second time — at our slower cps, with the tick loop forcing rebuilds on
+ * top of the model's own delta-driven renders — doubles the render work and
+ * adds pure lag.
+ *
+ * So each streaming message is watched for a STEADY delta cadence: a run of
+ * deltas whose inter-arrival gaps all stay small. Measured on real streams,
+ * GLM 5.3 sustains multi-second runs of ~23ms gaps, while bursty models
+ * (Opus) never get past tens of milliseconds before a long pause shatters
+ * the run. When a run proves steady (>= MIN_RUN_DELTAS deltas spanning
+ * >= DEFER_AFTER_MS), the message defers: text passes through as it
+ * arrives, and the tick loop stays off. The decision is one-way for the
+ * message; bursty streams never trip it, so their typewriter behavior is
+ * unchanged.
+ *
+ * While a run is building toward that threshold, the reveal rate temporarily
+ * matches the model's arrival rate (capped at BOOST_MAX_CPS, still smooth at
+ * 60fps) so that flipping to deferred never dumps a pile of held-back text
+ * on screen at once.
+ *
  * --- Escape hatch: skip the effect for the current message ---
  *
  * Press Escape while a message is typing out to show the rest of THAT
@@ -54,6 +78,8 @@
  *   - `/typewriter <cps>` changes it for the running session.
  *   - `/typewriter off` / `/typewriter on` toggles it entirely.
  *   - Escape mid-message: one-off skip for just that message (see above).
+ *   - Self-paced models (GLM 5.3 in particular): automatically defers to
+ *     the model's own streaming pace for that message (see above).
  *
  * Run with: pi -e ~/Projects/heron--/pi-extensions/pi-typewriter/index.ts
  * (or drop the file into ~/.pi/agent/extensions/ for global auto-load)
@@ -75,6 +101,23 @@ const MAX_CPS = 400;
 /** How often the tick loop forces a redraw while there's backlog to drain. */
 const TICK_MS = 33; // ~30/sec, matches the TUI's own ~60fps render granularity well enough
 
+/**
+ * Self-paced stream detection. A steady run is a sequence of deltas whose
+ * inter-arrival gaps all stay under STEADY_GAP_MAX_MS. Thresholds are
+ * calibrated from real captures: GLM 5.3 sustains steady runs of 2.4-2.7s
+ * across 150-200 deltas, while Opus's longest run stays at ~73ms across 13
+ * deltas (its burst pauses are 300ms-2.5s and shatter the run).
+ */
+const STEADY_GAP_MAX_MS = 300;
+const DEFER_AFTER_MS = 1200;
+const MIN_RUN_DELTAS = 20;
+/** Once a run looks real, reveal at the model's own pace (bounded) so the
+ * flip to deferred happens with no visible dump of held-back text. A backlog
+ * accumulated before the run was trusted drains over ~this many seconds. */
+const BOOST_AFTER_MS = 400;
+const BOOST_MAX_CPS = 700; // ~12 chars/frame at 60fps: fast but smooth
+const BOOST_DRAIN_SECONDS = 0.5;
+
 function parseCps(raw: string | undefined): number | undefined {
 	if (!raw) return undefined;
 	const n = Number(raw);
@@ -95,6 +138,70 @@ const state = {
  * next assistant message_start, so it only ever affects "that message".
  */
 let skipCurrentMessage = false;
+
+/**
+ * Per-assistant-message streaming-pace stats, used to detect models that
+ * pace their own output (see "Self-paced models" in the header). Fed from
+ * message_update deltas — the provider's actual arrival pattern — not from
+ * transformer calls, which also fire for tick-forced redraws.
+ */
+interface StreamPace {
+	deltasSeen: number;
+	lastDeltaAt: number;
+	/** Wall-time span of the current steady run (sum of its gaps). */
+	runSpanMs: number;
+	runDeltas: number;
+	runChars: number;
+	deferred: boolean;
+}
+
+function freshPace(): StreamPace {
+	return { deltasSeen: 0, lastDeltaAt: performance.now(), runSpanMs: 0, runDeltas: 0, runChars: 0, deferred: false };
+}
+
+let pace = freshPace();
+
+/**
+ * Record one provider delta (text or thinking). While the current steady run
+ * is still below the defer threshold this also decides whether the run
+ * continues, resets, or crosses into deferred mode.
+ */
+function noteDelta(charCount: number, now: number): void {
+	const gap = now - pace.lastDeltaAt;
+	pace.lastDeltaAt = now;
+	pace.deltasSeen++;
+	if (pace.deferred) return;
+	if (pace.deltasSeen === 1) return; // gap from message start, not between deltas
+	if (gap > STEADY_GAP_MAX_MS) {
+		pace.runSpanMs = 0;
+		pace.runDeltas = 0;
+		pace.runChars = 0;
+		return;
+	}
+	pace.runSpanMs += gap;
+	pace.runDeltas++;
+	pace.runChars += charCount;
+	if (pace.runDeltas >= MIN_RUN_DELTAS && pace.runSpanMs >= DEFER_AFTER_MS) {
+		pace.deferred = true;
+		stopTicking();
+	}
+}
+
+/**
+ * Reveal rate right now: the configured cps, or — while a steady run is
+ * building but not yet deferred — the model's own arrival rate (bounded),
+ * plus enough catch-up to drain whatever backlog piled up before the run
+ * looked real, so the later flip to deferred is seamless.
+ */
+function effectiveCps(backlogChars: number): number {
+	if (pace.runDeltas >= MIN_RUN_DELTAS && pace.runSpanMs >= BOOST_AFTER_MS) {
+		const arrivalCps = pace.runChars / (pace.runSpanMs / 1000);
+		let rate = Math.max(state.cps, arrivalCps);
+		if (backlogChars > 0) rate = Math.max(rate, arrivalCps + backlogChars / BOOST_DRAIN_SECONDS);
+		return Math.min(BOOST_MAX_CPS, rate);
+	}
+	return state.cps;
+}
 
 /**
  * Tracks reveal progress for one in-flight streamed block (an assistant
@@ -127,6 +234,7 @@ const revealLists = new Map<string, RevealState[]>();
 function resetReveal(): void {
 	revealLists.clear();
 	skipCurrentMessage = false;
+	pace = freshPace();
 }
 
 function hasBacklog(): boolean {
@@ -252,11 +360,11 @@ function findOrCreate(messageType: string, markdown: string, isStreaming: boolea
 }
 
 /** Advance one entry's reveal position by real elapsed time, one character's worth of carry at a time. */
-function advance(entry: RevealState, now: number): void {
+function advance(entry: RevealState, now: number, cps: number): void {
 	const elapsedMs = now - entry.lastTickAt;
 	entry.lastTickAt = now;
 	if (elapsedMs <= 0) return;
-	entry.carry += (elapsedMs / 1000) * state.cps;
+	entry.carry += (elapsedMs / 1000) * cps;
 	const wholeChars = Math.floor(entry.carry);
 	if (wholeChars <= 0) return;
 	entry.carry -= wholeChars;
@@ -271,7 +379,18 @@ function typewriterTransform(markdown: string, context: MarkdownTransformContext
 	const entry = findOrCreate(context.messageType, markdown, context.isStreaming);
 	if (!entry) return markdown; // static content
 
-	advance(entry, performance.now());
+	const now = performance.now();
+
+	// Self-paced model: show its text as it arrives and keep the reveal
+	// state caught up so hasBacklog() stays false (tick loop, Escape hatch).
+	if (pace.deferred) {
+		entry.revealed = markdown.length;
+		entry.carry = 0;
+		entry.lastTickAt = now;
+		return markdown;
+	}
+
+	advance(entry, now, effectiveCps(Math.max(0, markdown.length - entry.revealed)));
 
 	if (entry.revealed <= 0) return "";
 	if (entry.revealed >= markdown.length) return markdown;
@@ -288,7 +407,7 @@ function stopTicking(): void {
 }
 
 function ensureTicking(ctx: ExtensionContext): void {
-	if (tickInterval || !state.enabled || !ctx.hasUI || skipCurrentMessage) return;
+	if (tickInterval || !state.enabled || !ctx.hasUI || skipCurrentMessage || pace.deferred) return;
 	tickInterval = setInterval(() => {
 		if (!hasBacklog()) {
 			stopTicking();
@@ -339,10 +458,13 @@ export default function typewriterExtension(pi: ExtensionAPI): void {
 	// Every real delta both feeds typewriterTransform directly AND is a good
 	// moment to make sure the tick loop is running (idempotent if already on).
 	pi.on("message_update", async (event, ctx) => {
+		const eventType = event.assistantMessageEvent.type;
+		if (eventType === "text_delta" || eventType === "thinking_delta") {
+			noteDelta(event.assistantMessageEvent.delta.length, performance.now());
+		}
 		// The model has moved on to text or a tool call: thinking for this
 		// message is done for good, so stop letting it lag behind at the
 		// typewriter's pace and snap it to fully revealed immediately.
-		const eventType = event.assistantMessageEvent.type;
 		if (eventType === "text_start" || eventType === "toolcall_start") completeThinkingReveal();
 		ensureTicking(ctx);
 	});
@@ -370,7 +492,9 @@ export default function typewriterExtension(pi: ExtensionAPI): void {
 			}
 			if (arg === "") {
 				ctx.ui.notify(
-					state.enabled ? `Typewriter effect: ${state.cps} chars/sec` : "Typewriter effect: off",
+					state.enabled
+						? `Typewriter effect: ${state.cps} chars/sec${pace.deferred ? " (deferring to the model's own streaming pace)" : ""}`
+						: "Typewriter effect: off",
 					"info",
 				);
 				return;
