@@ -111,22 +111,30 @@ const TICK_MS = 33; // ~30/sec, matches the TUI's own ~60fps render granularity 
  * STEADY_GAP_MAX_MS) accrues per message; pauses (longer gaps) and jump-sized
  * deltas draw from a fixed pause budget. Thresholds are calibrated from real
  * captures: self-paced streams (GLM 5.3, Flash) spend 75-100% of stream time
- * in sub-300ms gaps and hiccup at most once or twice (largest pause 1184ms,
- * largest delta 32 chars), while Opus spends 99% of its wall time in
- * 300ms-2.5s gaps — its pause budget is exhausted in ~1.4s while its steady
- * time would need 10s+ to reach the defer bar, so it never defers.
+ * in sub-300ms gaps, while Opus spends 99% of its wall time in
+ * 300ms-2.5s gaps — its pause budget is exhausted in ~1.4s, long before it
+ * could ever qualify, so it never defers. Real tool-loop messages are short
+ * (1-7s of streaming, thinking pauses of seconds inside), so the bar is
+ * deliberately low: 10 deltas and 600ms of steady time.
  */
 const STEADY_GAP_MAX_MS = 300;
 const STEADY_DELTA_MAX_CHARS = 48;
-const DEFER_STEADY_MS = 1200;
+const DEFER_STEADY_MS = 600;
 const PAUSE_BUDGET_MS = 1200;
-const MIN_DELTAS = 20;
-/** Once the stream looks self-paced, reveal at the model's own pace (bounded)
- * so the flip to deferred happens with as little held-back text as possible.
- * A backlog accumulated before that point drains over ~this many seconds. */
-const BOOST_STEADY_MS = 400;
+const MIN_DELTAS = 10;
+/** Once the CURRENT stretch is provably steady (no pause or jump since it
+ * started), reveal at the model's own pace (bounded) so pre-defer backlog
+ * stays near zero even on messages whose pauses disqualify deferral. A
+ * backlog accumulated before the stretch looked real drains over ~this many
+ * seconds. */
+const BOOST_STRETCH_MS = 400;
+const BOOST_STRETCH_DELTAS = 10;
 const BOOST_MAX_CPS = 700; // ~12 chars/frame at 60fps: fast but smooth
 const BOOST_DRAIN_SECONDS = 0.5;
+/** The tick never forces a redraw within this window after a delta: pi just
+ * re-rendered for that delta, so pinging on top is the double-render this
+ * extension exists to avoid. The timer then only animates true silence. */
+const PING_FRESH_MS = 150;
 
 function parseCps(raw: string | undefined): number | undefined {
 	if (!raw) return undefined;
@@ -164,11 +172,25 @@ interface StreamPace {
 	pauseMs: number;
 	/** Characters that arrived during steady gaps (for the arrival-rate estimate). */
 	steadyChars: number;
+	/** The current unbroken steady stretch (resets on any pause or jump). */
+	stretchDeltas: number;
+	stretchMs: number;
+	stretchChars: number;
 	deferred: boolean;
 }
 
 function freshPace(): StreamPace {
-	return { deltasSeen: 0, lastDeltaAt: performance.now(), steadyMs: 0, pauseMs: 0, steadyChars: 0, deferred: false };
+	return {
+		deltasSeen: 0,
+		lastDeltaAt: performance.now(),
+		steadyMs: 0,
+		pauseMs: 0,
+		steadyChars: 0,
+		stretchDeltas: 0,
+		stretchMs: 0,
+		stretchChars: 0,
+		deferred: false,
+	};
 }
 
 let pace = freshPace();
@@ -185,13 +207,29 @@ function noteDelta(charCount: number, now: number): void {
 	pace.lastDeltaAt = now;
 	pace.deltasSeen++;
 	if (pace.deferred) return;
+	const jump = charCount > STEADY_DELTA_MAX_CHARS;
 	if (pace.deltasSeen > 1) {
 		// the first delta's gap is time from message start, not between deltas
-		if (gap <= STEADY_GAP_MAX_MS) pace.steadyMs += gap;
-		else pace.pauseMs += gap;
+		if (gap <= STEADY_GAP_MAX_MS) {
+			pace.steadyMs += gap;
+			pace.stretchMs += gap;
+		} else {
+			pace.pauseMs += gap;
+			pace.stretchDeltas = 0;
+			pace.stretchMs = 0;
+			pace.stretchChars = 0;
+		}
 	}
-	if (charCount > STEADY_DELTA_MAX_CHARS) pace.pauseMs += 300; // a visible jump costs like a pause
-	else pace.steadyChars += charCount;
+	if (jump) {
+		pace.pauseMs += 300; // a visible jump costs like a pause
+		pace.stretchDeltas = 0;
+		pace.stretchMs = 0;
+		pace.stretchChars = 0;
+	} else {
+		pace.steadyChars += charCount;
+		pace.stretchDeltas++;
+		pace.stretchChars += charCount;
+	}
 	if (pace.deltasSeen >= MIN_DELTAS && pace.steadyMs >= DEFER_STEADY_MS && pace.pauseMs < PAUSE_BUDGET_MS) {
 		pace.deferred = true;
 		// Entries carrying backlog at flip time sweep it at the boost cap;
@@ -203,16 +241,16 @@ function noteDelta(charCount: number, now: number): void {
 }
 
 /**
- * Reveal rate right now: the configured cps, or — while the stream looks
- * self-paced but hasn't deferred yet — the model's own arrival rate
- * (bounded), plus enough catch-up to drain whatever backlog piled up before
- * that, so the flip to deferred has as little residual as possible. Requires
- * a spotless pause record: one real pause and the stream falls back to the
- * configured cps until it has proven itself again via the defer verdict.
+ * Reveal rate right now: the configured cps, or — while the CURRENT stretch
+ * is provably steady (no pause or jump since it started) — the model's own
+ * arrival rate (bounded), plus enough catch-up to drain whatever backlog
+ * piled up before the stretch looked real. Contiguity is the point: a
+ * stream with real pauses in it (bursty models) must never ride its
+ * burst-arrival rate, or bursts would dump on screen.
  */
 function effectiveCps(backlogChars: number): number {
-	if (pace.pauseMs === 0 && pace.deltasSeen >= MIN_DELTAS && pace.steadyMs >= BOOST_STEADY_MS) {
-		const arrivalCps = pace.steadyChars / (pace.steadyMs / 1000);
+	if (pace.stretchDeltas >= BOOST_STRETCH_DELTAS && pace.stretchMs >= BOOST_STRETCH_MS) {
+		const arrivalCps = pace.stretchChars / (pace.stretchMs / 1000);
 		let rate = Math.max(state.cps, arrivalCps);
 		if (backlogChars > 0) rate = Math.max(rate, arrivalCps + backlogChars / BOOST_DRAIN_SECONDS);
 		return Math.min(BOOST_MAX_CPS, rate);
@@ -458,6 +496,7 @@ function ensureTicking(ctx: ExtensionContext): void {
 			stopTicking();
 			return;
 		}
+		if (performance.now() - pace.lastDeltaAt < PING_FRESH_MS) return;
 		ctx.ui.setHiddenThinkingLabel();
 	}, TICK_MS);
 }
