@@ -120,6 +120,57 @@ void (async () => {
 			return "";
 		},
 	};
+	const toolBox = await jiti.import(path.resolve("pi-tool-output/tool-box.ts"));
+	let innerRenders = 0;
+	let innerInvalidations = 0;
+	let innerRows = Array.from({ length: 4_000 }, (_value, index) => `cached line ${index}`);
+	const cachedResult = toolBox.toolResultBox(
+		{
+			render() {
+				innerRenders++;
+				return innerRows;
+			},
+			invalidate() {
+				innerInvalidations++;
+			},
+		},
+		theme,
+		{ state: {} },
+	);
+	const firstCachedRows = cachedResult.render(100);
+	assert.equal(cachedResult.render(100), firstCachedRows);
+	assert.equal(innerRenders, 2);
+	innerRows = ["updated line"];
+	const updatedRows = cachedResult.render(100);
+	assert.notEqual(updatedRows, firstCachedRows);
+	assert.match(updatedRows[0], /updated line/);
+	assert.equal(innerRenders, 3);
+	const resizedRows = cachedResult.render(80);
+	assert.notEqual(resizedRows, updatedRows);
+	assert.equal(innerRenders, 4);
+	cachedResult.invalidate();
+	assert.equal(innerInvalidations, 1);
+	assert.notEqual(cachedResult.render(80), resizedRows);
+	assert.equal(innerRenders, 5);
+
+	const joinedBoxContext = { state: {} };
+	let callRenders = 0;
+	const cachedCall = toolBox.toolCallBox(
+		"Cache Test",
+		{
+			render() {
+				callRenders++;
+				return ["arguments"];
+			},
+			invalidate() {},
+		},
+		theme,
+		joinedBoxContext,
+	);
+	assert.match(cachedCall.render(100).at(-1), /╰─+╯/);
+	toolBox.toolResultBox({ render: () => ["result"], invalidate() {} }, theme, joinedBoxContext);
+	assert.doesNotMatch(cachedCall.render(100).at(-1), /╰─+╯/);
+	assert.equal(callRenders, 2);
 	for (const handler of handlers.get("session_start") ?? []) {
 		await handler(
 			{ type: "session_start" },
