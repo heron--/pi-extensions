@@ -1,0 +1,23 @@
+{
+  "name": "pi-tool-output",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pi extension: compact, configurable rendering for built-in and decorated extension tool output.",
+  "type": "module",
+  "main": "index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./decorate": "./decorate.ts"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "keywords": [
+    "pi",
+    "pi-package",
+    "tools",
+    "rendering"
+  ]
+}

@@ -25,12 +25,14 @@ pi-extensions/
 │   ├── pricing.ts            # shared helper, imported as "../lib/pricing.ts"
 │   └── thinking-colors.ts    # shared thinking-level colour scheme + animate pref
 ├── pi-user-message/          # extension: the user's message in the house box
-├── pi-recap/           # extension: away-and-back recap, rotating cheap models
+├── pi-recap/                 # extension: away-and-back recap, rotating cheap models
 ├── pi-context-footer/        # extension: continuous prompt border + status items
 ├── pi-model-picker/          # extension: /model-picker, and takes over /model
 │   ├── index.ts
 │   ├── package.json          # name: pi-model-picker
 │   └── README.md
+├── pi-thinking-labels/       # extension: safe, colored thinking-block labels
+├── pi-tool-output/           # extension: house-box built-in/custom tool output
 ├── pi-typewriter/            # extension: /typewriter
 │   ├── index.ts
 │   ├── package.json
@@ -91,7 +93,7 @@ next launch (this happened during the `pi-throttle-stream` → `pi-typewriter`
 rename).
 
 Currently symlinked, both locations: `pi-recap`, `pi-context-footer`, `pi-model-picker`,
-`pi-typewriter`, `pi-user-message`, `pi-write-lock`, `lib`.
+`pi-thinking-labels`, `pi-tool-output`, `pi-typewriter`, `pi-user-message`, `pi-write-lock`, `lib`.
 
 ## The `lib` symlink rule
 
@@ -169,6 +171,27 @@ If `/model` ever silently stops opening the picker again: check
 `~/.pi/agent/settings.json` → `packages` for anything else calling
 `setEditorComponent`, and confirm interactively — screen content, not string
 guesses — that the wrapper is the one actually installed.
+
+## `pi-tool-output`: late third-party tools
+
+`pi.getAllTools()` returns metadata copies, not the registered executable tool
+definitions, so mutating those entries cannot change an installed adapter's
+renderers. First-party tools should import `pi-tool-output/decorate`; its global
+symbol plus pending queue handles either extension load order.
+
+Installed adapters that cannot opt in are covered in TUI mode by wrapping the
+exported `ToolExecutionComponent` renderer-selection methods. Keep all three
+parts together: replace the call renderer (the MCP adapter hides its own call on
+a compact final result), replace the result renderer, and return the `self`
+shell. The wrappers must select only explicit custom overrides, definitions
+recognized as MCP, or exact names in the display-name map, and restore the
+original prototype methods on shutdown. Their call/result renderers share row
+state so the call draws the house box's top and argument row while the result
+draws dimmed output and the closing rule; Pi's `app.tools.expand` state (Ctrl+O
+by default) controls collapsed versus expanded output. Renderer tests with fake
+definitions catch lifecycle drift; a live MCP status call is still required
+because the current `pi-mcp-adapter` composes its call and result rows in a way
+a unit fixture can easily miss.
 
 ## Decorating the editor: pi's render-width assertion
 
