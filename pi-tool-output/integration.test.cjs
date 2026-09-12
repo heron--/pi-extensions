@@ -61,6 +61,7 @@ void (async () => {
 	assert.equal(
 		configModule.saveToolOutputConfig({
 			...configModule.DEFAULT_TOOL_OUTPUT_CONFIG,
+			expandedPreviewMaxLines: 2,
 			customToolOverrides: {
 				late_generic: { enabled: true, kind: "generic", outputMode: "summary" },
 				mcp_passthrough: { enabled: false, kind: "mcp", outputMode: "hidden" },
@@ -263,6 +264,33 @@ void (async () => {
 		context,
 	);
 	assert.match(expandedTruncatedBash.render(100).at(-2), /output truncated \(100 total lines\).*pi-bash-full\.log/);
+	for (const expanded of [false, true]) {
+		const erroredTruncatedBash = tools.get("bash").renderResult(
+			{
+				content: [{ type: "text", text: "failure output" }],
+				details: {
+					truncation: { truncated: true, totalLines: 100, outputLines: 1, truncatedBy: "lines" },
+					fullOutputPath: "/tmp/pi-bash-error-full.log",
+				},
+			},
+			{ expanded, isPartial: false },
+			theme,
+			{ ...context, isError: true },
+		);
+		assert.match(
+			erroredTruncatedBash.render(100).at(-2),
+			/output truncated \(100 total lines\).*pi-bash-error-full\.log/,
+		);
+	}
+	const cappedExpandedBash = tools.get("bash").renderResult(
+		{ content: [{ type: "text", text: "line 1\nline 2\nline 3" }], details: {} },
+		{ expanded: true, isPartial: false },
+		theme,
+		context,
+	);
+	const cappedExpandedLines = cappedExpandedBash.render(100).join("\n");
+	assert.match(cappedExpandedLines, /display capped at 2 lines/);
+	assert.doesNotMatch(cappedExpandedLines, /to expand/);
 
 	const visibleError = tools.get("read").renderResult(
 		{ content: [{ type: "text", text: "permission denied" }], details: {} },

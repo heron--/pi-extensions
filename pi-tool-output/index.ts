@@ -183,7 +183,7 @@ function renderPreview(
 	if (lines.length === 0 && !footer) return emptyResult();
 	const { shown, remaining } = previewSlice(lines, limit);
 	let text = shown.map((line) => theme.fg(color, sanitizeAnsiForToolOutput(line))).join("\n");
-	if (remaining > 0) {
+	if (remaining > 0 && !options.expanded) {
 		text += `\n${theme.fg("muted", `… ${remaining} more ${pluralize(remaining, "line")} · ${keyHint("app.tools.expand", "to expand")}`)}`;
 	}
 	if (options.expanded && config.expandedPreviewMaxLines > 0 && lines.length > config.expandedPreviewMaxLines) {
@@ -199,11 +199,15 @@ function renderError(
 	config: ToolOutputConfig,
 	theme: Theme,
 	fallback: string,
+	footer?: string,
 ): Text {
 	const lines = outputLines(extractTextOutput(result), options.expanded);
-	if (lines.length === 0) return textResult(theme.fg("error", fallback));
+	if (lines.length === 0) {
+		const message = theme.fg("error", fallback);
+		return textResult(footer ? `${message}\n${theme.fg("warning", footer)}` : message);
+	}
 	const limit = previewLimit(lines, options, config.previewLines, config);
-	const preview = renderPreview(lines, limit, options, config, theme, "error");
+	const preview = renderPreview(lines, limit, options, config, theme, "error", footer);
 	return preview instanceof Text ? preview : textResult(theme.fg("error", fallback));
 }
 
@@ -292,12 +296,12 @@ function bashResult(
 	context: ToolRenderContextLike,
 	config: ToolOutputConfig,
 ): Text | Container {
+	const truncationNotice = bashTruncationNotice(result);
 	if (isErrorResult(result, context)) {
-		return renderError(result, options, config, theme, "Command failed");
+		return renderError(result, options, config, theme, "Command failed", truncationNotice);
 	}
 	const rawOutput = extractTextOutput(result);
 	const lines = rawOutput.trim() === "(no output)" ? [] : outputLines(rawOutput, options.expanded);
-	const truncationNotice = bashTruncationNotice(result);
 	if (options.isPartial) {
 		return renderPreview(
 			lines,
