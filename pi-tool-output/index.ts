@@ -174,6 +174,10 @@ function textResult(text: string): Text {
 	return new Text(text, 0, 0);
 }
 
+function successResult(theme: Theme, text: string): Text {
+	return textResult(theme.fg("success", sanitizeAnsiForToolOutput(text)));
+}
+
 function isErrorResult(result: ResultLike, context: ToolRenderContextLike): boolean {
 	return context.isError || toRecord(result).isError === true;
 }
@@ -261,7 +265,7 @@ function readCall(args: Record<string, unknown>, theme: Theme): Text {
 		const to = limit !== undefined ? from + limit - 1 : undefined;
 		range = to === undefined ? `:${from}` : `:${from}-${to}`;
 	}
-	return textResult(theme.fg("success", `path: ${path || "..."}${range}`));
+	return successResult(theme, `path: ${path || "..."}${range}`);
 }
 
 function searchCall(
@@ -275,24 +279,24 @@ function searchCall(
 	if (name === "grep") {
 		const pattern = stringField(args, "pattern") ?? "";
 		const glob = stringField(args, "glob");
-		return textResult(
-			theme.fg("success", `pattern: /${pattern}/ · path: ${scope}${glob ? ` · glob: ${glob}` : ""}${limitSuffix}`),
+		return successResult(
+			theme,
+			`pattern: /${pattern}/ · path: ${scope}${glob ? ` · glob: ${glob}` : ""}${limitSuffix}`,
 		);
 	}
 	if (name === "find") {
-		return textResult(
-			theme.fg("success", `pattern: ${stringField(args, "pattern") ?? ""} · path: ${scope}${limitSuffix}`),
+		return successResult(
+			theme,
+			`pattern: ${stringField(args, "pattern") ?? ""} · path: ${scope}${limitSuffix}`,
 		);
 	}
-	return textResult(theme.fg("success", `path: ${scope}${limitSuffix}`));
+	return successResult(theme, `path: ${scope}${limitSuffix}`);
 }
 
 function bashCall(args: Record<string, unknown>, theme: Theme): Text {
 	const command = stringField(args, "command") ?? "...";
 	const timeout = numberField(args, "timeout");
-	return textResult(
-		theme.fg("success", `command: ${command}${timeout === undefined ? "" : ` · timeout: ${timeout}s`}`),
-	);
+	return successResult(theme, `command: ${command}${timeout === undefined ? "" : ` · timeout: ${timeout}s`}`);
 }
 
 function bashTruncationNotice(result: ResultLike): string | undefined {
@@ -366,8 +370,7 @@ function adapterCall(
 ): ReturnType<typeof toolCallBox> {
 	const name = stringField(tool, "name") ?? "tool";
 	const label = stringField(tool, "label");
-	const argsText = theme.fg("success", formatToolArguments(args));
-	return toolCallBox(displayToolName(name, label), textResult(argsText), theme, context);
+	return toolCallBox(displayToolName(name, label), successResult(theme, formatToolArguments(args)), theme, context);
 }
 
 function isMcpTool(tool: RuntimeToolDefinition): boolean {
@@ -397,30 +400,29 @@ function installDecorationApi(getConfig: () => ToolOutputConfig): () => void {
 			const kind = custom?.kind ?? adapter.kind ?? (isMcpTool(runtimeTool) ? "mcp" : "generic");
 			const mode = custom?.outputMode ?? adapter.outputMode ?? (kind === "mcp" ? config.mcpOutputMode : "summary");
 			const overrideExisting = custom?.enabled === true || adapter.overrideExistingRenderers === true;
-			const decorated: RuntimeToolDefinition = { ...runtimeTool };
+			const hasExistingRenderer =
+				typeof runtimeTool.renderCall === "function" || typeof runtimeTool.renderResult === "function";
+			if (hasExistingRenderer && !overrideExisting) return tool;
 
-			if (overrideExisting || typeof decorated.renderCall !== "function") {
-				decorated.renderCall = (args: unknown, theme: Theme, context: ToolRenderContextLike) =>
-					adapterCall(decorated, args, theme, context);
-			}
-			if (overrideExisting || typeof decorated.renderResult !== "function") {
-				decorated.renderResult = (
-					result: ResultLike,
-					options: ToolRenderResultOptions,
-					theme: Theme,
-					context: ToolRenderContextLike,
-				) =>
-					renderModeResult(
-						result,
-						options,
-						theme,
-						context,
-						getConfig(),
-						mode,
-						(lines) => `↳ ${countNonEmptyLines(lines)} ${pluralize(countNonEmptyLines(lines), "line")} returned`,
-					);
-			}
-			if (overrideExisting || decorated.renderShell === undefined) decorated.renderShell = "self";
+			const decorated: RuntimeToolDefinition = { ...runtimeTool };
+			decorated.renderCall = (args: unknown, theme: Theme, context: ToolRenderContextLike) =>
+				adapterCall(decorated, args, theme, context);
+			decorated.renderResult = (
+				result: ResultLike,
+				options: ToolRenderResultOptions,
+				theme: Theme,
+				context: ToolRenderContextLike,
+			) =>
+				renderModeResult(
+					result,
+					options,
+					theme,
+					context,
+					getConfig(),
+					mode,
+					(lines) => `↳ ${countNonEmptyLines(lines)} ${pluralize(countNonEmptyLines(lines), "line")} returned`,
+				);
+			decorated.renderShell = "self";
 			return decorated as T;
 		},
 	};

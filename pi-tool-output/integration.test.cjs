@@ -150,6 +150,13 @@ void (async () => {
 	const runtimeMcpCallComponent = runtimeMcpCall({ server: "linear" }, theme, runtimeMcpContext);
 	assert.match(runtimeMcpCallComponent.render(100)[0], /\uf0ad MCP Gateway/);
 	assert.match(runtimeMcpCallComponent.render(100)[1], /server: linear/);
+	const unsafeArgsCall = runtimeMcpCall(
+		{ server: "safe\x1b]52;c;Y2xpcGJvYXJk\x07text\x1b[2J" },
+		theme,
+		{ args: {}, isError: false, state: {} },
+	).render(100).join("\n");
+	assert.match(unsafeArgsCall, /server: safetext/);
+	assert.doesNotMatch(unsafeArgsCall, /\x1b\]52|\x1b\[2J|Y2xpcGJvYXJk/);
 	for (const expanded of [false, true]) {
 		const resultLines = runtimeMcpResult(
 			{ content: [{ type: "text", text: "late adapter payload" }], details: {} },
@@ -381,6 +388,21 @@ void (async () => {
 	const apiKey = Symbol.for("pi-tool-output.api.v1");
 	const api = globalThis[apiKey];
 	assert.equal(api.version, 1);
+	const partialCallTool = {
+		name: "partial_call_tool",
+		renderCall: ordinaryCallRenderer,
+		renderShell: "default",
+	};
+	assert.equal(api.decorateTool(partialCallTool), partialCallTool);
+	assert.equal(partialCallTool.renderCall, ordinaryCallRenderer);
+	assert.equal(partialCallTool.renderResult, undefined);
+	assert.equal(partialCallTool.renderShell, "default");
+	const ordinaryResultRenderer = () => ({ render: () => ["ordinary result"] });
+	const partialResultTool = { name: "partial_result_tool", renderResult: ordinaryResultRenderer };
+	assert.equal(api.decorateTool(partialResultTool), partialResultTool);
+	assert.equal(partialResultTool.renderCall, undefined);
+	assert.equal(partialResultTool.renderResult, ordinaryResultRenderer);
+	assert.equal(partialResultTool.renderShell, undefined);
 	assert.equal(typeof earlyMcp.renderResult, "function");
 	const earlyMcpResult = earlyMcp.renderResult(
 		{ content: [{ type: "text", text: "queued payload" }], details: {} },

@@ -105,9 +105,10 @@ Installed package consumers can use the exported
 `pi-tool-output/decorate` subpath instead. When `pi-tool-output` has not loaded
 yet, the helper queues the tool object and
 the renderer decorates it in place when its API becomes available. Existing
-renderers are preserved by default; `decorateMcpToolOutput()` intentionally
-hands them over. Exact tool names can be configured without changing the
-consumer:
+renderers are preserved as a set by default: if either call or result rendering
+already exists, neither is changed. `decorateMcpToolOutput()` intentionally
+hands the full renderer set over. Exact tool names can be configured without
+changing the consumer:
 
 ```json
 {
