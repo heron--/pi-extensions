@@ -72,6 +72,36 @@ function renderInner(component: Component, width: number): string[] {
 	return component.render(contentWidth);
 }
 
+function cachedBoxComponent(
+	inner: Component,
+	theme: Theme,
+	label: string,
+	includeTop: boolean,
+	close: () => boolean,
+): Component {
+	let cached: { width: number; close: boolean; body: string[]; rows: string[] } | undefined;
+	return {
+		render(width: number): string[] {
+			const shouldClose = close();
+			const body = renderInner(inner, width);
+			// Cached pi text components retain their row-array identity. A dynamic
+			// component returning new rows still flows through and rebuilds the box.
+			if (cached?.width === width && cached.close === shouldClose && cached.body === body) return cached.rows;
+
+			const rows = boxRows(theme, width, label, body, {
+				includeTop,
+				close: shouldClose,
+			});
+			cached = { width, close: shouldClose, body, rows };
+			return rows;
+		},
+		invalidate(): void {
+			cached = undefined;
+			inner.invalidate();
+		},
+	};
+}
+
 export function toolCallBox(
 	displayName: string,
 	argsComponent: Component,
@@ -79,18 +109,7 @@ export function toolCallBox(
 	context: RenderContextState,
 ): Component {
 	const state = houseBoxState(context);
-	return {
-		render(width: number): string[] {
-			const body = renderInner(argsComponent, width);
-			return boxRows(theme, width, `${ICON_TOOL} ${displayName}`, body, {
-				includeTop: true,
-				close: !state.resultAttached,
-			});
-		},
-		invalidate(): void {
-			argsComponent.invalidate();
-		},
-	};
+	return cachedBoxComponent(argsComponent, theme, `${ICON_TOOL} ${displayName}`, true, () => !state.resultAttached);
 }
 
 export function toolResultBox(
@@ -100,15 +119,5 @@ export function toolResultBox(
 ): Component {
 	const state = houseBoxState(context);
 	state.resultAttached = true;
-	return {
-		render(width: number): string[] {
-			return boxRows(theme, width, "", renderInner(resultComponent, width), {
-				includeTop: false,
-				close: true,
-			});
-		},
-		invalidate(): void {
-			resultComponent.invalidate();
-		},
-	};
+	return cachedBoxComponent(resultComponent, theme, "", false, () => true);
 }
