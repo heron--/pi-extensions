@@ -297,7 +297,7 @@ function bashResult(
 	}
 	const rawOutput = extractTextOutput(result);
 	const lines = rawOutput.trim() === "(no output)" ? [] : outputLines(rawOutput, options.expanded);
-	const truncationNotice = options.expanded ? undefined : bashTruncationNotice(result);
+	const truncationNotice = bashTruncationNotice(result);
 	if (options.isPartial) {
 		return renderPreview(
 			lines,
@@ -311,9 +311,11 @@ function bashResult(
 	}
 	if (lines.length === 0) {
 		const command = stringField(context.args, "command");
-		return textResult(
-			theme.fg("muted", isLikelyQuietCommand(command) ? "↳ command completed (no output)" : "↳ (no output)"),
+		const noOutput = theme.fg(
+			"muted",
+			isLikelyQuietCommand(command) ? "↳ command completed (no output)" : "↳ (no output)",
 		);
+		return textResult(truncationNotice ? `${noOutput}\n${theme.fg("warning", truncationNotice)}` : noOutput);
 	}
 	if (config.bashOutputMode === "summary" && !options.expanded) {
 		const summary = `${theme.fg("muted", `↳ ${lines.length} ${pluralize(lines.length, "line")} returned`)} ${theme.fg("muted", `· ${keyHint("app.tools.expand", "to expand")}`)}`;
@@ -459,6 +461,7 @@ const TOOL_EXECUTION_PATCH_OWNER = Symbol.for("pi-tool-output.tool-execution-pat
 let installedCallRendererWrapper: PatchedToolExecutionPrototype["getCallRenderer"] | undefined;
 let installedResultRendererWrapper: PatchedToolExecutionPrototype["getResultRenderer"] | undefined;
 let installedRenderShellWrapper: PatchedToolExecutionPrototype["getRenderShell"] | undefined;
+let installedPatchState: { active: boolean } | undefined;
 
 /**
  * Pi exposes tool metadata, not registered definitions, through getAllTools().
@@ -482,13 +485,17 @@ function patchToolExecutionRendering(getConfig: () => ToolOutputConfig): void {
 	const originalCall = prototype.__toolOutputOriginalGetCallRenderer;
 	const originalResult = prototype.__toolOutputOriginalGetResultRenderer;
 	const originalShell = prototype.__toolOutputOriginalGetRenderShell;
+	const patchState = { active: true };
+	installedPatchState = patchState;
 
 	installedCallRendererWrapper = function (this: ToolExecutionInstanceLike): RuntimeCallRenderer | undefined {
+		if (!patchState.active) return originalCall.call(this);
 		const target = resolveRuntimeRenderingTarget(this, getConfig());
 		if (!target) return originalCall.call(this);
 		return (args, theme, context) => adapterCall(target.tool, args, theme, context);
 	};
 	installedResultRendererWrapper = function (this: ToolExecutionInstanceLike): RuntimeResultRenderer | undefined {
+		if (!patchState.active) return originalResult.call(this);
 		const target = resolveRuntimeRenderingTarget(this, getConfig());
 		if (!target) return originalResult.call(this);
 		return (result, options, theme, context) =>
@@ -506,6 +513,7 @@ function patchToolExecutionRendering(getConfig: () => ToolOutputConfig): void {
 			);
 	};
 	installedRenderShellWrapper = function (this: ToolExecutionInstanceLike): "default" | "self" {
+		if (!patchState.active) return originalShell.call(this);
 		return resolveRuntimeRenderingTarget(this, getConfig()) ? "self" : originalShell.call(this);
 	};
 
@@ -517,17 +525,29 @@ function patchToolExecutionRendering(getConfig: () => ToolOutputConfig): void {
 
 function unpatchToolExecutionRendering(): void {
 	const prototype = ToolExecutionComponent.prototype as unknown as PatchedToolExecutionPrototype;
-	const ownsAll =
+	if (installedPatchState) installedPatchState.active = false;
+	if (
 		installedCallRendererWrapper !== undefined &&
-		installedResultRendererWrapper !== undefined &&
-		installedRenderShellWrapper !== undefined &&
 		prototype.getCallRenderer === installedCallRendererWrapper &&
+		prototype.__toolOutputOriginalGetCallRenderer
+	) {
+		prototype.getCallRenderer = prototype.__toolOutputOriginalGetCallRenderer;
+	}
+	if (
+		installedResultRendererWrapper !== undefined &&
 		prototype.getResultRenderer === installedResultRendererWrapper &&
-		prototype.getRenderShell === installedRenderShellWrapper;
-	if (ownsAll) {
-		prototype.getCallRenderer = prototype.__toolOutputOriginalGetCallRenderer!;
-		prototype.getResultRenderer = prototype.__toolOutputOriginalGetResultRenderer!;
-		prototype.getRenderShell = prototype.__toolOutputOriginalGetRenderShell!;
+		prototype.__toolOutputOriginalGetResultRenderer
+	) {
+		prototype.getResultRenderer = prototype.__toolOutputOriginalGetResultRenderer;
+	}
+	if (
+		installedRenderShellWrapper !== undefined &&
+		prototype.getRenderShell === installedRenderShellWrapper &&
+		prototype.__toolOutputOriginalGetRenderShell
+	) {
+		prototype.getRenderShell = prototype.__toolOutputOriginalGetRenderShell;
+	}
+	if (prototype.__toolOutputPatchedBy === TOOL_EXECUTION_PATCH_OWNER) {
 		delete prototype.__toolOutputOriginalGetCallRenderer;
 		delete prototype.__toolOutputOriginalGetResultRenderer;
 		delete prototype.__toolOutputOriginalGetRenderShell;
@@ -536,6 +556,7 @@ function unpatchToolExecutionRendering(): void {
 	installedCallRendererWrapper = undefined;
 	installedResultRendererWrapper = undefined;
 	installedRenderShellWrapper = undefined;
+	installedPatchState = undefined;
 }
 
 function registerBuiltinOverrides(pi: ExtensionAPI, config: ToolOutputConfig): void {

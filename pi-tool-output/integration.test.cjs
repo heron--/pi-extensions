@@ -250,6 +250,19 @@ void (async () => {
 		context,
 	);
 	assert.match(truncatedBash.render(100).at(-2), /output truncated \(100 total lines\).*pi-bash-full\.log/);
+	const expandedTruncatedBash = tools.get("bash").renderResult(
+		{
+			content: [{ type: "text", text: "retained 1\nretained 2" }],
+			details: {
+				truncation: { truncated: true, totalLines: 100, outputLines: 2, truncatedBy: "lines" },
+				fullOutputPath: "/tmp/pi-bash-full.log",
+			},
+		},
+		{ expanded: true, isPartial: false },
+		theme,
+		context,
+	);
+	assert.match(expandedTruncatedBash.render(100).at(-2), /output truncated \(100 total lines\).*pi-bash-full\.log/);
 
 	const visibleError = tools.get("read").renderResult(
 		{ content: [{ type: "text", text: "permission denied" }], details: {} },
@@ -342,11 +355,20 @@ void (async () => {
 	assert.equal(reloads, 1);
 	assert.equal(configModule.loadToolOutputConfig().config.enabled, false);
 
+	// Simulate an extension loaded after pi-tool-output composing one method.
+	// Shutdown must restore the other methods and leave the retained wrapper inert.
+	const installedGetCallRenderer = toolExecutionPrototype.getCallRenderer;
+	const composedGetCallRenderer = function () {
+		return installedGetCallRenderer.call(this);
+	};
+	toolExecutionPrototype.getCallRenderer = composedGetCallRenderer;
+
 	for (const handler of handlers.get("session_shutdown") ?? []) {
 		await handler({ type: "session_shutdown", reason: "quit" }, {});
 	}
 	assert.equal(globalThis[apiKey], undefined);
-	assert.equal(toolExecutionPrototype.getCallRenderer, originalGetCallRenderer);
+	assert.equal(toolExecutionPrototype.getCallRenderer, composedGetCallRenderer);
+	assert.equal(toolExecutionPrototype.getCallRenderer.call(lateMcpInstance), adapterCallRenderer);
 	assert.equal(toolExecutionPrototype.getResultRenderer, originalGetResultRenderer);
 	assert.equal(toolExecutionPrototype.getRenderShell, originalGetRenderShell);
 	assert.equal(earlyMcp.renderResult, undefined);
@@ -375,6 +397,13 @@ void (async () => {
 			optInHandlers.set(name, list);
 		},
 	});
+	for (const handler of optInHandlers.get("session_start") ?? []) {
+		await handler(
+			{ type: "session_start" },
+			{ mode: "tui", ui: { theme, notify() {} } },
+		);
+	}
+	assert.notEqual(toolExecutionPrototype.getCallRenderer, composedGetCallRenderer);
 	assert.deepEqual([...optInTools.keys()].sort(), ["bash", "edit", "find", "grep", "ls", "read", "write"]);
 	assert.equal(typeof optInTools.get("edit").renderCall, "function");
 	assert.equal(typeof optInTools.get("edit").renderResult, "function");
@@ -384,6 +413,11 @@ void (async () => {
 		await handler({ type: "session_shutdown", reason: "quit" }, {});
 	}
 	assert.equal(globalThis[apiKey], undefined);
+	assert.equal(toolExecutionPrototype.getCallRenderer, composedGetCallRenderer);
+	assert.equal(toolExecutionPrototype.getCallRenderer.call(lateMcpInstance), adapterCallRenderer);
+	assert.equal(toolExecutionPrototype.getResultRenderer, originalGetResultRenderer);
+	assert.equal(toolExecutionPrototype.getRenderShell, originalGetRenderShell);
+	toolExecutionPrototype.getCallRenderer = originalGetCallRenderer;
 	console.log("tool-output integration fixture passed");
 })()
 	.catch((error) => {
