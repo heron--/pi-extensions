@@ -64,7 +64,7 @@ const MIN_BOX_WIDTH = 24;
 const RECAP_MAX_CHARS = 500;
 /** What to aim for. The ceiling is a backstop, not a goal. */
 const RECAP_TARGET_CHARS = 200;
-const NEXT_MAX_CHARS = 100;
+const NEXT_MAX_CHARS = 180;
 
 /** `frame` draws the box; `clean` sets the same content flush left. */
 type Style = "frame" | "clean";
