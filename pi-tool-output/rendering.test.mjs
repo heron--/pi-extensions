@@ -52,9 +52,12 @@ test("line counts ignore blank output", () => {
 	assert.equal(countNonEmptyLines(["a", "", "b", "  "]), 2);
 });
 
-test("ANSI sanitization strips source styling before output is dimmed", () => {
+test("terminal sanitization strips styling and control sequences", () => {
 	assert.equal(sanitizeAnsiForToolOutput("\x1b[31;44mred\x1b[0m"), "red");
 	assert.equal(sanitizeAnsiForToolOutput("\x1b[38;2;1;2;3;48;5;9mcolor"), "color");
+	assert.equal(sanitizeAnsiForToolOutput("\x1b[38:2::255:0:0mcolon\x1b[0m"), "colon");
+	assert.equal(sanitizeAnsiForToolOutput("before\x1b[2J\x1b[Hafter"), "beforeafter");
+	assert.equal(sanitizeAnsiForToolOutput("safe\x1b]52;c;Y2xpcGJvYXJk\x07text"), "safetext");
 });
 
 test("quiet command detection considers the first shell segment", () => {

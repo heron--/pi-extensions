@@ -69,6 +69,11 @@ interface StoredDescriptors {
 	renderShell?: PropertyDescriptor;
 }
 
+interface DecorationDescriptors {
+	original: StoredDescriptors;
+	installed: StoredDescriptors;
+}
+
 interface PendingDecoration {
 	tool: RuntimeToolDefinition;
 	adapter?: ToolOutputAdapter;
@@ -106,6 +111,18 @@ interface BuiltinTools {
 
 const builtinsByCwd = new Map<string, BuiltinTools>();
 const DECORATED_PROPERTIES: DecoratedProperty[] = ["renderCall", "renderResult", "renderShell"];
+
+function samePropertyDescriptor(left: PropertyDescriptor | undefined, right: PropertyDescriptor): boolean {
+	return (
+		left !== undefined &&
+		left.configurable === right.configurable &&
+		left.enumerable === right.enumerable &&
+		left.writable === right.writable &&
+		left.value === right.value &&
+		left.get === right.get &&
+		left.set === right.set
+	);
+}
 
 function toRecord(value: unknown): Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -367,7 +384,7 @@ function configuredCustomOverride(tool: RuntimeToolDefinition, config: ToolOutpu
 
 function installDecorationApi(getConfig: () => ToolOutputConfig): () => void {
 	const target = globalThis as ToolOutputGlobal;
-	const descriptorSnapshots = new Map<RuntimeToolDefinition, StoredDescriptors>();
+	const descriptorSnapshots = new Map<RuntimeToolDefinition, DecorationDescriptors>();
 
 	const api: ToolOutputApi = {
 		version: 1,
@@ -415,13 +432,21 @@ function installDecorationApi(getConfig: () => ToolOutputConfig): () => void {
 			if (!entry?.tool || typeof entry.tool !== "object") continue;
 			const decorated = api.decorateTool(entry.tool, entry.adapter);
 			if (decorated === entry.tool) continue;
-			const snapshot: StoredDescriptors = {};
+			const existing = descriptorSnapshots.get(entry.tool);
+			const original: StoredDescriptors = existing?.original ?? {};
+			if (!existing) {
+				for (const property of DECORATED_PROPERTIES) {
+					const descriptor = Object.getOwnPropertyDescriptor(entry.tool, property);
+					if (descriptor) original[property] = descriptor;
+				}
+			}
+			Object.assign(entry.tool, decorated);
+			const installed: StoredDescriptors = {};
 			for (const property of DECORATED_PROPERTIES) {
 				const descriptor = Object.getOwnPropertyDescriptor(entry.tool, property);
-				if (descriptor) snapshot[property] = descriptor;
+				if (descriptor) installed[property] = descriptor;
 			}
-			descriptorSnapshots.set(entry.tool, snapshot);
-			Object.assign(entry.tool, decorated);
+			descriptorSnapshots.set(entry.tool, { original, installed });
 		}
 	}
 
@@ -429,8 +454,11 @@ function installDecorationApi(getConfig: () => ToolOutputConfig): () => void {
 		if (target[TOOL_OUTPUT_API_KEY] === api) delete target[TOOL_OUTPUT_API_KEY];
 		for (const [tool, snapshot] of descriptorSnapshots) {
 			for (const property of DECORATED_PROPERTIES) {
-				const descriptor = snapshot[property];
-				if (descriptor) Object.defineProperty(tool, property, descriptor);
+				const current = Object.getOwnPropertyDescriptor(tool, property);
+				const installed = snapshot.installed[property];
+				if (!installed || !samePropertyDescriptor(current, installed)) continue;
+				const original = snapshot.original[property];
+				if (original) Object.defineProperty(tool, property, original);
 				else delete tool[property];
 			}
 		}

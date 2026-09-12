@@ -80,6 +80,7 @@ void (async () => {
 		execute: async () => ({ content: [] }),
 	};
 	assert.equal(decorator.decorateMcpToolOutput(earlyMcp), earlyMcp);
+	assert.equal(decorator.decorateMcpToolOutput(earlyMcp), earlyMcp);
 	assert.equal(earlyMcp.renderResult, undefined);
 
 	const factory = await jiti.import(path.resolve("pi-tool-output/index.ts"), { default: true });
@@ -406,6 +407,11 @@ void (async () => {
 	);
 	assert.match(mcpResult.render(100)[0], /large payload/);
 
+	// A later composer owns its replacement; queued-decoration cleanup must not
+	// clobber it while restoring the properties still installed here.
+	const postDecorationCallRenderer = () => ({ render: () => ["post-decoration call"] });
+	earlyMcp.renderCall = postDecorationCallRenderer;
+
 	let reloads = 0;
 	await commands.get("tool-output").handler("off", {
 		ui: { notify() {} },
@@ -433,7 +439,7 @@ void (async () => {
 	assert.equal(toolExecutionPrototype.getResultRenderer, originalGetResultRenderer);
 	assert.equal(toolExecutionPrototype.getRenderShell, originalGetRenderShell);
 	assert.equal(earlyMcp.renderResult, undefined);
-	assert.equal(earlyMcp.renderCall, undefined);
+	assert.equal(earlyMcp.renderCall, postDecorationCallRenderer);
 	assert.equal(earlyMcp.renderShell, undefined);
 
 	const optInConfig = {

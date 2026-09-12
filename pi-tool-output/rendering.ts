@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { sep } from "node:path";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
 interface TextContent {
 	type: string;
@@ -10,7 +11,6 @@ interface ToolResultLike {
 	content?: unknown;
 }
 
-const ANSI_SGR_PATTERN = /\x1b\[[0-9;]*m/g;
 const TOOL_DISPLAY_NAMES: Readonly<Record<string, string>> = {
 	read: "Read File",
 	grep: "Search Files",
@@ -69,9 +69,9 @@ const QUIET_COMMAND_PREFIXES = [
 	"go mod tidy",
 ] as const;
 
-/** Strip source SGR styling so the house box can apply one consistent dim tone. */
+/** Strip terminal control sequences before applying the house box's dim tone. */
 export function sanitizeAnsiForToolOutput(text: string): string {
-	return text.replace(ANSI_SGR_PATTERN, "");
+	return stripTerminalSequences(text);
 }
 
 export function displayToolName(name: string, label?: string): string {
