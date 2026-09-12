@@ -25,9 +25,18 @@ Certainly some extensions had more intellectual engagement from me than others.
 - **[pi-recap](pi-recap/README.md)** — when you sit back down after
   stepping away, a rotating cheap model recaps what happened while you were
   gone, and signs its work.
+- **[pi-thinking-labels](pi-thinking-labels/README.md)** — labels thinking
+  blocks in the transcript using the shared level colors while stripping those
+  presentation labels before the next model turn.
+- **[pi-tool-output](pi-tool-output/README.md)** — frames built-in and known
+  extension tools in the shared dark house box, with readable names, dimmed
+  expandable output, and preserved renderer ownership during migration from
+  `pi-tool-display`.
 - **[pi-typewriter](pi-typewriter/README.md)** — reveals streamed assistant
   output at a steady typewriter pace instead of whatever has arrived so far.
   Escape skips the effect for the current message.
+- **[pi-user-message](pi-user-message/README.md)** — frames user turns in the
+  house box while retaining Pi's native markdown and shell-integration markers.
 - **[pi-write-lock](pi-write-lock/README.md)** — adds a session-scoped
   read-only mode that removes write tools, injects a read-only instruction, and
   blocks common mutating shell commands while the lock is on.
@@ -114,9 +123,12 @@ with no flags loads whatever is linked there, and `/reload` hot-reloads it:
 ├── pi-context-footer  -> ../../pi-context-footer
 ├── pi-model-picker    -> ../../pi-model-picker
 ├── pi-recap           -> ../../pi-recap
+├── pi-thinking-labels -> ../../pi-thinking-labels
+├── pi-tool-output     -> ../../pi-tool-output
 ├── pi-typewriter      -> ../../pi-typewriter
+├── pi-user-message    -> ../../pi-user-message
 └── pi-write-lock      -> ../../pi-write-lock
-`
+```
 
 Add or remove links freely — `.pi/` is gitignored, so it never shows up in
 `git status`. On a fresh checkout, `node scripts/link-extensions.mjs`
