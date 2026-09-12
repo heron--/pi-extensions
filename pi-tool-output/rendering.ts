@@ -76,21 +76,26 @@ export function sanitizeAnsiForToolOutput(text: string): string {
 
 export function displayToolName(name: string, label?: string): string {
 	const mapped = TOOL_DISPLAY_NAMES[name];
-	if (mapped) return mapped;
-	if (name.startsWith("mcp__")) {
+	let displayName: string;
+	if (mapped) {
+		displayName = mapped;
+	} else if (name.startsWith("mcp__")) {
 		const server = name.slice("mcp__".length);
-		return server
+		displayName = server
 			.split(/[_-]+/)
 			.filter(Boolean)
 			.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
 			.join(" ");
+	} else if (label && label.trim() && label !== name) {
+		displayName = label;
+	} else {
+		displayName = name
+			.split(/[._:-]+/)
+			.filter(Boolean)
+			.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+			.join(" ");
 	}
-	if (label && label.trim() && label !== name) return label.trim();
-	return name
-		.split(/[._:-]+/)
-		.filter(Boolean)
-		.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-		.join(" ") || "Tool";
+	return stripTerminalSequences(displayName).replace(/\s+/g, " ").trim() || "Tool";
 }
 
 export function isKnownToolName(name: string): boolean {

@@ -19,6 +19,8 @@ test("known tool names map to readable house-box labels", () => {
 	assert.equal(displayToolName("multi_tool_use.parallel"), "Parallel Tools");
 	assert.equal(displayToolName("mcp__atlassian"), "Atlassian");
 	assert.equal(displayToolName("custom_report_tool"), "Custom Report Tool");
+	assert.equal(displayToolName("custom", "Unsafe\nLabel\x1b]52;c;Y2xpcGJvYXJk\x07"), "Unsafe Label");
+	assert.equal(displayToolName("\x1b[2J"), "Tool");
 	assert.equal(isKnownToolName("web_search"), true);
 	assert.equal(isKnownToolName("custom_report_tool"), false);
 });
