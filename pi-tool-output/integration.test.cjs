@@ -22,6 +22,7 @@ void (async () => {
 		},
 	});
 	const codingAgent = await jiti.import(path.join(piRoot, "dist/index.js"));
+	const piTui = await jiti.import(fromPi.resolve("@earendil-works/pi-tui"));
 	codingAgent.initTheme(undefined, false);
 	const toolExecutionPrototype = codingAgent.ToolExecutionComponent.prototype;
 	const originalGetCallRenderer = toolExecutionPrototype.getCallRenderer;
@@ -225,6 +226,38 @@ void (async () => {
 	const readLines = readResult.render(100);
 	assert.match(readLines[0], /secret output/);
 	assert.match(readLines.at(-1), /╰─+╯/);
+
+	// ToolExecutionComponent owns image rendering independently of custom text
+	// renderers, so self-rendered house boxes must still leave image blocks intact.
+	const originalCapabilities = piTui.getCapabilities();
+	piTui.setCapabilities({ ...originalCapabilities, images: "iterm2" });
+	try {
+		const imageReadComponent = new codingAgent.ToolExecutionComponent(
+			"read",
+			"image-read",
+			{ path: "pixel.png" },
+			{ showImages: true },
+			tools.get("read"),
+			{ requestRender() {} },
+			process.cwd(),
+		);
+		imageReadComponent.setArgsComplete();
+		imageReadComponent.markExecutionStarted();
+		imageReadComponent.updateResult({
+			content: [
+				{
+					type: "image",
+					mimeType: "image/png",
+					data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+				},
+			],
+			details: {},
+		});
+		assert.equal(imageReadComponent.imageComponents.length, 1);
+		assert.match(imageReadComponent.render(100).join("\n"), /1337;File=/);
+	} finally {
+		piTui.setCapabilities(originalCapabilities);
+	}
 
 	const bashOutput = Array.from({ length: 12 }, (_value, index) => `line ${index + 1}`).join("\n");
 	const bashResult = tools.get("bash").renderResult(
