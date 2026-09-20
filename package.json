@@ -16,6 +16,6 @@
 		"typescript": "^5.9.3"
 	},
 	"dependencies": {
-		"@pydantic/genai-prices": "^0.1.6"
+		"@pydantic/genai-prices": "^0.1.7"
 	}
 }
