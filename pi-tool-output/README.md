@@ -9,14 +9,70 @@ The default presentation uses:
 - a dark `userMessageBg` ground;
 - a green `nf-fa-wrench` icon and display-name label in the border, matching
   the footer's git branch color (`success`);
-- the call arguments as the first content line, in the same branch green;
+- a bold accent-colored semantic summary above the call arguments;
+- bounded accent-key / emphasized-value argument previews instead of walls of scripts or JSON;
 - dimmed result text, with errors kept red and truncation notices visible;
 - an 8-line collapsed preview for read, search, MCP, and known custom tools;
 - up to 10 collapsed lines for bash output.
 
 Press Pi's `app.tools.expand` binding—Ctrl+O by default—to expand or collapse
-all tool results. The hint follows any user keybinding override rather than
-hard-coding the key label.
+both call arguments and results, including pending calls. The hint follows any
+user keybinding override rather than hard-coding the key label.
+
+### Compact calls
+
+All calls owned by this extension use the same bounded argument renderer:
+
+- Short values (up to 160 characters) stay inline. Multiline or longer strings
+  become descriptors such as `workflowScript: 19 KB · 501 lines`.
+- Small arrays/objects stay inline; larger or deeply nested structures become
+  item/field counts. The compact view considers at most eight argument fields.
+- The call body has at most one summary row, three wrapped argument rows, and
+  one expansion hint. Limits apply **after wrapping**, including narrow terminals.
+- Argument keys use the theme's `accent` color (the `identity` teal in the
+  bundled `frontier-funds` theme) and values use `emphasisText` (falling back
+  to `accent`); separators and expansion hints remain subdued. Every color is
+  named in `colors.ts` — see [Colors](#colors). Ctrl+O reveals the
+  original arguments with multiline string layout preserved.
+  Expansion is still bounded to 16,000 characters and 120 wrapped argument rows,
+  with bounded tree depth/node traversal and an explicit cap notice. These call
+  limits are independent of `expandedPreviewMaxLines`, which controls results.
+- Compaction is presentation-only: execution inputs, saved calls, and model
+  context are unchanged. Full inputs remain in the session transcript.
+
+Summaries recognize file paths/ranges, searches/scopes, shell commands, background
+commands, subagent modes/workflows and declared lanes, MCP targets, parallel tool
+names, and other known tool metadata. When a recognized summary contains explicit
+`key: value` fields, keys retain summary green while values use `emphasisText`;
+plain-language summaries remain green. Shell summaries preserve common chains and
+pipelines, respect quoted separators, and replace inline interpreter bodies and
+heredoc bodies with script labels. This is a bounded, best-effort display sketch,
+**not** a shell parser or a safety check. It never executes scripts or infers
+workflow lanes from embedded code.
+
+Unknown opted-in tools and unexpected/partial argument shapes use the generic
+compact preview. Existing tool-ownership rules still apply: this does not take
+ownership of every installed tool or replace preserved third-party renderers.
+
+Each tool family is summarized by its own exported function in `summaries.ts`
+(`summarizeRead`, `summarizeSearch`, `summarizeShell`, `summarizeSubagent`, and
+so on), selected by a flat name check in `summarize`. A new tool family is one
+summarizer plus one routing line, and each is unit-tested directly in
+`summaries.test.mjs`.
+
+### Colors
+
+`colors.ts` holds every color this extension paints; no other module names a
+theme color. `TOOL_OUTPUT_COLORS` groups them by the region they paint — `box`
+(frame and label), `call` (summary and argument rows), and `result` (output,
+errors, notices, metadata) — so retuning one region leaves the others alone.
+
+Values are theme color names rather than hex codes, so the active theme resolves
+them and the palette follows theme switches. A color the stock themes do not
+define is written as a fallback chain in preference order, such as
+`["emphasisText", "accent"]`: `paint` tries each candidate and falls back to
+unstyled text, because `Theme.fg` throws on an unknown color name. Chains end in
+a stock color, which `colors.test.mjs` enforces.
 
 The richer `edit`/`write` diff renderer is deliberately not reimplemented here.
 Their ownership flags default to `false`, leaving those tools to
@@ -158,6 +214,19 @@ execution fixtures:
 ```bash
 npm run check
 ```
+
+Tests resolve runtime packages from the same live Pi installation as the
+TypeScript mappings (Node 22.15+). For an automated real-TUI check, with `pi` on
+PATH and Python's `pyte` installed:
+
+```bash
+python3 pi-tool-output/tui.test.py
+```
+
+The PTY check uses scratch settings, inert tool definitions, and synthetic
+sessions (no model calls), presses Ctrl+O, and checks decoded screens at 100,
+40, and 26 columns. It saves
+collapsed/expanded/re-collapsed screens and ANSI captures to a printed temp path.
 
 For a live, synthetic transcript that loads only this checkout's extensions and
 shows a long enough tool result to exercise Ctrl+O:

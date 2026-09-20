@@ -7,7 +7,7 @@
 	"scripts": {
 		"sync-types": "node scripts/sync-pi-types.mjs",
 		"typecheck": "npm run sync-types && tsc -p tsconfig.json",
-		"test:tool-output": "npm run sync-types && node --no-warnings --experimental-strip-types --test pi-tool-output/rendering.test.mjs && node pi-tool-output/integration.test.cjs",
+		"test:tool-output": "npm run sync-types && node --no-warnings --experimental-strip-types --import ./scripts/pi-test-loader.mjs --test pi-tool-output/*.test.mjs && node pi-tool-output/integration.test.cjs",
 		"check": "npm run typecheck && npm run test:tool-output",
 		"watch": "npm run sync-types && tsc -p tsconfig.json --watch --preserveWatchOutput",
 		"postinstall": "node scripts/sync-pi-types.mjs || true"

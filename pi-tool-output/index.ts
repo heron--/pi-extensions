@@ -32,11 +32,11 @@ import {
 	type ToolOutputAdapter,
 	type ToolOutputApi,
 } from "./decorate.ts";
+import { paint, TOOL_OUTPUT_COLORS, type ColorSpec } from "./colors.ts";
 import {
 	countNonEmptyLines,
 	displayToolName,
 	extractTextOutput,
-	formatToolArguments,
 	isKnownToolName,
 	isLikelyQuietCommand,
 	outputLines,
@@ -46,6 +46,7 @@ import {
 	shortenPath,
 } from "./rendering.ts";
 import { toolCallBox, toolResultBox } from "./tool-box.ts";
+import { callArgumentsComponent } from "./call-rendering.ts";
 
 type ResultLike = AgentToolResult<unknown>;
 type DecoratedProperty = "renderCall" | "renderResult" | "renderShell";
@@ -58,6 +59,7 @@ type RuntimeResultRenderer = (
 ) => unknown;
 
 interface ToolRenderContextLike {
+	expanded?: boolean;
 	args: Record<string, unknown>;
 	isError: boolean;
 	state: Record<string, unknown>;
@@ -174,10 +176,6 @@ function textResult(text: string): Text {
 	return new Text(text, 0, 0);
 }
 
-function successResult(theme: Theme, text: string): Text {
-	return textResult(theme.fg("success", sanitizeAnsiForToolOutput(text)));
-}
-
 function isErrorResult(result: ResultLike, context: ToolRenderContextLike): boolean {
 	return context.isError || toRecord(result).isError === true;
 }
@@ -198,19 +196,19 @@ function renderPreview(
 	options: ToolRenderResultOptions,
 	config: ToolOutputConfig,
 	theme: Theme,
-	color: "dim" | "error" = "dim",
+	color: ColorSpec = TOOL_OUTPUT_COLORS.result.output,
 	footer?: string,
 ): Text | Container {
 	if (lines.length === 0 && !footer) return emptyResult();
 	const { shown, remaining } = previewSlice(lines, limit);
-	let text = shown.map((line) => theme.fg(color, sanitizeAnsiForToolOutput(line))).join("\n");
+	let text = shown.map((line) => paint(theme, color, sanitizeAnsiForToolOutput(line))).join("\n");
 	if (remaining > 0 && !options.expanded) {
-		text += `\n${theme.fg("muted", `… ${remaining} more ${pluralize(remaining, "line")} · ${keyHint("app.tools.expand", "to expand")}`)}`;
+		text += `\n${paint(theme, TOOL_OUTPUT_COLORS.result.meta, `… ${remaining} more ${pluralize(remaining, "line")} · ${keyHint("app.tools.expand", "to expand")}`)}`;
 	}
 	if (options.expanded && config.expandedPreviewMaxLines > 0 && lines.length > config.expandedPreviewMaxLines) {
-		text += `\n${theme.fg("warning", `display capped at ${config.expandedPreviewMaxLines} lines`)}`;
+		text += `\n${paint(theme, TOOL_OUTPUT_COLORS.result.notice, `display capped at ${config.expandedPreviewMaxLines} lines`)}`;
 	}
-	if (footer) text += `${text ? "\n" : ""}${theme.fg("warning", footer)}`;
+	if (footer) text += `${text ? "\n" : ""}${paint(theme, TOOL_OUTPUT_COLORS.result.notice, footer)}`;
 	return text ? textResult(text) : emptyResult();
 }
 
@@ -223,13 +221,14 @@ function renderError(
 	footer?: string,
 ): Text {
 	const lines = outputLines(extractTextOutput(result), options.expanded);
+	const { error, notice } = TOOL_OUTPUT_COLORS.result;
 	if (lines.length === 0) {
-		const message = theme.fg("error", fallback);
-		return textResult(footer ? `${message}\n${theme.fg("warning", footer)}` : message);
+		const message = paint(theme, error, fallback);
+		return textResult(footer ? `${message}\n${paint(theme, notice, footer)}` : message);
 	}
 	const limit = previewLimit(lines, options, config.previewLines, config);
-	const preview = renderPreview(lines, limit, options, config, theme, "error", footer);
-	return preview instanceof Text ? preview : textResult(theme.fg("error", fallback));
+	const preview = renderPreview(lines, limit, options, config, theme, error, footer);
+	return preview instanceof Text ? preview : textResult(paint(theme, error, fallback));
 }
 
 function renderModeResult(
@@ -248,55 +247,12 @@ function renderModeResult(
 		content = emptyResult();
 	} else {
 		const lines = outputLines(extractTextOutput(result), options.expanded);
+		const summaryColor = TOOL_OUTPUT_COLORS.result.summary;
 		content = mode === "summary" && !options.expanded
-			? textResult(`${theme.fg("dim", summary(lines))} ${theme.fg("dim", `· ${keyHint("app.tools.expand", "to expand")}`)}`)
+			? textResult(`${paint(theme, summaryColor, summary(lines))} ${paint(theme, summaryColor, `· ${keyHint("app.tools.expand", "to expand")}`)}`)
 			: renderPreview(lines, previewLimit(lines, options, config.previewLines, config), options, config, theme);
 	}
 	return toolResultBox(content, theme, context);
-}
-
-function readCall(args: Record<string, unknown>, theme: Theme): Text {
-	const path = shortenPath(stringField(args, "path"));
-	const offset = numberField(args, "offset");
-	const limit = numberField(args, "limit");
-	let range = "";
-	if (offset !== undefined || limit !== undefined) {
-		const from = offset ?? 1;
-		const to = limit !== undefined ? from + limit - 1 : undefined;
-		range = to === undefined ? `:${from}` : `:${from}-${to}`;
-	}
-	return successResult(theme, `path: ${path || "..."}${range}`);
-}
-
-function searchCall(
-	name: "grep" | "find" | "ls",
-	args: Record<string, unknown>,
-	theme: Theme,
-): Text {
-	const scope = shortenPath(stringField(args, "path") ?? ".");
-	const limit = numberField(args, "limit");
-	const limitSuffix = limit === undefined ? "" : ` (limit ${limit})`;
-	if (name === "grep") {
-		const pattern = stringField(args, "pattern") ?? "";
-		const glob = stringField(args, "glob");
-		return successResult(
-			theme,
-			`pattern: /${pattern}/ · path: ${scope}${glob ? ` · glob: ${glob}` : ""}${limitSuffix}`,
-		);
-	}
-	if (name === "find") {
-		return successResult(
-			theme,
-			`pattern: ${stringField(args, "pattern") ?? ""} · path: ${scope}${limitSuffix}`,
-		);
-	}
-	return successResult(theme, `path: ${scope}${limitSuffix}`);
-}
-
-function bashCall(args: Record<string, unknown>, theme: Theme): Text {
-	const command = stringField(args, "command") ?? "...";
-	const timeout = numberField(args, "timeout");
-	return successResult(theme, `command: ${command}${timeout === undefined ? "" : ` · timeout: ${timeout}s`}`);
 }
 
 function bashTruncationNotice(result: ResultLike): string | undefined {
@@ -318,6 +274,8 @@ function bashResult(
 	config: ToolOutputConfig,
 ): Text | Container {
 	const truncationNotice = bashTruncationNotice(result);
+	const { output, meta, notice } = TOOL_OUTPUT_COLORS.result;
+	const withNotice = (text: string) => (truncationNotice ? `${text}\n${paint(theme, notice, truncationNotice)}` : text);
 	if (isErrorResult(result, context)) {
 		return renderError(result, options, config, theme, "Command failed", truncationNotice);
 	}
@@ -330,26 +288,26 @@ function bashResult(
 			options,
 			config,
 			theme,
-			"dim",
+			output,
 			truncationNotice,
 		);
 	}
 	if (lines.length === 0) {
 		const command = stringField(context.args, "command");
-		const noOutput = theme.fg(
-			"muted",
+		const noOutput = paint(
+			theme,
+			meta,
 			isLikelyQuietCommand(command) ? "↳ command completed (no output)" : "↳ (no output)",
 		);
-		return textResult(truncationNotice ? `${noOutput}\n${theme.fg("warning", truncationNotice)}` : noOutput);
+		return textResult(withNotice(noOutput));
 	}
 	if (config.bashOutputMode === "summary" && !options.expanded) {
-		const summary = `${theme.fg("muted", `↳ ${lines.length} ${pluralize(lines.length, "line")} returned`)} ${theme.fg("muted", `· ${keyHint("app.tools.expand", "to expand")}`)}`;
-		return textResult(truncationNotice ? `${summary}\n${theme.fg("warning", truncationNotice)}` : summary);
+		const summary = `${paint(theme, meta, `↳ ${lines.length} ${pluralize(lines.length, "line")} returned`)} ${paint(theme, meta, `· ${keyHint("app.tools.expand", "to expand")}`)}`;
+		return textResult(withNotice(summary));
 	}
 	const collapsedLimit = config.bashOutputMode === "preview" ? config.previewLines : config.bashCollapsedLines;
 	if (!options.expanded && collapsedLimit === 0) {
-		const hidden = theme.fg("muted", "↳ output hidden");
-		return textResult(truncationNotice ? `${hidden}\n${theme.fg("warning", truncationNotice)}` : hidden);
+		return textResult(withNotice(paint(theme, meta, "↳ output hidden")));
 	}
 	return renderPreview(
 		lines,
@@ -357,7 +315,7 @@ function bashResult(
 		options,
 		config,
 		theme,
-		"dim",
+		output,
 		truncationNotice,
 	);
 }
@@ -370,7 +328,12 @@ function adapterCall(
 ): ReturnType<typeof toolCallBox> {
 	const name = stringField(tool, "name") ?? "tool";
 	const label = stringField(tool, "label");
-	return toolCallBox(displayToolName(name, label), successResult(theme, formatToolArguments(args)), theme, context);
+	return toolCallBox(
+		displayToolName(name, label),
+		callArgumentsComponent(name, args, context.expanded === true, theme),
+		theme,
+		context,
+	);
 }
 
 function isMcpTool(tool: RuntimeToolDefinition): boolean {
@@ -603,7 +566,7 @@ function registerBuiltinOverrides(pi: ExtensionAPI, config: ToolOutputConfig): v
 				return getBuiltinTools(ctx.cwd, ctx.isProjectTrusted()).read.execute(id, params, signal, onUpdate, ctx);
 			},
 			renderCall(args, theme, context) {
-				return toolCallBox(displayToolName("read"), readCall(args, theme), theme, context);
+				return adapterCall({ name: "read" }, args, theme, context);
 			},
 			renderResult(result, options, theme, context) {
 				return renderModeResult(
@@ -632,7 +595,7 @@ function registerBuiltinOverrides(pi: ExtensionAPI, config: ToolOutputConfig): v
 				return getBuiltinTools(ctx.cwd, ctx.isProjectTrusted()).grep.execute(id, params, signal, onUpdate, ctx);
 			},
 			renderCall(args, theme, context) {
-				return toolCallBox(displayToolName("grep"), searchCall("grep", args, theme), theme, context);
+				return adapterCall({ name: "grep" }, args, theme, context);
 			},
 			renderResult(result, options, theme, context) {
 				return renderModeResult(result, options, theme, context, config, config.searchOutputMode, (lines) =>
@@ -650,7 +613,7 @@ function registerBuiltinOverrides(pi: ExtensionAPI, config: ToolOutputConfig): v
 				return getBuiltinTools(ctx.cwd, ctx.isProjectTrusted()).find.execute(id, params, signal, onUpdate, ctx);
 			},
 			renderCall(args, theme, context) {
-				return toolCallBox(displayToolName("find"), searchCall("find", args, theme), theme, context);
+				return adapterCall({ name: "find" }, args, theme, context);
 			},
 			renderResult(result, options, theme, context) {
 				return renderModeResult(result, options, theme, context, config, config.searchOutputMode, (lines) =>
@@ -668,7 +631,7 @@ function registerBuiltinOverrides(pi: ExtensionAPI, config: ToolOutputConfig): v
 				return getBuiltinTools(ctx.cwd, ctx.isProjectTrusted()).ls.execute(id, params, signal, onUpdate, ctx);
 			},
 			renderCall(args, theme, context) {
-				return toolCallBox(displayToolName("ls"), searchCall("ls", args, theme), theme, context);
+				return adapterCall({ name: "ls" }, args, theme, context);
 			},
 			renderResult(result, options, theme, context) {
 				return renderModeResult(result, options, theme, context, config, config.searchOutputMode, (lines) =>
@@ -686,7 +649,7 @@ function registerBuiltinOverrides(pi: ExtensionAPI, config: ToolOutputConfig): v
 				return getBuiltinTools(ctx.cwd, ctx.isProjectTrusted()).bash.execute(id, params, signal, onUpdate, ctx);
 			},
 			renderCall(args, theme, context) {
-				return toolCallBox(displayToolName("bash"), bashCall(args, theme), theme, context);
+				return adapterCall({ name: "bash" }, args, theme, context);
 			},
 			renderResult(result, options, theme, context) {
 				return toolResultBox(bashResult(result, options, theme, context, config), theme, context);
