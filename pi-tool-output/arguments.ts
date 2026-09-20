@@ -8,6 +8,27 @@ export const CALL_LIMITS = {
 	expandedRows: 120,
 } as const;
 
+/**
+ * Generated stand-ins for content that is not shown, and the single source of
+ * truth for both writing and recognizing them.
+ *
+ * Renderers match these exactly, so a literal value that merely looks like a
+ * label — a `[abc]` character class, a `--flag=[x]` argument — keeps the plain
+ * value color.
+ */
+export const ARGUMENT_PLACEHOLDERS = {
+	accessor: "[accessor]",
+	argumentsUnavailable: "[arguments unavailable]",
+	circular: "[circular]",
+	depthLimit: "[depth limit]",
+	function: "[function]",
+	inlineScript: "<inline script>",
+	largeValue: "[large value]",
+	longArgument: "<long argument>",
+	symbol: "[symbol]",
+	unavailable: "[unavailable]",
+} as const;
+
 export interface ArgumentPreview {
 	text: string;
 	hidden: boolean;
@@ -25,7 +46,7 @@ export function shortArgument(text: string, maximum = CALL_LIMITS.inlineChars as
 
 function ownValue(object: object, key: string): unknown {
 	const descriptor = Object.getOwnPropertyDescriptor(object, key);
-	return descriptor ? ("value" in descriptor ? descriptor.value : "[accessor]") : undefined;
+	return descriptor ? ("value" in descriptor ? descriptor.value : ARGUMENT_PLACEHOLDERS.accessor) : undefined;
 }
 
 function* enumerableKeys(object: object): Generator<string> {
@@ -71,9 +92,9 @@ function serialize(value: unknown, maximum: number, pretty = false): ArgumentPre
 			append(JSON.stringify(cleanArgumentText(item.slice(0, remaining))));
 			if (item.length > remaining) hidden = stopped = true;
 		} else if (item === null || typeof item !== "object") {
-			append(typeof item === "function" ? "[function]" : typeof item === "symbol" ? "[symbol]" : typeof item === "bigint" ? `${item}n` : String(item));
+			append(typeof item === "function" ? ARGUMENT_PLACEHOLDERS.function : typeof item === "symbol" ? ARGUMENT_PLACEHOLDERS.symbol : typeof item === "bigint" ? `${item}n` : String(item));
 		} else if (parents.has(item) || depth >= (pretty ? 8 : 4)) {
-			append(parents.has(item) ? "[circular]" : "[depth limit]");
+			append(parents.has(item) ? ARGUMENT_PLACEHOLDERS.circular : ARGUMENT_PLACEHOLDERS.depthLimit);
 			hidden = true;
 		} else {
 			parents.add(item);
@@ -101,7 +122,7 @@ function serialize(value: unknown, maximum: number, pretty = false): ArgumentPre
 		visit(value, 0);
 	} catch {
 		hidden = true;
-		append("[unavailable]");
+		append(ARGUMENT_PLACEHOLDERS.unavailable);
 	}
 	return { text, hidden };
 }
@@ -112,6 +133,101 @@ function stringSize(value: string): string {
 	let lines = 1;
 	for (let index = 0; index < value.length; index++) if (value[index] === "\n") lines++;
 	return `${size} · ${lines} ${lines === 1 ? "line" : "lines"}`;
+}
+
+/**
+ * A run of preview text that renderers may color on its own.
+ *
+ * `measure` is a magnitude, `unit` its unit or noun (`KB`, `lines`, `array`),
+ * `separator` the ` · ` inside a descriptor, and `placeholder` a generated label
+ * standing in for content that is not shown. `text` is the value as written.
+ */
+export type ArgumentSpanKind = "text" | "measure" | "unit" | "separator" | "placeholder";
+
+export interface ArgumentSpan {
+	kind: ArgumentSpanKind;
+	text: string;
+}
+
+/**
+ * Descriptors this module generates, as whole-value patterns paired with the
+ * span kind of each capture group. The literal text between captures is
+ * recovered from the match itself, so a span list always rebuilds the original
+ * string regardless of where a descriptor places its separator.
+ */
+const DESCRIPTOR_PATTERNS: readonly { pattern: RegExp; kinds: readonly ArgumentSpanKind[] }[] = [
+	// `288 B · 1 line`
+	{ pattern: /^(\d+(?:\.\d+)?) (B|KB) · (\d+) (lines?)$/, kinds: ["measure", "unit", "measure", "unit"] },
+	// `array · 10000 items`
+	{ pattern: /^(array) · (\d+) (items?)$/, kinds: ["unit", "measure", "unit"] },
+	// `object · 100+ fields`
+	{ pattern: /^(object) · (\d+\+?) (fields?)$/, kinds: ["unit", "measure", "unit"] },
+];
+
+const PLACEHOLDER_LABEL = new RegExp(
+	Object.values(ARGUMENT_PLACEHOLDERS)
+		.slice()
+		.sort((left, right) => right.length - left.length)
+		.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+		.join("|"),
+	"g",
+);
+
+/**
+ * Captures as typed spans, with the literal text between them preserved. Text
+ * containing the descriptor separator becomes a `separator` span; a plain gap
+ * stays `text`.
+ */
+function descriptorSpans(match: RegExpMatchArray, kinds: readonly ArgumentSpanKind[]): ArgumentSpan[] {
+	const source = match[0];
+	const spans: ArgumentSpan[] = [];
+	let cursor = 0;
+	for (const [index, kind] of kinds.entries()) {
+		const capture = match[index + 1];
+		if (capture === undefined) continue;
+		const start = source.indexOf(capture, cursor);
+		if (start < 0) continue;
+		if (start > cursor) {
+			const between = source.slice(cursor, start);
+			spans.push({ kind: between.includes("·") ? "separator" : "text", text: between });
+		}
+		spans.push({ kind, text: capture });
+		cursor = start + capture.length;
+	}
+	if (cursor < source.length) {
+		const tail = source.slice(cursor);
+		spans.push({ kind: tail.includes("·") ? "separator" : "text", text: tail });
+	}
+	return spans;
+}
+
+function placeholderSpans(text: string): ArgumentSpan[] {
+	const spans: ArgumentSpan[] = [];
+	let cursor = 0;
+	for (const match of text.matchAll(PLACEHOLDER_LABEL)) {
+		if (match.index > cursor) spans.push({ kind: "text", text: text.slice(cursor, match.index) });
+		spans.push({ kind: "placeholder", text: match[0] });
+		cursor = match.index + match[0].length;
+	}
+	if (cursor < text.length) spans.push({ kind: "text", text: text.slice(cursor) });
+	return spans;
+}
+
+/**
+ * Split preview text into spans a renderer can color individually.
+ *
+ * A value that is entirely one generated descriptor splits into its measures,
+ * units, and separators. Any other text keeps its generated labels as
+ * `placeholder` spans and is otherwise a single `text` span, so literal values
+ * are never reinterpreted.
+ */
+export function argumentSpans(text: string): ArgumentSpan[] {
+	if (!text) return [];
+	for (const { pattern, kinds } of DESCRIPTOR_PATTERNS) {
+		const match = text.match(pattern);
+		if (match) return descriptorSpans(match, kinds);
+	}
+	return placeholderSpans(text);
 }
 
 function compactValue(value: unknown): ArgumentPreview {
@@ -128,7 +244,7 @@ function compactValue(value: unknown): ArgumentPreview {
 		const { keys, more } = keysUpTo(value, 100);
 		return { text: `object · ${keys.length}${more ? "+" : ""} fields`, hidden: true };
 	}
-	return { text: "[large value]", hidden: true };
+	return { text: ARGUMENT_PLACEHOLDERS.largeValue, hidden: true };
 }
 
 /** Consumed fields are omitted only when their value fits the semantic summary. */
@@ -146,7 +262,7 @@ export function compactArguments(args: unknown, consumed: readonly string[] = []
 		if (more) parts.push("… more arguments");
 		return { text: parts.join(" · ") || (keys.length ? "" : "(no arguments)"), hidden };
 	} catch {
-		return { text: "[arguments unavailable]", hidden: true };
+		return { text: ARGUMENT_PLACEHOLDERS.argumentsUnavailable, hidden: true };
 	}
 }
 
@@ -179,6 +295,6 @@ export function expandedArguments(args: unknown): ArgumentPreview {
 		}
 		return { text: text.slice(0, CALL_LIMITS.expandedChars) || "(no arguments)", hidden: hidden || text.length > CALL_LIMITS.expandedChars };
 	} catch {
-		return { text: "[arguments unavailable]", hidden: true };
+		return { text: ARGUMENT_PLACEHOLDERS.argumentsUnavailable, hidden: true };
 	}
 }

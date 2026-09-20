@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CALL_LIMITS, compactArguments, expandedArguments, formatToolArguments } from "./arguments.ts";
+import { ARGUMENT_PLACEHOLDERS, argumentSpans, CALL_LIMITS, compactArguments, expandedArguments, formatToolArguments } from "./arguments.ts";
 import { summarizeCommand, summarizeToolCall } from "./summaries.ts";
+
+/** `kind(text)` for tinted spans, bare text otherwise. */
+const spanSketch = (text) =>
+	argumentSpans(text).map((span) => (span.kind === "text" ? span.text : `${span.kind}(${span.text})`)).join("");
 
 test("oversized strings and multiline payloads become size/line descriptors", () => {
 	const script = "// private payload\n".repeat(500);
@@ -119,4 +123,36 @@ test("unknown/partial tool shapes use generic previews and large consumed fields
 	const preview = compactArguments(args, summary.fields);
 	assert.equal(preview.hidden, true);
 	assert.match(preview.text, /query: [\d.]+ KB/);
+});
+
+test("generated descriptors split into measure, unit and separator spans", () => {
+	assert.equal(spanSketch("288 B · 1 line"), "measure(288) unit(B)separator( · )measure(1) unit(line)");
+	assert.equal(spanSketch("11.7 KB · 1002 lines"), "measure(11.7) unit(KB)separator( · )measure(1002) unit(lines)");
+	// `array`/`object` lead their descriptor as a type word rather than a count.
+	assert.equal(spanSketch("array · 10000 items"), "unit(array)separator( · )measure(10000) unit(items)");
+	assert.equal(spanSketch("object · 100+ fields"), "unit(object)separator( · )measure(100+) unit(fields)");
+	// The spans reassemble into exactly the original text.
+	for (const text of ["288 B · 1 line", "array · 4 items", "object · 2 fields"]) {
+		assert.equal(argumentSpans(text).map((span) => span.text).join(""), text);
+	}
+});
+
+test("only generated placeholders are tinted, never lookalike literals", () => {
+	for (const label of Object.values(ARGUMENT_PLACEHOLDERS)) {
+		assert.equal(spanSketch(label), `placeholder(${label})`);
+	}
+	assert.equal(spanSketch("node -e <inline script>"), "node -e placeholder(<inline script>)");
+	// Literal values that merely resemble a label keep the plain value color.
+	for (const literal of ['["open","owned"]', "cmd --flag=[x]", "[Redacted]", "[A]", "<Foo>", "a · b", "288 B", "1 line", "12n", "2 questions · Which?"]) {
+		assert.equal(spanSketch(literal), literal);
+	}
+	assert.deepEqual(argumentSpans(""), []);
+});
+
+test("descriptor spans reach the renderer for real oversized arguments", () => {
+	const preview = compactArguments({ command: "x".repeat(288) });
+	assert.equal(preview.text, "command: 288 B · 1 line");
+	assert.equal(spanSketch("288 B · 1 line"), "measure(288) unit(B)separator( · )measure(1) unit(line)");
+	assert.equal(compactArguments({ items: Array(4).fill({ a: "x".repeat(200) }) }).text, "items: array · 4 items");
+	assert.equal(spanSketch("array · 4 items"), "unit(array)separator( · )measure(4) unit(items)");
 });

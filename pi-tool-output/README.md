@@ -9,7 +9,8 @@ The default presentation uses:
 - a dark `userMessageBg` ground;
 - a green `nf-fa-wrench` icon and display-name label in the border, matching
   the footer's git branch color (`success`);
-- a bold accent-colored semantic summary above the call arguments;
+- a bold semantic summary of each call — the path and range, search pattern and
+  scope, shell command sketch, subagent mode and declared lanes, or MCP target;
 - bounded accent-key / emphasized-value argument previews instead of walls of scripts or JSON;
 - dimmed result text, with errors kept red and truncation notices visible;
 - an 8-line collapsed preview for read, search, MCP, and known custom tools;
@@ -24,7 +25,9 @@ user keybinding override rather than hard-coding the key label.
 All calls owned by this extension use the same bounded argument renderer:
 
 - Short values (up to 160 characters) stay inline. Multiline or longer strings
-  become descriptors such as `workflowScript: 19 KB · 501 lines`.
+  become descriptors such as `workflowScript: 19 KB · 501 lines`, whose
+  magnitudes and units are tinted apart from the value — see
+  [Descriptor tinting](#descriptor-tinting).
 - Small arrays/objects stay inline; larger or deeply nested structures become
   item/field counts. The compact view considers at most eight argument fields.
 - The call body has at most one summary row, three wrapped argument rows, and
@@ -40,24 +43,83 @@ All calls owned by this extension use the same bounded argument renderer:
 - Compaction is presentation-only: execution inputs, saved calls, and model
   context are unchanged. Full inputs remain in the session transcript.
 
-Summaries recognize file paths/ranges, searches/scopes, shell commands, background
-commands, subagent modes/workflows and declared lanes, MCP targets, parallel tool
-names, and other known tool metadata. When a recognized summary contains explicit
-`key: value` fields, keys retain summary green while values use `emphasisText`;
-plain-language summaries remain green. Shell summaries preserve common chains and
-pipelines, respect quoted separators, and replace inline interpreter bodies and
-heredoc bodies with script labels. This is a bounded, best-effort display sketch,
-**not** a shell parser or a safety check. It never executes scripts or infers
-workflow lanes from embedded code.
-
 Unknown opted-in tools and unexpected/partial argument shapes use the generic
 compact preview. Existing tool-ownership rules still apply: this does not take
 ownership of every installed tool or replace preserved third-party renderers.
 
-Each tool family is summarized by its own exported function in `summaries.ts`
-(`summarizeRead`, `summarizeSearch`, `summarizeShell`, `summarizeSubagent`, and
-so on), selected by a flat name check in `summarize`. A new tool family is one
-summarizer plus one routing line, and each is unit-tested directly in
+### Call summaries
+
+The first row of a recognized call is a semantic summary: the one detail that
+identifies the call, drawn bold above the argument preview. A summarized field
+is dropped from the preview below it, so nothing is stated twice.
+
+| Tool | Arguments | Summary |
+|---|---|---|
+| `read` | `path`, `offset`, `limit` | `path: lib/box.ts:10-29` |
+| `grep` | `pattern`, `path`, `glob` | `pattern: /TODO/ · path: src · glob: *.ts` |
+| `find` | `pattern` | `pattern: *.ts · path: .` |
+| `ls` | — | `path: .` |
+| `bash` | `command` | `cd /tmp/repo && npm run check` |
+| `bg_run` | `name`, `command` | `Check build · npm test` |
+| `edit`, `write` | `path` | `path: a.ts` |
+| `web_search` | `query`, `intent` | `Pi docs · docs` |
+| `subagent` | `agent` | `agent: reviewer` |
+| `subagent` | `workflowScript`, `preflight`, `async` | `Scripted workflow · 2 declared lanes: inspect, test · async` |
+| `subagent` | `action`, `id` | `status · run-1` |
+| `mcp` | `server`, `tool` | `linear · search_issues` |
+| `mcpScript` | `code` | `MCP script` |
+| `multi_tool_use.parallel` | `tool_uses` | `2 parallel tools · functions.read, functions.grep` |
+| `fusion_*`, `bg_delegate` | `objective` or `name` | `Inspect bug` |
+| `bg_result`, `bg_status`, `bg_logs`, `bg_kill` | `taskId` | `task: task-1` |
+| `preview_export` | `format`, `path` | `PDF · plan.md` |
+| `ask_user_question` | `questions` | `2 questions · Which library?` |
+
+Summaries describe **declared metadata only**. An embedded task, prompt, or
+workflow script is labeled, never quoted: `workflowScript` becomes
+`Scripted workflow`, and lanes are counted from the explicit `preflight`
+manifest rather than inferred from code. Long values are clipped to 160
+characters each, and a whole summary to 480.
+
+A tool with no recognized shape gets no summary row and falls back to the
+generic compact preview, which is also what partial streaming arguments and
+unexpected scalar types produce.
+
+When a summary contains explicit `key: value` fields, keys keep the summary
+color while values use `summaryValue`; plain-language summaries are drawn in one
+color. See [Colors](#colors).
+
+#### Shell sketches
+
+`bash` and `bg_run` summaries are a display sketch of the command — **not** a
+shell parser, and not a safety or execution decision. The sketch preserves the
+shape of the command while removing what cannot be shown safely or usefully:
+
+| Command | Sketch |
+|---|---|
+| `git diff --stat \| head -20` | `git diff --stat \| head -20` |
+| `printf '%s' 'a;b && c'` | `printf '%s' 'a;b && c'` |
+| `CI=1 npm test` | `CI=… npm test` |
+| `node -e "console.log(42)"` | `node -e <inline script>` |
+| `python3 - <<'PY'…` | `python3 - · heredoc script` |
+| `a && b && c && d` | `a && b && c …` |
+
+Environment **values** are masked, inline interpreter bodies (`-c`/`-e`) and
+heredoc bodies are replaced with labels, quoted separators stay inside their
+word, and comments are dropped. Bounds: 4,096 characters read, 80 tokens, 3
+pipeline segments, 10 tokens per segment, 240 characters out. An unterminated
+quote is marked `…` rather than throwing.
+
+#### Adding a summarizer
+
+Each tool family has one exported function in `summaries.ts` — `summarizeRead`,
+`summarizeSearch`, `summarizeShell`, `summarizeSubagent`, `summarizeMcp`, and so
+on — selected by a flat name check in `summarize`. A new family is one function
+plus one routing line. A summarizer returns `undefined` when it has nothing
+useful to say, which degrades to the generic preview.
+
+The fields a summarizer names in its return value are the ones omitted from the
+argument preview, and they are only omitted when the value actually rendered, so
+an unexpected type stays visible. Every summarizer is unit-tested directly in
 `summaries.test.mjs`.
 
 ### Colors
@@ -71,8 +133,36 @@ Values are theme color names rather than hex codes, so the active theme resolves
 them and the palette follows theme switches. A color the stock themes do not
 define is written as a fallback chain in preference order, such as
 `["emphasisText", "accent"]`: `paint` tries each candidate and falls back to
-unstyled text, because `Theme.fg` throws on an unknown color name. Chains end in
-a stock color, which `colors.test.mjs` enforces.
+unstyled text, because `Theme.fg` throws on an unknown color name. Every chain
+ends in a color Pi's stock theme defines, which `colors.test.mjs` enforces by
+reading that theme from the live install rather than a retyped list.
+
+### Descriptor tinting
+
+A generated descriptor is not a plain value, so its parts are colored
+separately. `command: 288 B · 1 line` renders as four distinct tones:
+
+| Part | Palette entry | Stock theme |
+|---|---|---|
+| `command` | `argumentKey` | `accent` |
+| `288`, `1` | `valueMeasure` | `syntaxNumber` |
+| `B`, `line` | `valueUnit` | `syntaxType` |
+| the inner ` · ` | `valueSeparator` | `dim` |
+
+The `·` inside a descriptor is part of one value, not a field boundary, so it is
+tinted apart from the ` · ` that separates `key: value` pairs. The same treatment
+applies to `array · 10000 items` and `object · 100+ fields`.
+
+Generated stand-in labels — `[circular]`, `[large value]`, `<inline script>`,
+`<long argument>` — use `valuePlaceholder` to read as metadata rather than as
+content. They are listed in `ARGUMENT_PLACEHOLDERS`, which is both what writes
+them and what recognizes them, so a literal value that merely looks like one (a
+`[abc]` character class, `--flag=[x]`) keeps the ordinary value color.
+
+`argumentSpans` performs the split and returns typed spans
+(`measure`, `unit`, `separator`, `placeholder`, `text`); the renderer only maps
+span kinds to colors. Spans always rebuild the original string exactly, which
+`arguments.test.mjs` asserts.
 
 The richer `edit`/`write` diff renderer is deliberately not reimplemented here.
 Their ownership flags default to `false`, leaving those tools to

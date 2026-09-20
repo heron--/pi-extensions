@@ -71,6 +71,14 @@ export const TOOL_OUTPUT_COLORS = {
 		argumentKey: "accent",
 		/** Argument values. */
 		argumentValue: ["emphasisText", "accent"],
+		/** Magnitudes inside a generated descriptor: the `288` of `288 B · 1 line`. */
+		valueMeasure: "syntaxNumber",
+		/** Units and type words beside a magnitude: `B`, `KB`, `lines`, `array`. */
+		valueUnit: "syntaxType",
+		/** The ` · ` **inside** a descriptor, distinct from the field separator. */
+		valueSeparator: "dim",
+		/** Generated stand-in labels: `[circular]`, `<inline script>`. */
+		valuePlaceholder: "muted",
 		/** The "arguments capped" notice shown when an expanded preview hits its limit. */
 		capNotice: "warning",
 		/** The collapsed "… arguments · Ctrl+O to expand" hint. */

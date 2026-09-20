@@ -1,8 +1,21 @@
 import { keyHint, type Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
-import { CALL_LIMITS, compactArguments, expandedArguments } from "./arguments.ts";
+import { argumentSpans, CALL_LIMITS, compactArguments, expandedArguments, type ArgumentSpanKind } from "./arguments.ts";
 import { paint, TOOL_OUTPUT_COLORS, type ColorSpec } from "./colors.ts";
 import { summarizeToolCall } from "./summaries.ts";
+
+/**
+ * Spans within a value that carry their own color. A magnitude, its unit, the
+ * separator inside a descriptor, and generated stand-in labels are all tinted
+ * apart from the value tone, so `288 B · 1 line` reads as a measurement rather
+ * than as two unrelated fields.
+ */
+const SPAN_COLORS: Readonly<Record<Exclude<ArgumentSpanKind, "text">, ColorSpec>> = {
+	measure: TOOL_OUTPUT_COLORS.call.valueMeasure,
+	unit: TOOL_OUTPUT_COLORS.call.valueUnit,
+	separator: TOOL_OUTPUT_COLORS.call.valueSeparator,
+	placeholder: TOOL_OUTPUT_COLORS.call.valuePlaceholder,
+};
 
 /**
  * Call arguments deliberately do not share the dim result tone: accent labels and
@@ -15,11 +28,21 @@ interface KeyValueColors {
 	value: ColorSpec;
 }
 
+/** Paint a value, tinting recognized measure/unit/placeholder spans within it. */
+function paintValue(theme: Theme, value: ColorSpec, text: string): string {
+	const spans = argumentSpans(text);
+	if (spans.length === 1 && spans[0]!.kind === "text") return paint(theme, value, text);
+	return spans
+		.map((span) => paint(theme, span.kind === "text" ? value : SPAN_COLORS[span.kind], span.text))
+		.join("");
+}
+
 /** Paint a bounded `key: value · key: value` display row without reparsing tool input. */
 function paintKeyValueLine(line: string, theme: Theme, colors: KeyValueColors): string {
 	const matches = [...line.matchAll(/(^| · )(?:(?:"([^"]+)")|([A-Za-z_$][\w$.-]*)):\s*/g)];
 	const plain = (text: string) => paint(theme, colors.plain, text);
-	if (matches.length === 0) return plain(line);
+	// A row with no fields is still prose that can carry generated labels.
+	if (matches.length === 0) return paintValue(theme, colors.plain, line);
 	let cursor = 0;
 	let painted = "";
 	for (let index = 0; index < matches.length; index++) {
@@ -32,7 +55,7 @@ function paintKeyValueLine(line: string, theme: Theme, colors: KeyValueColors): 
 		painted += plain(line.slice(cursor, keyStart));
 		painted += paint(theme, colors.key, key);
 		painted += plain(line.slice(keyStart + key.length, valueStart));
-		painted += paint(theme, colors.value, line.slice(valueStart, nextStart));
+		painted += paintValue(theme, colors.value, line.slice(valueStart, nextStart));
 		cursor = nextStart;
 	}
 	return painted + plain(line.slice(cursor));

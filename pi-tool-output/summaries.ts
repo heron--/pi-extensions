@@ -9,7 +9,7 @@
  * caller falls back to the generic argument preview.
  */
 
-import { shortArgument } from "./arguments.ts";
+import { ARGUMENT_PLACEHOLDERS, shortArgument } from "./arguments.ts";
 import { shortenPath } from "./rendering.ts";
 
 export interface CallSummary {
@@ -134,11 +134,11 @@ function sketchSegment(tokens: readonly string[]): string {
 	const program = parts[executable]?.split("/").at(-1) ?? "";
 	if (INTERPRETER.test(program)) {
 		const flag = parts.findIndex((token, index) => index > executable && INLINE_SCRIPT_FLAG.test(token));
-		if (flag >= 0 && parts[flag + 1]) parts[flag + 1] = "<inline script>";
+		if (flag >= 0 && parts[flag + 1]) parts[flag + 1] = ARGUMENT_PLACEHOLDERS.inlineScript;
 	}
 	const shown = parts
 		.slice(0, COMMAND_LIMITS.segmentTokens)
-		.map((token) => token.length > COMMAND_LIMITS.tokenChars ? "<long argument>" : token)
+		.map((token) => token.length > COMMAND_LIMITS.tokenChars ? ARGUMENT_PLACEHOLDERS.longArgument : token)
 		.join(" ");
 	return shown + (parts.length > COMMAND_LIMITS.segmentTokens ? " …" : "");
 }
