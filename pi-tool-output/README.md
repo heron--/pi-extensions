@@ -149,6 +149,18 @@ separately. `command: 288 B · 1 line` renders as four distinct tones:
 | `B`, `line` | `valueUnit` | `syntaxType` |
 | the inner ` · ` | `valueSeparator` | `dim` |
 
+### Expanded multi-line values
+
+Expanding a call with a multi-line value — a script, a prompt, a nested tree —
+keeps **every** line in the call's tone (`argumentBody`), not just the first, so
+an expanded command stays visually distinct from the dimmed result below it.
+
+Which lines continue a value is reported by `expandedArguments` as `fieldLines`,
+the indices of lines that begin a top-level field. The renderer parses `key:`
+structure only on those lines. Field boundaries are therefore positional facts
+from the generator, so a body line that happens to read `limit: 99` stays body
+text instead of being repainted as a field.
+
 The `·` inside a descriptor is part of one value, not a field boundary, so it is
 tinted apart from the ` · ` that separates `key: value` pairs. The same treatment
 applies to `array · 10000 items` and `object · 100+ fields`.

@@ -52,6 +52,7 @@ test("expanded arguments preserve string layout and disclose caps", () => {
 	const payload = "first line\n  second line";
 	assert.deepEqual(expandedArguments({ code: payload, nested: { enabled: true } }), {
 		text: 'code: first line\n  second line\nnested: {\n  "enabled": true\n}', hidden: false,
+		fieldLines: [0, 2],
 	});
 	for (const args of [{ code: "x".repeat(1_000_000) }, { items: Array(100_000).fill({ x: "value" }) }]) {
 		const preview = expandedArguments(args);
@@ -155,4 +156,45 @@ test("descriptor spans reach the renderer for real oversized arguments", () => {
 	assert.equal(spanSketch("288 B · 1 line"), "measure(288) unit(B)separator( · )measure(1) unit(line)");
 	assert.equal(compactArguments({ items: Array(4).fill({ a: "x".repeat(200) }) }).text, "items: array · 4 items");
 	assert.equal(spanSketch("array · 4 items"), "unit(array)separator( · )measure(4) unit(items)");
+});
+
+test("expanded arguments report which lines begin a field", () => {
+	const script = "import os\nprint('hello')";
+	const preview = expandedArguments({ code: script, limit: 5 });
+	assert.equal(preview.text, "code: import os\nprint('hello')\nlimit: 5");
+	// Line 1 continues `code`; line 2 starts `limit`.
+	assert.deepEqual(preview.fieldLines, [0, 2]);
+
+	// A body line that mimics `key: value` is still a continuation, by position.
+	const spoof = expandedArguments({ command: "path: /etc/passwd\nlimit: 99", timeout: 5 });
+	assert.deepEqual(spoof.fieldLines, [0, 2]);
+
+	// Pretty-printed trees count their own line breaks.
+	const nested = expandedArguments({ nested: { enabled: true }, after: 1 });
+	assert.equal(nested.text, 'nested: {\n  "enabled": true\n}\nafter: 1');
+	assert.deepEqual(nested.fieldLines, [0, 3]);
+
+	assert.deepEqual(expandedArguments({}).fieldLines, [0]);
+	// A lone value has no field structure, so every line continues it.
+	assert.deepEqual(expandedArguments("text").fieldLines, []);
+	const proxy = new Proxy({}, { ownKeys() { throw new Error("no access"); } });
+	assert.deepEqual(expandedArguments(proxy).fieldLines, [0]);
+});
+
+test("field line indices stay aligned with the rendered text", () => {
+	for (const args of [
+		{ a: "1\n2\n3", b: "x", c: { d: [1, 2] } },
+		{ only: "no newlines" },
+		{ first: "a", second: "b\nc", third: "d\ne\nf" },
+	]) {
+		const { text, fieldLines } = expandedArguments(args);
+		const lines = text.split("\n");
+		for (const [index, key] of Object.keys(args).entries()) {
+			const at = fieldLines[index];
+			assert.ok(at !== undefined, `missing field line for ${key}`);
+			assert.ok(lines[at].startsWith(`${key}: `), `line ${at} should start field ${key}, got ${lines[at]}`);
+		}
+		// Every non-field line is a continuation of the field above it.
+		assert.equal(fieldLines.length, Object.keys(args).length);
+	}
 });

@@ -1,6 +1,6 @@
 import { keyHint, type Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
-import { argumentSpans, CALL_LIMITS, compactArguments, expandedArguments, type ArgumentSpanKind } from "./arguments.ts";
+import { argumentSpans, CALL_LIMITS, compactArguments, expandedArguments, type ArgumentPreview, type ArgumentSpanKind } from "./arguments.ts";
 import { paint, TOOL_OUTPUT_COLORS, type ColorSpec } from "./colors.ts";
 import { summarizeToolCall } from "./summaries.ts";
 
@@ -61,11 +61,23 @@ function paintKeyValueLine(line: string, theme: Theme, colors: KeyValueColors): 
 	return painted + plain(line.slice(cursor));
 }
 
-function paintArguments(text: string, theme: Theme): string {
-	const { argumentPlain, argumentKey, argumentValue } = TOOL_OUTPUT_COLORS.call;
-	return text
+/**
+ * Paint the argument preview line by line. A line that continues the previous
+ * field's value is painted as value text instead of being parsed for `key:`
+ * fields, so a script body keeps the call's tone and cannot be read as output.
+ */
+function paintArguments(preview: ArgumentPreview, theme: Theme, expanded: boolean): string {
+	const { argumentPlain, argumentKey, argumentValue, argumentBody } = TOOL_OUTPUT_COLORS.call;
+	const fieldLines = preview.fieldLines && new Set(preview.fieldLines);
+	return preview.text
+		.replace(/\t/g, "    ")
 		.split("\n")
-		.map((line) => paintKeyValueLine(line, theme, { plain: argumentPlain, key: argumentKey, value: argumentValue }))
+		.map((line, index) => {
+			if (expanded && fieldLines && !fieldLines.has(index)) {
+				return paintValue(theme, argumentBody, line);
+			}
+			return paintKeyValueLine(line, theme, { plain: argumentPlain, key: argumentKey, value: argumentValue });
+		})
 		.join("\n");
 }
 
@@ -86,7 +98,7 @@ export function callArgumentsComponent(name: string, args: unknown, expanded: bo
 			const rows: string[] = [];
 			if (summary) rows.push(theme.bold(paintSummary(truncateToWidth(summary.text, w, "…"), theme)));
 			const limit = expanded ? CALL_LIMITS.expandedRows : CALL_LIMITS.collapsedRows;
-			const wrapped = preview.text ? wrapTextWithAnsi(paintArguments(preview.text.replace(/\t/g, "    "), theme), w) : [];
+			const wrapped = preview.text ? wrapTextWithAnsi(paintArguments(preview, theme, expanded), w) : [];
 			rows.push(...wrapped.slice(0, limit).map((row) => truncateToWidth(row, w, "…")));
 			const hidden = preview.hidden || wrapped.length > limit;
 			if (expanded && hidden) {

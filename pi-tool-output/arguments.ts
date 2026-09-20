@@ -32,6 +32,19 @@ export const ARGUMENT_PLACEHOLDERS = {
 export interface ArgumentPreview {
 	text: string;
 	hidden: boolean;
+	/**
+	 * Indices of lines in `text` that begin a new top-level field. Every other
+	 * line continues the previous field's value — a script body, a prompt, or a
+	 * pretty-printed tree — and renderers color it as value text rather than as
+	 * `key: value` structure. Absent when every line is a field line.
+	 */
+	fieldLines?: number[];
+}
+
+function countLineBreaks(value: string): number {
+	let breaks = 0;
+	for (let index = 0; index < value.length; index++) if (value[index] === "\n") breaks++;
+	return breaks;
 }
 
 /** Terminal data is never allowed to supply styles or cursor/control commands. */
@@ -130,8 +143,7 @@ function serialize(value: unknown, maximum: number, pretty = false): ArgumentPre
 function stringSize(value: string): string {
 	const bytes = Buffer.byteLength(value, "utf8");
 	const size = bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1).replace(/\.0$/, "")} KB`;
-	let lines = 1;
-	for (let index = 0; index < value.length; index++) if (value[index] === "\n") lines++;
+	const lines = countLineBreaks(value) + 1;
 	return `${size} · ${lines} ${lines === 1 ? "line" : "lines"}`;
 }
 
@@ -274,10 +286,13 @@ export function formatToolArguments(args: unknown): string {
 export function expandedArguments(args: unknown): ArgumentPreview {
 	try {
 		if (!args || typeof args !== "object" || Array.isArray(args)) {
-			return serialize(args, CALL_LIMITS.expandedChars, true);
+			// A lone value has no field structure; every line continues it.
+			return { ...serialize(args, CALL_LIMITS.expandedChars, true), fieldLines: [] };
 		}
 		const { keys, more } = keysUpTo(args, 100);
+		const fieldLines: number[] = [];
 		let text = "";
+		let line = 0;
 		let hidden = more;
 		for (const key of keys) {
 			if (text.length >= CALL_LIMITS.expandedChars) {
@@ -290,11 +305,22 @@ export function expandedArguments(args: unknown): ArgumentPreview {
 			const preview = typeof value === "string"
 				? { text: cleanArgumentText(value.slice(0, budget)), hidden: value.length > budget }
 				: serialize(value, budget, true);
-			text += `${text ? "\n" : ""}${label}${preview.text}`;
+			if (text) {
+				text += "\n";
+				line++;
+			}
+			const field = `${label}${preview.text}`;
+			fieldLines.push(line);
+			text += field;
+			line += countLineBreaks(field);
 			hidden ||= preview.hidden || key.length > CALL_LIMITS.inlineChars;
 		}
-		return { text: text.slice(0, CALL_LIMITS.expandedChars) || "(no arguments)", hidden: hidden || text.length > CALL_LIMITS.expandedChars };
+		return {
+			text: text.slice(0, CALL_LIMITS.expandedChars) || "(no arguments)",
+			hidden: hidden || text.length > CALL_LIMITS.expandedChars,
+			fieldLines: text ? fieldLines : [0],
+		};
 	} catch {
-		return { text: ARGUMENT_PLACEHOLDERS.argumentsUnavailable, hidden: true };
+		return { text: ARGUMENT_PLACEHOLDERS.argumentsUnavailable, hidden: true, fieldLines: [0] };
 	}
 }

@@ -315,6 +315,26 @@ void (async () => {
 	assert.ok(tones.some(([color, text]) => color === "emphasisText" && text === "not-a-number"));
 	assert.ok(tones.some(([color]) => color === "success")); // Frame and summary keys stay green.
 
+	// An expanded multi-line value keeps the call's tone on every line, so a
+	// script body is never rendered in the dimmed tone used for results.
+	tones.length = 0;
+	const scriptBody = "import os\nprint('hello')\n    indented";
+	tools
+		.get("bash")
+		.renderCall({ command: scriptBody }, coloredTheme, { ...context, state: {}, expanded: true })
+		.render(100);
+	for (const line of ["print('hello')", "    indented"]) {
+		const painted = tones.filter(([, text]) => text === line);
+		assert.ok(painted.length > 0, `expanded body line not rendered: ${line}`);
+		assert.ok(
+			painted.every(([color]) => color === "emphasisText"),
+			`expanded body line ${JSON.stringify(line)} used ${painted.map(([color]) => color).join("/")}`,
+		);
+	}
+	assert.ok(!tones.some(([color, text]) => color === "muted" && text.includes("print('hello')")));
+	// Numeric-looking body lines are not mistaken for descriptor measures.
+	assert.ok(!tones.some(([color]) => color === "syntaxNumber"));
+
 	const actualTool = new codingAgent.ToolExecutionComponent(
 		"subagent", "large-call", { workflowScript: largeScript, async: true },
 		{ showImages: false }, { name: "subagent" }, { requestRender() {} }, process.cwd(),

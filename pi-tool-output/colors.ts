@@ -71,6 +71,12 @@ export const TOOL_OUTPUT_COLORS = {
 		argumentKey: "accent",
 		/** Argument values. */
 		argumentValue: ["emphasisText", "accent"],
+		/**
+		 * Continuation lines of a multi-line value — a script body, a prompt, or a
+		 * pretty-printed tree — shown expanded. These stay in the call's tone so an
+		 * expanded command is never mistaken for dimmed result output.
+		 */
+		argumentBody: ["emphasisText", "accent"],
 		/** Magnitudes inside a generated descriptor: the `288` of `288 B · 1 line`. */
 		valueMeasure: "syntaxNumber",
 		/** Units and type words beside a magnitude: `B`, `KB`, `lines`, `array`. */
