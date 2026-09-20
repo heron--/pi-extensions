@@ -30,6 +30,10 @@ All calls owned by this extension use the same bounded argument renderer:
   [Descriptor tinting](#descriptor-tinting).
 - Small arrays/objects stay inline; larger or deeply nested structures become
   item/field counts. The compact view considers at most eight argument fields.
+- A field a summary stands in for — a sketched `command`, a labeled
+  `workflowScript`, `mcpScript`'s `code` — never returns to the compact preview
+  as its original value. When it is long or multi-line it still surfaces as a
+  size descriptor; Ctrl+O reveals the original in full.
 - The call body has at most one summary row, three wrapped argument rows, and
   one expansion hint. Limits apply **after wrapping**, including narrow terminals.
 - Argument keys use the theme's `accent` color (the `identity` teal in the
@@ -100,14 +104,20 @@ shape of the command while removing what cannot be shown safely or usefully:
 | `printf '%s' 'a;b && c'` | `printf '%s' 'a;b && c'` |
 | `CI=1 npm test` | `CI=… npm test` |
 | `node -e "console.log(42)"` | `node -e <inline script>` |
+| `env -i python -c "…"` | `env -i python -c <inline script>` |
+| `/usr/bin/env node -e "…"` | `/usr/bin/env node -e <inline script>` |
 | `python3 - <<'PY'…` | `python3 - · heredoc script` |
 | `a && b && c && d` | `a && b && c …` |
 
 Environment **values** are masked, inline interpreter bodies (`-c`/`-e`) and
-heredoc bodies are replaced with labels, quoted separators stay inside their
-word, and comments are dropped. Bounds: 4,096 characters read, 80 tokens, 3
-pipeline segments, 10 tokens per segment, 240 characters out. An unterminated
-quote is marked `…` rather than throwing.
+heredoc bodies are replaced with labels — including through an `env` wrapper,
+whose own options and assignments (`env -i`, `env -u NAME`, `/usr/bin/env`)
+are skipped when locating the interpreter — quoted separators stay inside
+their word, and comments are dropped. A sketched command is consumed: the
+original never appears beside its sketch in the compact preview. Bounds:
+4,096 characters read, 80 tokens, 3 pipeline segments, 10 tokens per
+segment, 240 characters out. An unterminated quote is marked `…` rather than
+throwing.
 
 #### Adding a summarizer
 

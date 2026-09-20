@@ -55,6 +55,8 @@ const ASSIGNMENT = /^[A-Za-z_][\w]*=/;
 const INTERPRETER = /^(?:python[\d.]*|node|ruby|perl|[bz]?sh|zsh)$/;
 /** An inline-script flag such as `-c`, `-e`, or `-ec`. */
 const INLINE_SCRIPT_FLAG = /^-[a-z]*[ce]$/;
+/** An `env`-wrapper option that consumes the next token, e.g. `-u NAME`. */
+const ENV_OPTION_WITH_VALUE = /^(?:-[uS]|--(?:unset|split-string))$/;
 /** A command separator token. The empty alternative tolerates blank tokens. */
 const SEPARATOR = /^(?:;|\|\|?|&&?|)$/;
 /** A trailing separator, which is dropped from the finished sketch. */
@@ -124,13 +126,34 @@ function tokenizeCommand(source: string): TokenizedCommand {
 }
 
 /**
+ * Index of the executable a segment runs: past leading assignments, and past
+ * an `env` wrapper's own options and assignments, so `env -i node` resolves to
+ * `node` and its inline body is still recognized and masked.
+ */
+function findExecutable(parts: readonly string[]): number {
+	let index = 0;
+	while (index < parts.length && ASSIGNMENT.test(parts[index]!)) index++;
+	if (index >= parts.length || parts[index]!.split("/").at(-1) !== "env") return index;
+	index++;
+	while (index < parts.length) {
+		const token = parts[index]!;
+		if (ENV_OPTION_WITH_VALUE.test(token)) index += 2;
+		else if (token === "--") return index + 1;
+		else if (token !== "-" && token.startsWith("-")) index++;
+		else if (ASSIGNMENT.test(token)) index++;
+		else break;
+	}
+	return index;
+}
+
+/**
  * Render one pipeline segment: mask environment values, replace an inline
  * interpreter body with a label, and bound both token count and token length.
  */
 function sketchSegment(tokens: readonly string[]): string {
 	// Environment values and interpreter inline bodies obscure the useful command.
 	const parts = tokens.map((token) => ASSIGNMENT.test(token) ? `${token.split("=", 1)[0]}=…` : token);
-	const executable = parts.findIndex((token) => !ASSIGNMENT.test(token) && token !== "env");
+	const executable = findExecutable(parts);
 	const program = parts[executable]?.split("/").at(-1) ?? "";
 	if (INTERPRETER.test(program)) {
 		const flag = parts.findIndex((token, index) => index > executable && INLINE_SCRIPT_FLAG.test(token));
@@ -213,9 +236,10 @@ export function summarizeShell(args: Args): CallSummary | undefined {
 	if (typeof args.command !== "string") return undefined;
 	const command = summarizeCommand(args.command);
 	const label = str(args, "name");
-	// Only consume a short, unchanged command; scripts always retain a descriptor/hint.
-	const fields = command === args.command ? ["command"] : [];
-	return summary(`${label ? `${label} · ` : ""}${command}`, ...fields, "name");
+	// The sketch stands in for `command`, so the original never reappears beside
+	// it in the compact preview; a long or multi-line command still surfaces
+	// there as a size descriptor, and expansion shows it in full.
+	return summary(`${label ? `${label} · ` : ""}${command}`, "command", "name");
 }
 
 /** `edit` / `write` — the target path only; never the payload. */
@@ -254,16 +278,21 @@ export function summarizeSubagent(args: Args): CallSummary | undefined {
 	}
 	const workflow = str(args, "workflow");
 	const agent = str(args, "agent");
+	const script = args.workflowScript ? "Scripted workflow" : "";
+	const scriptPath = args.workflowScriptPath ? `workflow: ${str(args, "workflowScriptPath")}` : "";
 	const mode = workflow ? `workflow: ${workflow}`
 		: agent ? `agent: ${agent}`
-		: args.workflowScript ? "Scripted workflow"
-		: args.workflowScriptPath ? `workflow: ${str(args, "workflowScriptPath")}`
-		: "";
+		: script || scriptPath;
 	if (!mode) return undefined;
 	const flags = `${args.async === true ? " · async" : ""}${args.worktree === true ? " · worktree" : ""}`;
 	return summary(
 		`${mode}${laneSummary(args)}${flags}`,
-		"workflow", "agent", "workflowScriptPath",
+		// Each mode consumes only the field it rendered, so a labeled script's
+		// value never returns to the compact preview — only its size, when long.
+		...(workflow ? ["workflow"] : []),
+		...(agent ? ["agent"] : []),
+		...(script ? ["workflowScript"] : []),
+		...(scriptPath ? ["workflowScriptPath"] : []),
 		...(args.async === true ? ["async"] : []),
 		...(args.worktree === true ? ["worktree"] : []),
 	);
@@ -336,7 +365,7 @@ function summarize(name: string, args: Args): CallSummary | undefined {
 	if (name === "web_search") return summarizeWebSearch(args);
 	if (name === "subagent") return summarizeSubagent(args);
 	if (name === "mcp" || name === "datadog" || name.startsWith("mcp__")) return summarizeMcp(args);
-	if (name === "mcpScript") return typeof args.code === "string" ? summary("MCP script") : undefined;
+	if (name === "mcpScript") return typeof args.code === "string" ? summary("MCP script", "code") : undefined;
 	if (name === "multi_tool_use.parallel") return summarizeParallelTools(args);
 	if (name.startsWith("fusion_") || name === "bg_delegate" || name === "bg_run_pi_attested") {
 		return summarizeNamedTask(args);

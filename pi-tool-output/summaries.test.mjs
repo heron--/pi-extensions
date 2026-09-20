@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import test from "node:test";
+import { compactArguments } from "./arguments.ts";
 import {
 	summarizeAskUserQuestion,
 	summarizeBackgroundTask,
@@ -45,14 +46,15 @@ test("summarizeLs always reports a directory", () => {
 	assert.equal(summarizeLs({}).text, "path: .");
 });
 
-test("summarizeShell sketches the command and consumes it only when unchanged", () => {
+test("summarizeShell sketches the command, which always stands in for it", () => {
 	assert.deepEqual(summarizeShell({ command: "npm test" }), {
 		text: "npm test",
 		fields: ["command", "name"],
 	});
 	assert.equal(summarizeShell({ command: "ls", name: "List" }).text, "List · ls");
-	// A rewritten sketch keeps `command` visible in the generic preview.
-	assert.deepEqual(summarizeShell({ command: "python3 -c 'x'" }).fields, ["name"]);
+	// A rewritten sketch consumes the command too: the original — including
+	// anything the sketch masked — must not return via the generic preview.
+	assert.deepEqual(summarizeShell({ command: "python3 -c 'x'" }).fields, ["command", "name"]);
 	assert.equal(summarizeShell({ command: 42 }), undefined);
 	assert.equal(summarizeShell({}), undefined);
 });
@@ -73,9 +75,13 @@ test("summarizeSubagent prefers an action, then a dispatch mode, and labels scri
 	assert.equal(summarizeSubagent({ action: "status", id: "run-1", topic: "t" }).text, "status · run-1 · t");
 	assert.equal(summarizeSubagent({ action: "status" }).text, "status");
 	assert.equal(summarizeSubagent({ workflow: "review" }).text, "workflow: review");
+	assert.deepEqual(summarizeSubagent({ workflow: "review" }).fields, ["workflow"]);
 	assert.equal(summarizeSubagent({ agent: "reviewer", task: "private" }).text, "agent: reviewer");
+	assert.deepEqual(summarizeSubagent({ agent: "reviewer" }).fields, ["agent"]);
 	assert.equal(summarizeSubagent({ workflowScript: "private ".repeat(100) }).text, "Scripted workflow");
+	assert.deepEqual(summarizeSubagent({ workflowScript: "private" }).fields, ["workflowScript"]);
 	assert.equal(summarizeSubagent({ workflowScriptPath: "p.js" }).text, "workflow: p.js");
+	assert.deepEqual(summarizeSubagent({ workflowScriptPath: "p.js" }).fields, ["workflowScriptPath"]);
 	assert.equal(summarizeSubagent({}), undefined);
 });
 
@@ -155,9 +161,42 @@ test("summarizeCommand keeps chains and pipelines within bounds", () => {
 test("summarizeCommand masks environment values and inline interpreter bodies", () => {
 	assert.equal(summarizeCommand("CI=1 npm test"), "CI=… npm test");
 	assert.equal(summarizeCommand("env FOO=secret node -e 'body'"), "env FOO=… node -e <inline script>");
+	// An `env` wrapper hides the interpreter behind its own options and
+	// assignments; the executable is still found and its body still masked.
+	assert.equal(summarizeCommand("env -i node -e 'body'"), "env -i node -e <inline script>");
+	assert.equal(summarizeCommand("/usr/bin/env python -c 'y'"), "/usr/bin/env python -c <inline script>");
+	assert.equal(
+		summarizeCommand("env -u CI FOO=1 python3 -c 'y'"),
+		"env -u CI FOO=… python3 -c <inline script>",
+	);
 	assert.equal(summarizeCommand('node -e "console.log(42)"'), "node -e <inline script>");
 	assert.equal(summarizeCommand("/usr/bin/python3.11 -c 'y'"), "/usr/bin/python3.11 -c <inline script>");
+	assert.doesNotMatch(summarizeCommand(`env -i node -e '${"sensitive".repeat(2000)}'`), /sensitive/);
 	assert.doesNotMatch(summarizeCommand(`python3 -c '${"sensitive".repeat(2000)}'`), /sensitive/);
+});
+
+test("masked shell commands and labeled scripts never resurface in the compact preview", () => {
+	// The compact view is the summary row plus the generic preview; neither may
+	// carry content the sketch or label stood in for.
+	const rows = (name, args) => {
+		const summary = summarizeToolCall(name, args);
+		assert.ok(summary, `${name} has a summary`);
+		return `${summary.text}\n${compactArguments(args, summary.fields).text}`;
+	};
+	assert.doesNotMatch(rows("bash", { command: "node -e 'SECRET'" }), /SECRET/);
+	assert.doesNotMatch(rows("bash", { command: "CI=SECRET npm test" }), /SECRET/);
+	assert.doesNotMatch(rows("bash", { command: "env -i node -e 'SECRET'" }), /SECRET/);
+	assert.doesNotMatch(rows("bg_run", { command: "/usr/bin/env python -c 'SECRET'" }), /SECRET/);
+	assert.doesNotMatch(rows("subagent", { workflowScript: "deploy SECRET" }), /SECRET/);
+	assert.doesNotMatch(rows("mcpScript", { code: "tools.call('SECRET')" }), /SECRET/);
+	// A long or multi-line command still surfaces a size descriptor, whose
+	// contents stay masked; expansion is what reveals them in full.
+	const script = "python3 - <<'PY'\nSECRET\nPY";
+	assert.match(rows("bash", { command: script }), /command: \d+ B · 3 lines/);
+	assert.doesNotMatch(rows("bash", { command: script }), /SECRET/);
+	const long = `deploy\n${"SECRET".repeat(100)}`;
+	assert.match(rows("subagent", { workflowScript: long }), /workflowScript: \d+ B · 2 lines/);
+	assert.doesNotMatch(rows("subagent", { workflowScript: long }), /SECRET/);
 });
 
 test("summarizeCommand respects quoting and never reads a heredoc body", () => {
