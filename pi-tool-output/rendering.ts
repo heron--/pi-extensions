@@ -102,22 +102,7 @@ export function isKnownToolName(name: string): boolean {
 	return name in TOOL_DISPLAY_NAMES || name.startsWith("mcp__");
 }
 
-function formatArgumentValue(value: unknown): string {
-	if (typeof value === "string") return value.replace(/\s+/g, " ").trim() || '""';
-	if (value === undefined) return "undefined";
-	try {
-		return JSON.stringify(value);
-	} catch {
-		return String(value);
-	}
-}
-
-export function formatToolArguments(args: unknown): string {
-	if (typeof args !== "object" || args === null || Array.isArray(args)) return formatArgumentValue(args);
-	const entries = Object.entries(args as Record<string, unknown>);
-	if (entries.length === 0) return "(no arguments)";
-	return entries.map(([name, value]) => `${name}: ${formatArgumentValue(value)}`).join(" · ");
-}
+export { formatToolArguments } from "./arguments.ts";
 
 export function extractTextOutput(result: ToolResultLike): string {
 	if (!Array.isArray(result.content)) return "";

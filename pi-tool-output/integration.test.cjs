@@ -276,6 +276,90 @@ void (async () => {
 	};
 	const options = { expanded: false, isPartial: false };
 
+	// Every owned call route gets the same physical-row limits and expansion state.
+	const largeScript = "console.log('ARGUMENT_BODY_MARKER');\n".repeat(1000);
+	const argumentFixtures = [
+		["bash", { command: `python3 - <<'PY'\n${largeScript}PY` }],
+		["read", { path: "file/".repeat(1000), offset: 1, limit: 20 }],
+		["grep", { pattern: "pattern".repeat(1000), path: "." }],
+		["find", { pattern: "*".repeat(1000) }],
+		["ls", { path: "dir/".repeat(1000) }],
+		["subagent", { workflowScript: largeScript, async: true }],
+		["mcp", { tool: "search", args: { nested: Array(1000).fill({ data: largeScript }) } }],
+		["late_generic", { text: largeScript, items: Array(10_000).fill("value") }],
+		["web_search", { query: "界🙂".repeat(1000) }],
+	];
+	for (const [name, args] of argumentFixtures) {
+		const renderer = tools.get(name)?.renderCall ?? toolExecutionPrototype.getCallRenderer.call({ toolName: name, toolDefinition: { name } });
+		for (const expanded of [false, true]) {
+			const component = renderer(args, theme, { ...context, args, state: {}, expanded });
+			for (const width of [1, 2, 8, 12, 22, 26, 40, 60, 100, 200]) {
+				const rows = component.render(width);
+				assert.ok(rows.length <= (expanded ? 124 : 7), `${name}: ${rows.length} rows at ${width}`);
+				for (const row of rows) assert.ok(piTui.visibleWidth(row) <= width, `${name}: over-wide row at ${width}`);
+				if (!expanded) assert.doesNotMatch(rows.join("\n"), /ARGUMENT_BODY_MARKER/);
+			}
+		}
+	}
+	const tones = [];
+	const coloredTheme = { ...theme, fg(color, text) { tones.push([color, text]); return text; } };
+	tools.get("bash").renderCall({ command: "npm run check" }, coloredTheme, { ...context, state: {} }).render(100);
+	assert.ok(tones.some(([color, text]) => color === "success" && text === "npm run check"));
+	tones.length = 0;
+	tools.get("read").renderCall({ path: "file.ts" }, coloredTheme, { ...context, state: {} }).render(100);
+	assert.ok(tones.some(([color, text]) => color === "success" && text === "path"));
+	assert.ok(tones.some(([color, text]) => color === "emphasisText" && text === "file.ts"));
+	tones.length = 0;
+	tools.get("read").renderCall({ path: "file.ts", offset: "not-a-number" }, coloredTheme, { ...context, state: {} }).render(100);
+	assert.ok(tones.some(([color, text]) => color === "accent" && text === "offset"));
+	assert.ok(tones.some(([color, text]) => color === "emphasisText" && text === "not-a-number"));
+	assert.ok(tones.some(([color]) => color === "success")); // Frame and summary keys stay green.
+
+	// An expanded multi-line value keeps the call's tone on every line, so a
+	// script body is never rendered in the dimmed tone used for results.
+	tones.length = 0;
+	const scriptBody = "import os\nprint('hello')\n    indented";
+	tools
+		.get("bash")
+		.renderCall({ command: scriptBody }, coloredTheme, { ...context, state: {}, expanded: true })
+		.render(100);
+	for (const line of ["print('hello')", "    indented"]) {
+		const painted = tones.filter(([, text]) => text === line);
+		assert.ok(painted.length > 0, `expanded body line not rendered: ${line}`);
+		assert.ok(
+			painted.every(([color]) => color === "emphasisText"),
+			`expanded body line ${JSON.stringify(line)} used ${painted.map(([color]) => color).join("/")}`,
+		);
+	}
+	assert.ok(!tones.some(([color, text]) => color === "muted" && text.includes("print('hello')")));
+	// Numeric-looking body lines are not mistaken for descriptor measures.
+	assert.ok(!tones.some(([color]) => color === "syntaxNumber"));
+
+	const actualTool = new codingAgent.ToolExecutionComponent(
+		"subagent", "large-call", { workflowScript: largeScript, async: true },
+		{ showImages: false }, { name: "subagent" }, { requestRender() {} }, process.cwd(),
+	);
+	actualTool.setArgsComplete();
+	actualTool.markExecutionStarted();
+	let screen = piTui.stripTerminalSequences(actualTool.render(100).join("\n"));
+	assert.match(screen, /Scripted workflow/);
+	assert.doesNotMatch(screen, /ARGUMENT_BODY_MARKER/);
+	// Expansion works even while the call is pending, before a result exists.
+	actualTool.setExpanded(true);
+	screen = piTui.stripTerminalSequences(actualTool.render(100).join("\n"));
+	assert.match(screen, /ARGUMENT_BODY_MARKER/);
+	assert.match(screen, /arguments capped/);
+	actualTool.updateResult({ content: [{ type: "text", text: "RESULT_STAYS_VISIBLE" }], details: {} });
+	actualTool.setExpanded(false);
+	screen = piTui.stripTerminalSequences(actualTool.render(100).join("\n"));
+	assert.match(screen, /RESULT_STAYS_VISIBLE/);
+	assert.doesNotMatch(screen, /ARGUMENT_BODY_MARKER/);
+	assert.ok(screen.split("\n").length < 12);
+	actualTool.updateArgs({ agent: "reviewer", task: "Inspect this module" });
+	screen = piTui.stripTerminalSequences(actualTool.render(100).join("\n"));
+	assert.match(screen, /agent: reviewer/);
+	assert.doesNotMatch(screen, /Scripted workflow/);
+
 	const readResult = tools.get("read").renderResult(
 		{ content: [{ type: "text", text: "secret output" }], details: {} },
 		options,
@@ -439,6 +523,15 @@ void (async () => {
 	const apiKey = Symbol.for("pi-tool-output.api.v1");
 	const api = globalThis[apiKey];
 	assert.equal(api.version, 1);
+	const unknownTool = api.decorateTool({ name: "unknown_tool" });
+	const unknownArgs = { prompt: largeScript, data: { payload: largeScript } };
+	const compactUnknown = unknownTool.renderCall(unknownArgs, theme, { ...context, state: {} }).render(100).join("\n");
+	assert.match(compactUnknown, /prompt: [\d.]+ KB/);
+	assert.doesNotMatch(compactUnknown, /ARGUMENT_BODY_MARKER/);
+	const expandedUnknown = unknownTool.renderCall(unknownArgs, theme, { ...context, state: {}, expanded: true }).render(100).join("\n");
+	assert.match(expandedUnknown, /ARGUMENT_BODY_MARKER/);
+	assert.match(expandedUnknown, /arguments capped/);
+
 	const partialCallTool = {
 		name: "partial_call_tool",
 		renderCall: ordinaryCallRenderer,

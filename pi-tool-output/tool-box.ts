@@ -2,6 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { CORNER_BL, CORNER_BR, CORNER_TL, CORNER_TR, groundRow, labelRuleRow, railRow } from "../lib/box.ts";
+import { backgroundAnsi, paint, TOOL_OUTPUT_COLORS } from "./colors.ts";
 
 const ICON_TOOL = "\uf0ad"; // nf-fa-wrench
 const PAD_X = 1;
@@ -36,13 +37,14 @@ function boxRows(
 	options: { includeTop: boolean; close: boolean },
 ): string[] {
 	const w = Math.max(0, Math.floor(width));
+	const paintLabel = (text: string) => theme.bold(paint(theme, TOOL_OUTPUT_COLORS.box.label, text));
 	if (w < MIN_BOX_WIDTH) {
-		const rows = options.includeTop ? [theme.bold(theme.fg("success", label)), ...body] : body;
+		const rows = options.includeTop ? [paintLabel(label), ...body] : body;
 		return rows.map((line) => truncateToWidth(line, w, "…"));
 	}
 
-	const paint = (text: string) => theme.fg("success", text);
-	const ground = (row: string) => groundRow(row, theme.getBgAnsi("userMessageBg"));
+	const paintFrame = (text: string) => paint(theme, TOOL_OUTPUT_COLORS.box.frame, text);
+	const ground = (row: string) => groundRow(row, backgroundAnsi(theme));
 	const contentWidth = Math.max(1, w - FRAME_WIDTH - PAD_X * 2);
 	const rows: string[] = [];
 	if (options.includeTop) {
@@ -50,19 +52,19 @@ function boxRows(
 			ground(
 				labelRuleRow({
 					width: w,
-					paint,
+					paint: paintFrame,
 					cornerL: CORNER_TL,
 					cornerR: CORNER_TR,
-					label: theme.bold(theme.fg("success", label)),
+					label: paintLabel(label),
 					side: "left",
 					padLabel: true,
 				}),
 			),
 		);
 	}
-	rows.push(...body.map((line) => ground(railRow({ line, paint, padX: PAD_X, padTo: contentWidth }))));
+	rows.push(...body.map((line) => ground(railRow({ line, paint: paintFrame, padX: PAD_X, padTo: contentWidth }))));
 	if (options.close) {
-		rows.push(ground(labelRuleRow({ width: w, paint, cornerL: CORNER_BL, cornerR: CORNER_BR })));
+		rows.push(ground(labelRuleRow({ width: w, paint: paintFrame, cornerL: CORNER_BL, cornerR: CORNER_BR })));
 	}
 	return rows;
 }
