@@ -172,7 +172,15 @@ test("summarizeCommand masks environment values and inline interpreter bodies", 
 	// Every value-taking option consumes its argument, not just `-u`.
 	assert.equal(summarizeCommand("env -C /tmp node -e 'body'"), "env -C /tmp node -e <inline script>");
 	assert.equal(summarizeCommand("env --chdir /tmp python -c 'y'"), "env --chdir /tmp python -c <inline script>");
+	// A lone `-` implies `-i` and is skipped like any other env option.
+	assert.equal(summarizeCommand("env - /usr/bin/python3 -c 'body'"), "env - /usr/bin/python3 -c <inline script>");
 	// Quoted executables, flags, and assignments are detected through their quotes.
+	// The body can be attached to the flag itself, short or long.
+	assert.equal(summarizeCommand("node --eval='SECRET'"), "node --eval=<inline script>");
+	assert.equal(summarizeCommand("node --eval 'SECRET'"), "node --eval <inline script>");
+	assert.equal(summarizeCommand("python3 -c'print(1)'"), "python3 -c<inline script>");
+	assert.equal(summarizeCommand("env - node --eval=SECRET"), "env - node --eval=<inline script>");
+	assert.doesNotMatch(summarizeCommand(`node --eval='${"sensitive".repeat(2000)}'`), /sensitive/);
 	assert.equal(summarizeCommand('"/usr/bin/node" -e \'body\''), '"/usr/bin/node" -e <inline script>');
 	assert.equal(summarizeCommand("node '-e' 'body'"), "node '-e' <inline script>");
 	assert.equal(summarizeCommand('"env" -i node -e \'body\''), '"env" -i node -e <inline script>');

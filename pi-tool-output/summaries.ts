@@ -53,8 +53,10 @@ function pathOf(args: Args): string {
 const ASSIGNMENT = /^[A-Za-z_][\w]*=/;
 /** Interpreters whose `-c`/`-e` body is an inline script, not a useful argument. */
 const INTERPRETER = /^(?:python[\d.]*|node|ruby|perl|[bz]?sh|zsh)$/;
-/** An inline-script flag such as `-c`, `-e`, or `-ec`. */
-const INLINE_SCRIPT_FLAG = /^-[a-z]*[ce]$/;
+/** An inline-script flag such as `-c`, `-e`, `-ec`, or node's long `--eval`. */
+const INLINE_SCRIPT_FLAG = /^(?:-[a-z]*[ce]|--eval)$/;
+/** The same flags with the script body attached: `-cBODY`, `-e=BODY`, `--eval=BODY`. */
+const INLINE_SCRIPT_ATTACHED = /^(?:-[a-z]*[ce]|--eval)=?(.+)$/;
 /**
  * An `env`-wrapper option that consumes the next token: `-u NAME`, `-a ARG`,
  * `-C DIR`, `-S STRING`, `-P PATH` (per implementation), or a long form.
@@ -154,7 +156,8 @@ function findExecutable(parts: readonly string[]): number {
 		const token = bare(index);
 		if (ENV_OPTION_WITH_VALUE.test(token)) index += 2;
 		else if (token === "--") return index + 1;
-		else if (token !== "-" && token.startsWith("-")) index++;
+		// A lone `-` implies `-i`, like any other option.
+		else if (token.startsWith("-")) index++;
 		else if (ASSIGNMENT.test(token)) index++;
 		else break;
 	}
@@ -175,8 +178,19 @@ function sketchSegment(tokens: readonly string[]): string {
 	const executable = findExecutable(parts);
 	const program = unquote(parts[executable] ?? "").split("/").at(-1) ?? "";
 	if (INTERPRETER.test(program)) {
-		const flag = parts.findIndex((token, index) => index > executable && INLINE_SCRIPT_FLAG.test(unquote(token)));
-		if (flag >= 0 && parts[flag + 1]) parts[flag + 1] = ARGUMENT_PLACEHOLDERS.inlineScript;
+		for (let index = executable + 1; index < parts.length; index++) {
+			const bare = unquote(parts[index]!);
+			if (INLINE_SCRIPT_FLAG.test(bare)) {
+				if (parts[index + 1]) parts[index + 1] = ARGUMENT_PLACEHOLDERS.inlineScript;
+				break;
+			}
+			// The body can be attached to the flag itself (`-cBODY`, `--eval=BODY`).
+			const attached = bare.match(INLINE_SCRIPT_ATTACHED);
+			if (attached) {
+				parts[index] = `${bare.slice(0, bare.length - attached[1]!.length)}${ARGUMENT_PLACEHOLDERS.inlineScript}`;
+				break;
+			}
+		}
 	}
 	const shown = parts
 		.slice(0, COMMAND_LIMITS.segmentTokens)

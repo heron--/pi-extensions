@@ -105,13 +105,17 @@ shape of the command while removing what cannot be shown safely or usefully:
 | `CI=1 npm test` | `CI=… npm test` |
 | `node -e "console.log(42)"` | `node -e <inline script>` |
 | `env -i python -c "…"` | `env -i python -c <inline script>` |
+| `env - node --eval="…"` | `env - node --eval=<inline script>` |
 | `/usr/bin/env node -e "…"` | `/usr/bin/env node -e <inline script>` |
+| `python -c'…'` | `python -c<inline script>` |
+| `node --eval="…"` | `node --eval=<inline script>` |
 | `python3 - <<'PY'…` | `python3 - · heredoc script` |
 | `a && b && c && d` | `a && b && c …` |
 
-Environment **values** are masked, inline interpreter bodies (`-c`/`-e`) and
-heredoc bodies are replaced with labels — including through an `env` wrapper,
-whose own options and assignments (`env -i`, `env -u NAME`, `env -C DIR`,
+Environment **values** are masked, inline interpreter bodies (`-c`/`-e`/`--eval`,
+separate, attached like `-c'…'`/`--eval=…`, or shell-quoted) and heredoc
+bodies are replaced with labels — including through an `env` wrapper, whose
+own options and assignments (`env -i`, `env -`, `env -u NAME`, `env -C DIR`,
 `/usr/bin/env`) are skipped when locating the interpreter, and through the
 quotes a caller may put around the executable, a flag, or an assignment
 (`"node"`, `'-e'`, `'CI=x'` — detection sees through them, display keeps the
