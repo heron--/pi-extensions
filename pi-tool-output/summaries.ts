@@ -55,8 +55,11 @@ const ASSIGNMENT = /^[A-Za-z_][\w]*=/;
 const INTERPRETER = /^(?:python[\d.]*|node|ruby|perl|[bz]?sh|zsh)$/;
 /** An inline-script flag such as `-c`, `-e`, or `-ec`. */
 const INLINE_SCRIPT_FLAG = /^-[a-z]*[ce]$/;
-/** An `env`-wrapper option that consumes the next token, e.g. `-u NAME`. */
-const ENV_OPTION_WITH_VALUE = /^(?:-[uS]|--(?:unset|split-string))$/;
+/**
+ * An `env`-wrapper option that consumes the next token: `-u NAME`, `-a ARG`,
+ * `-C DIR`, `-S STRING`, `-P PATH` (per implementation), or a long form.
+ */
+const ENV_OPTION_WITH_VALUE = /^(?:-[auCSP]|--(?:unset|split-string|chdir|argv0))$/;
 /** A command separator token. The empty alternative tolerates blank tokens. */
 const SEPARATOR = /^(?:;|\|\|?|&&?|)$/;
 /** A trailing separator, which is dropped from the finished sketch. */
@@ -126,17 +129,29 @@ function tokenizeCommand(source: string): TokenizedCommand {
 }
 
 /**
+ * The token with one matched pair of shell quotes stripped, for detection
+ * only; the sketch keeps the original spelling for display.
+ */
+function unquote(token: string): string {
+	const quote = token[0] ?? "";
+	return token.length > 1 && (quote === "'" || quote === '"' || quote === "`") && token.at(-1) === quote
+		? token.slice(1, -1)
+		: token;
+}
+
+/**
  * Index of the executable a segment runs: past leading assignments, and past
  * an `env` wrapper's own options and assignments, so `env -i node` resolves to
  * `node` and its inline body is still recognized and masked.
  */
 function findExecutable(parts: readonly string[]): number {
+	const bare = (index: number): string => unquote(parts[index] ?? "");
 	let index = 0;
-	while (index < parts.length && ASSIGNMENT.test(parts[index]!)) index++;
-	if (index >= parts.length || parts[index]!.split("/").at(-1) !== "env") return index;
+	while (index < parts.length && ASSIGNMENT.test(bare(index))) index++;
+	if (index >= parts.length || bare(index).split("/").at(-1) !== "env") return index;
 	index++;
 	while (index < parts.length) {
-		const token = parts[index]!;
+		const token = bare(index);
 		if (ENV_OPTION_WITH_VALUE.test(token)) index += 2;
 		else if (token === "--") return index + 1;
 		else if (token !== "-" && token.startsWith("-")) index++;
@@ -151,12 +166,16 @@ function findExecutable(parts: readonly string[]): number {
  * interpreter body with a label, and bound both token count and token length.
  */
 function sketchSegment(tokens: readonly string[]): string {
-	// Environment values and interpreter inline bodies obscure the useful command.
-	const parts = tokens.map((token) => ASSIGNMENT.test(token) ? `${token.split("=", 1)[0]}=…` : token);
+	// Environment values and interpreter inline bodies obscure the useful
+	// command; detection sees through quotes, display keeps the original spelling.
+	const parts = tokens.map((token) => {
+		const bare = unquote(token);
+		return ASSIGNMENT.test(bare) ? `${bare.split("=", 1)[0]}=…` : token;
+	});
 	const executable = findExecutable(parts);
-	const program = parts[executable]?.split("/").at(-1) ?? "";
+	const program = unquote(parts[executable] ?? "").split("/").at(-1) ?? "";
 	if (INTERPRETER.test(program)) {
-		const flag = parts.findIndex((token, index) => index > executable && INLINE_SCRIPT_FLAG.test(token));
+		const flag = parts.findIndex((token, index) => index > executable && INLINE_SCRIPT_FLAG.test(unquote(token)));
 		if (flag >= 0 && parts[flag + 1]) parts[flag + 1] = ARGUMENT_PLACEHOLDERS.inlineScript;
 	}
 	const shown = parts

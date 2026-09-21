@@ -169,6 +169,14 @@ test("summarizeCommand masks environment values and inline interpreter bodies", 
 		summarizeCommand("env -u CI FOO=1 python3 -c 'y'"),
 		"env -u CI FOO=… python3 -c <inline script>",
 	);
+	// Every value-taking option consumes its argument, not just `-u`.
+	assert.equal(summarizeCommand("env -C /tmp node -e 'body'"), "env -C /tmp node -e <inline script>");
+	assert.equal(summarizeCommand("env --chdir /tmp python -c 'y'"), "env --chdir /tmp python -c <inline script>");
+	// Quoted executables, flags, and assignments are detected through their quotes.
+	assert.equal(summarizeCommand('"/usr/bin/node" -e \'body\''), '"/usr/bin/node" -e <inline script>');
+	assert.equal(summarizeCommand("node '-e' 'body'"), "node '-e' <inline script>");
+	assert.equal(summarizeCommand('"env" -i node -e \'body\''), '"env" -i node -e <inline script>');
+	assert.equal(summarizeCommand("env 'FOO=secret' node -e 'body'"), "env FOO=… node -e <inline script>");
 	assert.equal(summarizeCommand('node -e "console.log(42)"'), "node -e <inline script>");
 	assert.equal(summarizeCommand("/usr/bin/python3.11 -c 'y'"), "/usr/bin/python3.11 -c <inline script>");
 	assert.doesNotMatch(summarizeCommand(`env -i node -e '${"sensitive".repeat(2000)}'`), /sensitive/);

@@ -111,13 +111,15 @@ shape of the command while removing what cannot be shown safely or usefully:
 
 Environment **values** are masked, inline interpreter bodies (`-c`/`-e`) and
 heredoc bodies are replaced with labels — including through an `env` wrapper,
-whose own options and assignments (`env -i`, `env -u NAME`, `/usr/bin/env`)
-are skipped when locating the interpreter — quoted separators stay inside
-their word, and comments are dropped. A sketched command is consumed: the
-original never appears beside its sketch in the compact preview. Bounds:
-4,096 characters read, 80 tokens, 3 pipeline segments, 10 tokens per
-segment, 240 characters out. An unterminated quote is marked `…` rather than
-throwing.
+whose own options and assignments (`env -i`, `env -u NAME`, `env -C DIR`,
+`/usr/bin/env`) are skipped when locating the interpreter, and through the
+quotes a caller may put around the executable, a flag, or an assignment
+(`"node"`, `'-e'`, `'CI=x'` — detection sees through them, display keeps the
+original spelling). Quoted separators stay inside their word, and comments
+are dropped. A sketched command is consumed: the original never appears
+beside its sketch in the compact preview. Bounds: 4,096 characters read,
+80 tokens, 3 pipeline segments, 10 tokens per segment, 240 characters out.
+An unterminated quote is marked `…` rather than throwing.
 
 #### Adding a summarizer
 
