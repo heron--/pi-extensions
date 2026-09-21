@@ -201,7 +201,11 @@ Two implementation details worth not re-discovering:
   (`anthropic/claude-haiku-4-5-20251001` → `claude-haiku-4-5`). `idCandidates()`
   tries progressively-stripped forms. The vendor-prefix strip is guarded on a
   dotted prefix, because stripping blindly turned `gemini-3.8-flash` into
-  `8-flash`.
+  `8-flash`. Databricks-hosted copies get their own strip pass — dots become
+  hyphens in their names (`databricks-glm-5-3-flash` → `glm-5.3-flash`), and a
+  `databricks-` prefix, dotted vendor namespace (`system.ai.kimi-k3`), or `-pt`
+  suffix may need peeling — tried only after every earlier candidate, so ids
+  that already matched are untouched.
 
 If `@pydantic/genai-prices` isn't installed, estimates return `null` instead of
 throwing — the extension keeps working, just without them.

@@ -592,6 +592,11 @@ const MODEL_TIER_PATTERNS: readonly (readonly [RegExp, number])[] = [
 	[/\bsol\b/i, 1],
 	[/\bterra\b/i, 2],
 	[/\bluna\b/i, 3],
+	// Zhipu: GLM-5.3 is the flagship line; Flash is its faster, cheaper
+	// sibling. Both spellings of the version — dotted (GLM-5.3-Flash) and
+	// hyphenated (databricks-glm-5-3-flash) — and the Databricks -pt listing.
+	[/\bglm-5[.-]3\b(?![-.]?flash)/i, 0],
+	[/\bglm-5[.-]3[.-]flash\b/i, 1],
 ];
 
 /**
