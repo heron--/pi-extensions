@@ -127,7 +127,9 @@ For each completed response, the footer uses Pi's reported cost when present.
 Otherwise it calls the same bundled `@pydantic/genai-prices` model used by the
 model picker, with input, output, cache-read, and cache-write tokens. This
 calculation is performed per response so long-context price tiers are applied
-correctly. Estimates are not marked apart from exact totals — the whole figure
+correctly. A [pricing override](../README.md#pricing-overrides) for the model
+that answered wins over both, field by field, and applies to the responses
+already in the session as soon as it loads. Estimates are not marked apart from exact totals — the whole figure
 is understood to be approximate. The money glyph is a dollar sign in its own
 right, so the segment is just `$0.04` with no icon in front of it.
 

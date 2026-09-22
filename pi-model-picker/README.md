@@ -55,8 +55,8 @@ The second column shows `$input/$output` per Mtok, via
 
 | Shown | Meaning |
 |-------|---------|
-| `$3/$15`  | pi's own figure, from the model definition |
-| `~$3/$15` | **estimate** from `@pydantic/genai-prices` (public list price) |
+| `$3/$15`  | your [pricing override](../README.md#pricing-overrides), or pi's own figure from the model definition |
+| `~$3/$15` | **estimate** from `@pydantic/genai-prices` (public list price), in whole or part |
 | `—`       | no pricing available from either source |
 
 The `~` matters: pi zero-fills `cost` for definitions that omit it (common for

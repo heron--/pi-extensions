@@ -12,7 +12,7 @@ import { execFile } from "node:child_process";
 import { basename } from "node:path";
 import type { TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { estimateUsageCost } from "../lib/pricing.ts";
+import { pricingOverridesGeneration, refreshPricingOverridesForSession, usageCost } from "../lib/pricing.ts";
 import {
 	fgFromBg,
 	groundRow,
@@ -155,20 +155,21 @@ interface CostTotals {
  *
  * This runs on every editor render — so on every keystroke — and a price
  * estimate is a dataset lookup that tries several candidate model ids. A
- * response's usage never changes once recorded, so pay for it once.
+ * response's usage never changes once recorded, so pay for it once per set of
+ * loaded pricing overrides.
  */
-const COST_CACHE = new WeakMap<AssistantMessage, number | null>();
+const COST_CACHE = new WeakMap<AssistantMessage, { generation: number; cost: number | null }>();
 
 function messageCost(message: AssistantMessage): number | null {
+	const generation = pricingOverridesGeneration();
 	const cached = COST_CACHE.get(message);
-	if (cached !== undefined) return cached;
+	if (cached?.generation === generation) return cached.cost;
 
-	const recorded = message.usage.cost.total;
 	// A gateway can expose a request alias in `model` and the model that
 	// actually answered in `responseModel`; price the latter when it is there.
 	const priced = message.responseModel ?? message.model;
-	const cost = recorded > 0 ? recorded : (estimateUsageCost(priced, message.usage)?.total ?? null);
-	COST_CACHE.set(message, cost);
+	const cost = usageCost(priced, message.usage, message.provider)?.total ?? null;
+	COST_CACHE.set(message, { generation, cost });
 	return cost;
 }
 
@@ -584,6 +585,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
+		refreshPricingOverridesForSession(ctx);
 		animate = loadThinkingAnimatePreference();
 		if (ctx.mode === "tui") install(ctx);
 	});
