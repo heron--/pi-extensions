@@ -48,7 +48,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import { formatPricing, getPricing } from "../lib/pricing.ts";
+import { formatPricing, getPricing, refreshPricingOverridesForSession } from "../lib/pricing.ts";
 import {
 	loadThinkingAnimatePreference,
 	paintThinkingLevel,
@@ -303,13 +303,14 @@ export function abbreviateContextWindow(tokens: number): string {
 }
 
 /**
- * Per-million-token pricing as "$in/$out", or null when neither pi nor the
- * genai-prices dataset knows this model. Estimates are prefixed "~".
+ * Per-million-token pricing as "$in/$out", or null when no pricing override,
+ * pi, or the genai-prices dataset knows this model. Figures that used an
+ * estimate are prefixed "~".
  *
  * pi ZERO-FILLS cost when a model definition omits it, so `{input: 0,
  * output: 0}` means "unknown", NOT "free" — custom/gateway providers routinely
- * arrive that way. ../lib/pricing.ts handles that and falls back to the
- * dataset; null still means genuinely unknown.
+ * arrive that way. ../lib/pricing.ts handles that, applies local overrides
+ * first, and falls back to the dataset; null still means genuinely unknown.
  */
 export function formatCost(model: Model<Api>): string | null {
 	return formatPricing(getPricing(model));
@@ -709,7 +710,7 @@ function modelDetailLines(entry: ModelEntry, theme: PickerTheme, width: number):
 	const facts = [
 		`${abbreviateContextWindow(model.contextWindow)} context`,
 		`${abbreviateContextWindow(model.maxTokens)} max output`,
-		// "~" marks a genai-prices estimate rather than pi's own figure.
+		// "~" marks a genai-prices estimate rather than an override or pi's figure.
 		cost ? `${cost} per Mtok${cost.startsWith("~") ? " (est.)" : ""}` : "no pricing available",
 		`accepts ${inputProse(model)}`,
 	];
@@ -1458,6 +1459,7 @@ export default function modelPickerExtension(pi: ExtensionAPI): void {
 	// fall back to anymore. Confirm interception is actually running before
 	// relying on this in a new environment.
 	pi.on("session_start", (_event, ctx: ExtensionContext) => {
+		refreshPricingOverridesForSession(ctx);
 		if (ctx.mode !== "tui") return;
 		interceptModelCommand(pi, ctx);
 	});

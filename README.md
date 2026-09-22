@@ -87,7 +87,8 @@ pi-extensions/
 │   ├── sync-pi-types.mjs
 │   └── link-extensions.mjs
 ├── lib/                   # shared helpers, imported as "../lib/x.ts"
-│   └── pricing.ts
+│   ├── pricing.ts
+│   └── pricing.test.cjs   # npm run test:pricing
 ├── pi-{extension_name}/   # most extensions have the same shape.
 │   ├── package.json       # some have config files
 │   ├── index.ts
@@ -177,13 +178,60 @@ community price dataset that ships bundled, so there's no network call at render
 time.
 
 ```ts
-const p = getPricing(model);   // { input, output, source } | null
-formatPricing(p);              // "$3/$15" | "~$3/$15" | null
+const p = getPricing(model);            // { input, output, source } | null
+formatPricing(p);                       // "$3/$15" | "~$3/$15" | null
+usageCost(modelId, usage, provider);    // { total, source } | null — one response
 ```
 
+- `source: "override"` — from your pricing overrides file. Rendered plain.
 - `source: "pi"` — pi's own figure. Rendered plain: `$3/$15`.
 - `source: "estimate"` — from the dataset. Rendered with `~`: `~$3/$15`.
 - `null` — genuinely unknown. Callers decide what to show; don't substitute 0.
+
+A figure built from several sources reports the least certain one, so anything
+that used the dataset keeps its `~`.
+
+#### Pricing overrides
+
+Your own prices — a negotiated gateway rate, a model the dataset lacks or gets
+wrong — go in an overrides file that lives wherever you keep private config,
+outside this repository. `<agent dir>/pi-pricing/config.json` (normally
+`~/.pi/agent/pi-pricing/config.json`) names it:
+
+```json
+{ "overridesPath": "~/private/pi-price-overrides.json" }
+```
+
+`~` is expanded, and a relative path resolves against the config file's
+directory. The overrides file maps model ids to USD per million tokens:
+
+```json
+{
+  "models": {
+    "claude-opus-5-5": { "input": 4, "output": 20, "cacheRead": 0.2, "cacheWrite": 5 },
+    "ai-gw/anthropic/claude-opus-5": { "output": 30 }
+  }
+}
+```
+
+- **Keys** match case-insensitively against `provider/id`, then against the
+  same stripped id forms `idCandidates()` produces, so a key can pin one
+  provider's listing or cover every listing of a model. Matching is exact per
+  form — `claude-opus-5` does not cover `claude-opus-5-5`.
+- **Fields** are any subset of `input`, `output`, `cacheRead`, `cacheWrite`.
+  Each field resolves on its own: the override's rate, else pi's figure, else
+  the dataset's base rate. A cache rate no source knows is charged at the
+  input rate, as the dataset does for models it lists without cache prices.
+- **Override rates are flat.** A response covered by an override is not
+  subject to the dataset's long-context tiers.
+- **Mistakes are loud.** An unreadable or malformed file, an unknown field, or a
+  non-numeric rate raises one warning at session start (not one per
+  extension). The offending entry is skipped whole; valid entries still apply.
+- **Reloading:** both files are re-read at each session start (`/new`,
+  `/resume`, `/reload`, launch).
+
+`pi-model-picker` and `pi-context-footer` both price through this module, so
+both honor the overrides.
 
 Estimates match on model id against **public list prices**, so they ignore
 gateway contracts, negotiated rates, cache/batch pricing, and anything

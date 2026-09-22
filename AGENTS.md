@@ -23,6 +23,7 @@ pi-extensions/
 ├── lib/
 │   ├── box.ts                # shared box/frame row generation (the house layout)
 │   ├── pricing.ts            # shared helper, imported as "../lib/pricing.ts"
+│   ├── pricing.test.cjs      # jiti-loaded, like pi; `npm run test:pricing`
 │   └── thinking-colors.ts    # shared thinking-level colour scheme + animate pref
 ├── pi-user-message/          # extension: the user's message in the house box
 ├── pi-recap/                 # extension: away-and-back recap, rotating cheap models
@@ -229,6 +230,21 @@ worth knowing before touching that seam:
 - `autocompleteState` and the row layout are private; do not reach for them.
   Structure detection off the returned rows is enough and does not break when
   pi's internals move.
+
+## Pricing overrides stay out of the repo
+
+`lib/pricing.ts` reads `<agent dir>/pi-pricing/config.json`, which names a
+user-owned overrides file (see README "Pricing overrides"). Both live outside
+this checkout on purpose — the rates can be private contract prices. Never add
+a sample with real rates to the repo, and never move either file under
+`<agent dir>/extensions/`, which resolves into this checkout through the
+install symlinks.
+
+Override state lives on `globalThis` under a `Symbol.for` key rather than in
+module scope, so every extension that imports the helper shares one load and
+one problem notification. `pi-context-footer`'s per-message cost cache keys on
+`pricingOverridesGeneration()`; any new cache of computed prices must too, or
+an edited overrides file will not show until restart.
 
 ## Calling a model, and knowing the user is there
 
