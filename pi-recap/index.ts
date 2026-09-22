@@ -166,13 +166,15 @@ const AWAY_MARKER = "--- the user stepped away after this point ---";
  * The rotation, cheapest-first, matched against the model catalogue by id.
  *
  * Patterns rather than `provider/id` pairs: the same model arrives under
- * different provider names depending on how the gateway is configured, and a
- * rotation entry that no longer resolves should drop out quietly rather than
- * break the rotation.
+ * different provider names depending on how the gateway is configured, and
+ * hostings spell the name differently (Baseten's `GLM-5.3-Flash`, Databricks'
+ * `databricks-glm-5-3-flash`), so a pattern matches whichever copy the
+ * catalogue offers. A rotation entry that no longer resolves drops out
+ * quietly rather than break the rotation.
  */
 const ROTATION_PATTERNS: RegExp[] = [
 	/deepseek/i,
-	/glm-5\.3-flash/i,
+	/glm-5[.-]3-flash/i,
 	/gemini-3\.8-flash/i,
 	/gpt-5\.6-luna/i,
 	/claude-haiku/i,

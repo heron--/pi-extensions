@@ -114,6 +114,8 @@ function getCalcPrice(): CalcPrice | null {
  *   "bedrock-anthropic/us.anthropic.claude-sonnet-4-20250514-v1:0"
  *                                                   → "claude-sonnet-4"
  *   "baseten/zai-org/GLM-5.3-Flash"                 → "GLM-5.3-Flash"
+ *   "databricks/databricks-glm-5-3-flash"           → "glm-5.3-flash"
+ *   "databricks/system.ai.kimi-k3"                  → "kimi-k3"
  */
 export function idCandidates(modelId: string): string[] {
 	const out: string[] = [];
@@ -136,6 +138,23 @@ export function idCandidates(modelId: string): string[] {
 	base = base.replace(/-v\d+:\d+$/, ""); // trailing "-v1:0"
 	push(base);
 	push(base.replace(/-\d{8}$/, "")); // trailing date stamp
+
+	// Databricks-hosted copies rename the models they serve: dots in the
+	// version become hyphens (glm-5-3-flash), a `databricks-` prefix or a
+	// dotted vendor namespace may lead the name (system.ai.kimi-k3), and one
+	// listing carries a -pt suffix (glm-5-3-pt). Strip those, then put the
+	// dots back between digits. These candidates come last, so an id that
+	// already matched keeps its match, and the digit-dot rewrite only ever
+	// fires on ids the earlier candidates could not price.
+	let hosted = base;
+	hosted = hosted.replace(/^databricks-/, "");
+	// Leading dotted labels of lowercase letters only: a vendor namespace
+	// (system.ai.), never a versioned model name (gemini-3.8-flash — the
+	// "gemini-3" label carries a digit, so it does not match).
+	hosted = hosted.replace(/^(?:[a-z]+\.)+/, "");
+	hosted = hosted.replace(/-pt$/, "");
+	push(hosted);
+	push(hosted.replace(/(\d)-(\d)/g, "$1.$2"));
 
 	return out;
 }

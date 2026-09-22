@@ -106,10 +106,12 @@ Each recap uses the next model in this order, and says which one wrote it:
 
 Models are matched against the catalogue by id pattern rather than by
 `provider/id`, so a model that arrives under a different provider name still
-resolves, and an entry that resolves to nothing — or that has no configured
-auth — drops out of the rotation quietly instead of breaking it. The call is
-made through `ctx.modelRegistry.complete()`, which resolves provider auth
-itself.
+resolves — and the same model under a different hosting too, whose ids spell
+the name differently (`GLM-5.3-Flash` on Baseten, `databricks-glm-5-3-flash`
+on Databricks). Whichever copy the catalogue offers first with auth configured
+is the one used. An entry that resolves to nothing drops out of the rotation
+quietly instead of breaking it. The call is made through
+`ctx.modelRegistry.complete()`, which resolves provider auth itself.
 
 The position in the rotation persists to `config.json` (see
 [Configuration](#configuration)) and advances after every recap, so a session
