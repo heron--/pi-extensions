@@ -234,7 +234,13 @@ interface PullRequestLookup {
 const PR_BY_BRANCH = new Map<string, PullRequestLookup>();
 let prLookupBranch: string | null = null;
 
-/** Where the footer looks up pull requests, which branch is current, and how it repaints. */
+/**
+ * The live footer's lookup hooks, or null while no footer is installed.
+ * Timers and `gh` callbacks read this when they fire, never a copy captured
+ * earlier: pi rebuilds the footer on toggle and reload, sometimes while a
+ * lookup is still in flight, and a captured copy would belong to a disposed
+ * footer.
+ */
 let prLookupContext: { cwd: string; currentBranch: () => string | null; onResolved: () => void } | null = null;
 let prRecheckTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -244,19 +250,44 @@ function cancelPullRequestRecheck(): void {
 }
 
 /**
+ * Recheck the current branch once the cached miss expires.
+ *
+ * The timer is armed from the cache, not from the lookup that produced the
+ * miss, so a footer rebuilt inside the window re-arms it for the time left.
+ */
+function scheduleRecheck(delayMs: number): void {
+	cancelPullRequestRecheck();
+	prRecheckTimer = setTimeout(() => {
+		prRecheckTimer = undefined;
+		const branch = prLookupContext?.currentBranch();
+		if (branch) lookupPullRequest(branch);
+	}, Math.max(0, delayMs));
+	// A pending recheck must not hold pi open at quit.
+	prRecheckTimer.unref?.();
+}
+
+/**
  * Ask `gh` for the pull request on a branch.
  *
  * A found pull request is kept for the session. A miss is kept for
- * PR_MISS_TTL_MS and then rechecked on a timer if its branch is still
- * current, so a branch without a PR spawns `gh` at most once per window and a
- * PR opened mid-session appears without waiting for a repaint. Anything
- * cached or in flight returns immediately.
+ * PR_MISS_TTL_MS and then rechecked on a timer while a footer is installed,
+ * so a branch without a PR spawns `gh` at most once per window and a PR
+ * opened mid-session appears without waiting for a repaint. A cached miss
+ * still inside its window re-arms that timer and returns; anything found or in
+ * flight returns immediately.
  */
 function lookupPullRequest(branch: string): void {
 	const context = prLookupContext;
 	if (!context || prLookupBranch === branch) return;
 	const cached = PR_BY_BRANCH.get(branch);
-	if (cached && (cached.pullRequest || Date.now() - cached.at < PR_MISS_TTL_MS)) return;
+	if (cached?.pullRequest) return;
+	if (cached) {
+		const remaining = PR_MISS_TTL_MS - (Date.now() - cached.at);
+		if (remaining > 0) {
+			scheduleRecheck(remaining);
+			return;
+		}
+	}
 	prLookupBranch = branch;
 
 	execFile(
@@ -277,19 +308,14 @@ function lookupPullRequest(branch: string): void {
 				}
 			}
 			PR_BY_BRANCH.set(branch, { pullRequest: found, at: Date.now() });
+			// No footer means the session ended or the footer is off; the next
+			// footer re-arms from the cache.
+			if (!prLookupContext) return;
 			if (found) {
-				context.onResolved();
-				return;
+				prLookupContext.onResolved();
+			} else if (prLookupContext.currentBranch() === branch) {
+				scheduleRecheck(PR_MISS_TTL_MS);
 			}
-			cancelPullRequestRecheck();
-			prRecheckTimer = setTimeout(() => {
-				prRecheckTimer = undefined;
-				if (prLookupContext !== context) return;
-				const current = context.currentBranch();
-				if (current) lookupPullRequest(current);
-			}, PR_MISS_TTL_MS);
-			// A pending recheck must not hold pi open at quit.
-			prRecheckTimer.unref?.();
 		},
 	);
 }
@@ -530,11 +556,12 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 		return (tui: TUI, _theme: Theme, provider: ReadonlyFooterDataProvider) => {
 			footerData = provider;
 
-			prLookupContext = {
+			const lookupContext = {
 				cwd: ctx.sessionManager.getCwd(),
 				currentBranch: () => provider.getGitBranch(),
 				onResolved: () => tui.requestRender(),
 			};
+			prLookupContext = lookupContext;
 			const findPullRequest = () => {
 				const branch = provider.getGitBranch();
 				if (branch) lookupPullRequest(branch);
@@ -549,6 +576,8 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 			return {
 				dispose() {
 					unsubscribe();
+					// A footer built before this one was disposed owns the lookup now.
+					if (prLookupContext !== lookupContext) return;
 					cancelPullRequestRecheck();
 					prLookupContext = null;
 				},
@@ -637,6 +666,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 		// session ends and pin the event loop open at quit.
 		syncSheenTicker(false);
 		cancelPullRequestRecheck();
+		prLookupContext = null;
 	});
 
 	pi.registerCommand("context-footer", {
