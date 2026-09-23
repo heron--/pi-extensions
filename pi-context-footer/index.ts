@@ -222,24 +222,78 @@ interface PullRequest {
 }
 
 const PR_LOOKUP_TIMEOUT_MS = 5_000;
-const PR_BY_BRANCH = new Map<string, PullRequest | null>();
+/** How long "no pull request" is trusted before `gh` is asked again. */
+const PR_MISS_TTL_MS = 60_000;
+
+interface PullRequestLookup {
+	pullRequest: PullRequest | null;
+	/** When `gh` answered, for expiring misses. */
+	at: number;
+}
+
+const PR_BY_BRANCH = new Map<string, PullRequestLookup>();
 let prLookupBranch: string | null = null;
 
 /**
- * Ask `gh` for the pull request on a branch, once per branch.
- *
- * A miss is cached too, so a branch without a PR does not spawn `gh` on every
- * branch change. Switching back to a branch re-reads the cache, so a PR opened
- * mid-session shows up on the next pi run rather than immediately.
+ * The live footer's lookup hooks, or null while no footer is installed.
+ * Timers and `gh` callbacks read this when they fire, never a copy captured
+ * earlier: pi rebuilds the footer on toggle and reload, sometimes while a
+ * lookup is still in flight, and a captured copy would belong to a disposed
+ * footer.
  */
-function lookupPullRequest(cwd: string, branch: string, onResolved: () => void): void {
-	if (PR_BY_BRANCH.has(branch) || prLookupBranch === branch) return;
+let prLookupContext: { cwd: string; currentBranch: () => string | null; onResolved: () => void } | null = null;
+let prRecheckTimer: ReturnType<typeof setTimeout> | undefined;
+
+function cancelPullRequestRecheck(): void {
+	clearTimeout(prRecheckTimer);
+	prRecheckTimer = undefined;
+}
+
+/**
+ * Recheck the current branch once the cached miss expires.
+ *
+ * The timer is armed from the cache, not from the lookup that produced the
+ * miss, so a footer rebuilt inside the window re-arms it for the time left.
+ */
+function scheduleRecheck(delayMs: number): void {
+	cancelPullRequestRecheck();
+	prRecheckTimer = setTimeout(() => {
+		prRecheckTimer = undefined;
+		const branch = prLookupContext?.currentBranch();
+		if (branch) lookupPullRequest(branch);
+	}, Math.max(0, delayMs));
+	// A pending recheck must not hold pi open at quit.
+	prRecheckTimer.unref?.();
+}
+
+/**
+ * Ask `gh` for the pull request on a branch.
+ *
+ * A found pull request is kept for the session. A miss is kept for
+ * PR_MISS_TTL_MS and then rechecked on a timer while a footer is installed,
+ * so a branch without a PR spawns `gh` at most once per window and a PR
+ * opened mid-session appears without waiting for a repaint. A cached miss
+ * still inside its window re-arms that timer and returns; anything found or in
+ * flight returns immediately.
+ */
+function lookupPullRequest(branch: string): void {
+	const context = prLookupContext;
+	if (!context || prLookupBranch === branch) return;
+	const cached = PR_BY_BRANCH.get(branch);
+	if (cached?.pullRequest) return;
+	if (cached) {
+		const remaining = PR_MISS_TTL_MS - (Date.now() - cached.at);
+		if (remaining > 0) {
+			scheduleRecheck(remaining);
+			return;
+		}
+	}
 	prLookupBranch = branch;
 
 	execFile(
 		"gh",
 		["pr", "view", branch, "--json", "number,url"],
-		{ cwd, timeout: PR_LOOKUP_TIMEOUT_MS },
+		{ cwd: context.cwd, timeout: PR_LOOKUP_TIMEOUT_MS },
 		(error, stdout) => {
 			prLookupBranch = null;
 			let found: PullRequest | null = null;
@@ -253,8 +307,15 @@ function lookupPullRequest(cwd: string, branch: string, onResolved: () => void):
 					// `gh` is missing, unauthenticated, or printed something else.
 				}
 			}
-			PR_BY_BRANCH.set(branch, found);
-			onResolved();
+			PR_BY_BRANCH.set(branch, { pullRequest: found, at: Date.now() });
+			// No footer means the session ended or the footer is off; the next
+			// footer re-arms from the cache.
+			if (!prLookupContext) return;
+			if (found) {
+				prLookupContext.onResolved();
+			} else if (prLookupContext.currentBranch() === branch) {
+				scheduleRecheck(PR_MISS_TTL_MS);
+			}
 		},
 	);
 }
@@ -316,7 +377,7 @@ function buildBottomSegments(
 	const segments: string[] = [];
 	const branch = provider?.getGitBranch() ?? null;
 	if (branch) {
-		const pullRequest = PR_BY_BRANCH.get(branch);
+		const pullRequest = PR_BY_BRANCH.get(branch)?.pullRequest;
 		const label = `${ICON_BRANCH} ${branch}`;
 		segments.push(theme.fg("success", label));
 		if (pullRequest) {
@@ -495,11 +556,15 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 		return (tui: TUI, _theme: Theme, provider: ReadonlyFooterDataProvider) => {
 			footerData = provider;
 
+			const lookupContext = {
+				cwd: ctx.sessionManager.getCwd(),
+				currentBranch: () => provider.getGitBranch(),
+				onResolved: () => tui.requestRender(),
+			};
+			prLookupContext = lookupContext;
 			const findPullRequest = () => {
 				const branch = provider.getGitBranch();
-				if (branch) {
-					lookupPullRequest(ctx.sessionManager.getCwd(), branch, () => tui.requestRender());
-				}
+				if (branch) lookupPullRequest(branch);
 			};
 			findPullRequest();
 
@@ -509,7 +574,13 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 			});
 
 			return {
-				dispose: unsubscribe,
+				dispose() {
+					unsubscribe();
+					// A footer built before this one was disposed owns the lookup now.
+					if (prLookupContext !== lookupContext) return;
+					cancelPullRequestRecheck();
+					prLookupContext = null;
+				},
 				invalidate() {},
 				render(width: number): string[] {
 					// The frame carries the status itself, unless it is not drawing.
@@ -594,6 +665,8 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 		// The TUI is going away; a live interval would paint into it after the
 		// session ends and pin the event loop open at quit.
 		syncSheenTicker(false);
+		cancelPullRequestRecheck();
+		prLookupContext = null;
 	});
 
 	pi.registerCommand("context-footer", {

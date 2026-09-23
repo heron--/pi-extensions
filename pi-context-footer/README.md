@@ -47,9 +47,10 @@ input/output token totals, and background-task state when active.
 
 When `gh` reports a pull request for the current branch, its number follows the
 branch as an OSC 8 hyperlink — ⌘-click, or whatever the terminal binds. The
-lookup runs once per branch, off the render path, and caches misses too, so a
-branch without a pull request does not spawn `gh` again. A pull request opened
-mid-session therefore appears on the next pi run. If `gh` is missing,
+lookup runs in the background, never blocking a render. A found pull request is
+kept for the session; a miss is kept for a minute, so a branch without a pull
+request spawns `gh` at most once a minute, and one opened mid-session appears
+within a minute. If `gh` is missing,
 unauthenticated, or slow, the segment is simply absent.
 
 ### Session name
