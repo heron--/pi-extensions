@@ -22,9 +22,9 @@ Certainly some extensions had more intellectual engagement from me than others.
 - **[pi-model-picker](pi-model-picker/README.md)** — takes over `/model` with a
   two-stage picker that sets the model and its thinking level in one flow, with
   type-to-filter, capability icons, and a pricing column.
-- **[pi-recap](pi-recap/README.md)** — when you sit back down after
-  stepping away, a rotating cheap model recaps what happened while you were
-  gone, and signs its work.
+- **[pi-recap](pi-recap/README.md)** — periodically writes durable,
+  cursor-driven session recap logs with a rotating cheap model, and renders
+  each recap in the transcript.
 - **[pi-thinking-labels](pi-thinking-labels/README.md)** — labels thinking
   blocks in the transcript using the shared level colors while stripping those
   presentation labels before the next model turn.

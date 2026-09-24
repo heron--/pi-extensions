@@ -2,7 +2,7 @@
   "name": "pi-recap",
   "version": "0.1.0",
   "private": true,
-  "description": "Pi extension: when you come back after stepping away, a cheap model recaps what happened while you were gone.",
+  "description": "Pi extension: durable, cursor-driven session recap logs generated on a periodic timer.",
   "type": "module",
   "main": "index.ts",
   "pi": {

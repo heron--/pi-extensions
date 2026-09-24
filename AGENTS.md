@@ -26,7 +26,7 @@ pi-extensions/
 │   ├── pricing.test.cjs      # jiti-loaded, like pi; `npm run test:pricing`
 │   └── thinking-colors.ts    # shared thinking-level colour scheme + animate pref
 ├── pi-user-message/          # extension: the user's message in the house box
-├── pi-recap/                 # extension: away-and-back recap, rotating cheap models
+├── pi-recap/                 # extension: durable periodic recap logs, rotating cheap models
 ├── pi-context-footer/        # extension: continuous prompt border + status items
 ├── pi-model-picker/          # extension: /model-picker, and takes over /model
 │   ├── index.ts
@@ -246,9 +246,9 @@ one problem notification. `pi-context-footer`'s per-message cost cache keys on
 `pricingOverridesGeneration()`; any new cache of computed prices must too, or
 an edited overrides file will not show until restart.
 
-## Calling a model, and knowing the user is there
+## Calling a model
 
-Two seams `pi-recap` needed that are not obvious from the extension types.
+The one-off model call used by `pi-recap` is not obvious from the extension types.
 
 **A one-off LLM call.** There is no `generate`/`complete` helper on
 `ExtensionContext`. The path is `ctx.modelRegistry`:
@@ -269,21 +269,6 @@ an API key to pass in. Match models by id pattern rather than
 on how the gateway is configured, and `ctx.model` is the *session's* model, not
 a way to reach a different one. Always pass a `signal` with a timeout; a
 courtesy feature must not be able to hang a session.
-
-**Whether the user is at the keyboard.** pi does not forward the terminal's
-focus events to extensions, so there is no way to distinguish "walked away"
-from "sat and read the whole run". What exists:
-
-- the `input` event fires on *submit*, carrying the finished text — it is not a
-  keystroke stream, so it is too late to greet someone who just came back
-- the editor's `handleInput` is the only pre-submit signal, reachable by
-  wrapping it the same way `pi-context-footer` wraps `render`
-
-So presence is "keystrokes seen recently", and that limitation belongs in the
-extension's README rather than being papered over. Do not update the
-last-seen timestamp on agent events: a long run the user waited through is
-exactly the case where a recap is wanted, and refreshing the clock on the
-agent's own activity would suppress it.
 
 ## Typechecking
 
