@@ -12,6 +12,12 @@ import {
 	railRow,
 } from "../lib/box.ts";
 import {
+	readRecapConfig,
+	updateRecapConfig,
+	type RecapConfigPatch,
+	type StoredRecapConfig,
+} from "./config-store.ts";
+import {
 	MANIFEST_SCHEMA_VERSION,
 	RECAP_LOG_SCHEMA_VERSION,
 	RecapStore,
@@ -35,9 +41,8 @@ import {
 	normalizeRecapSettings,
 } from "./settings.ts";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 /**
  * Nerd Font's filled and hollow circle: what happened, and what has not
@@ -89,45 +94,34 @@ function recapDataDirectory(): string {
 	return join(agentDirectory(), "pi-recap");
 }
 
-interface StoredConfig {
-	markers?: { recap?: string; next?: string };
-	style?: string;
-	rotationIndex?: number;
-	intervalMinutes?: number;
-	minimumCompletedInteractions?: number;
+function applyStoredConfig(stored: StoredRecapConfig, reset: boolean): void {
+	if (reset) {
+		config.markers.recap = DEFAULT_MARKER_RECAP;
+		config.markers.next = DEFAULT_MARKER_NEXT;
+		config.style = "frame";
+		config.rotationIndex = 0;
+	}
+
+	const recap = stored.markers?.recap;
+	const next = stored.markers?.next;
+	if (typeof recap === "string" && recap) config.markers.recap = recap;
+	if (typeof next === "string" && next) config.markers.next = next;
+	if (typeof stored.style === "string" && STYLES.has(stored.style as Style)) config.style = stored.style as Style;
+	if (typeof stored.rotationIndex === "number" && Number.isInteger(stored.rotationIndex) && stored.rotationIndex >= 0) {
+		config.rotationIndex = stored.rotationIndex;
+	}
+	const settings = normalizeRecapSettings(stored);
+	config.intervalMinutes = settings.intervalMinutes;
+	config.minimumCompletedInteractions = settings.minimumCompletedInteractions;
 }
 
 function loadConfig(): void {
-	try {
-		const stored = JSON.parse(readFileSync(configFile(), "utf8")) as StoredConfig;
-		const recap = stored.markers?.recap;
-		const next = stored.markers?.next;
-		if (typeof recap === "string" && recap) config.markers.recap = recap;
-		if (typeof next === "string" && next) config.markers.next = next;
-		if (typeof stored.style === "string" && STYLES.has(stored.style as Style)) config.style = stored.style as Style;
-		if (typeof stored.rotationIndex === "number" && Number.isInteger(stored.rotationIndex) && stored.rotationIndex >= 0) {
-			config.rotationIndex = stored.rotationIndex;
-		}
-		const settings = normalizeRecapSettings(stored);
-		config.intervalMinutes = settings.intervalMinutes;
-		config.minimumCompletedInteractions = settings.minimumCompletedInteractions;
-	} catch {
-		// Missing or unreadable customization uses defaults.
-	}
+	applyStoredConfig(readRecapConfig(configFile()), true);
 }
 
-function saveConfig(): boolean {
+function saveConfig(patch: RecapConfigPatch): boolean {
 	try {
-		const file = configFile();
-		mkdirSync(dirname(file), { recursive: true });
-		const body: StoredConfig = {
-			markers: { recap: config.markers.recap, next: config.markers.next },
-			style: config.style,
-			rotationIndex: config.rotationIndex,
-			intervalMinutes: config.intervalMinutes,
-			minimumCompletedInteractions: config.minimumCompletedInteractions,
-		};
-		writeFileSync(file, `${JSON.stringify(body, null, 2)}\n`, "utf8");
+		applyStoredConfig(updateRecapConfig(configFile(), patch), false);
 		return true;
 	} catch {
 		return false;
@@ -367,14 +361,35 @@ function freshnessTime(manifest: RecapManifest): number {
 	return Math.max(Number.isFinite(checked) ? checked : 0, Number.isFinite(acquired) ? acquired : 0);
 }
 
+function takeRotationIndex(length: number): number {
+	let selected = config.rotationIndex % length;
+	try {
+		const stored = updateRecapConfig(configFile(), (current) => {
+			const currentIndex =
+				typeof current.rotationIndex === "number" && Number.isInteger(current.rotationIndex) && current.rotationIndex >= 0
+					? current.rotationIndex
+					: config.rotationIndex;
+			selected = currentIndex % length;
+			return { rotationIndex: (selected + 1) % length };
+		});
+		applyStoredConfig(stored, false);
+	} catch {
+		config.rotationIndex = (selected + 1) % length;
+	}
+	return selected;
+}
+
 export default function recapExtension(pi: ExtensionAPI): void {
 	const ownerId = randomUUID();
 	let enabled = true;
 	let store: RecapStore | undefined;
 	let mainTimer: ReturnType<typeof setInterval> | undefined;
+	let mainTimerIntervalMs: number | undefined;
 	let watchdogTimer: ReturnType<typeof setInterval> | undefined;
+	let watchdogIntervalMs: number | undefined;
 	let activeGenerationAbort: AbortController | undefined;
-	let checking = false;
+	let checkingEpoch: number | null = null;
+	let sessionEpoch = 0;
 	let deferredUntilSettled = false;
 	let recapErrorActive = false;
 	let shuttingDown = false;
@@ -411,6 +426,24 @@ export default function recapExtension(pi: ExtensionAPI): void {
 		return manifest.timer.lock?.ownerId === ownerId;
 	}
 
+	function syncScheduleSettings(ctx: ExtensionContext): RecapManifest {
+		const manifest = currentStore(ctx).update((current) => {
+			current.timer.intervalMs = intervalMs();
+			current.timer.minimumCompletedInteractions = config.minimumCompletedInteractions;
+			return current;
+		});
+		recapErrorActive = manifest.errorActive;
+		return manifest;
+	}
+
+	function adoptScheduleSettings(manifest: RecapManifest): void {
+		const minutes = manifest.timer.intervalMs / 60_000;
+		if (isValidIntervalMinutes(minutes)) config.intervalMinutes = minutes;
+		if (isValidMinimumCompletedInteractions(manifest.timer.minimumCompletedInteractions)) {
+			config.minimumCompletedInteractions = manifest.timer.minimumCompletedInteractions;
+		}
+	}
+
 	function claimTimer(ctx: ExtensionContext): boolean {
 		const recapStore = currentStore(ctx);
 		let claimed = false;
@@ -419,8 +452,6 @@ export default function recapExtension(pi: ExtensionAPI): void {
 			const lock = current.timer.lock;
 			const stale = !lock || now.getTime() - freshnessTime(current) > staleTimerMs(current);
 			if (lock?.ownerId !== ownerId && !stale) return current;
-			current.timer.intervalMs = intervalMs();
-			current.timer.minimumCompletedInteractions = config.minimumCompletedInteractions;
 			current.timer.lock = lock?.ownerId === ownerId
 				? lock
 				: { ownerId, acquiredAt: now.toISOString() };
@@ -431,25 +462,29 @@ export default function recapExtension(pi: ExtensionAPI): void {
 		return claimed && ownsTimer(manifest);
 	}
 
-	function releaseTimer(): void {
-		if (!store) return;
+	function releaseStoreLocks(recapStore: RecapStore): void {
 		try {
-			const manifest = store.update((current) => {
+			recapStore.update((current) => {
 				if (current.timer.lock?.ownerId === ownerId) current.timer.lock = null;
 				if (current.generationLock?.ownerId === ownerId) current.generationLock = null;
 				return current;
 			});
-			recapErrorActive = manifest.errorActive;
 		} catch {
-			// Shutdown cannot repair an unavailable state directory.
+			// Session teardown cannot repair an unavailable state directory.
 		}
+	}
+
+	function releaseTimer(): void {
+		if (store) releaseStoreLocks(store);
 	}
 
 	function stopLocalTimers(): void {
 		if (mainTimer) clearInterval(mainTimer);
 		if (watchdogTimer) clearInterval(watchdogTimer);
 		mainTimer = undefined;
+		mainTimerIntervalMs = undefined;
 		watchdogTimer = undefined;
+		watchdogIntervalMs = undefined;
 	}
 
 	function touchLastChecked(recapStore: RecapStore, requireTimerOwner: boolean, at: Date): RecapManifest | null {
@@ -481,12 +516,12 @@ export default function recapExtension(pi: ExtensionAPI): void {
 		return acquired ? manifest : null;
 	}
 
-	function releaseGeneration(recapStore: RecapStore): void {
+	function releaseGeneration(recapStore: RecapStore, epoch: number): void {
 		const manifest = recapStore.update((current) => {
 			if (current.generationLock?.ownerId === ownerId) current.generationLock = null;
 			return current;
 		});
-		recapErrorActive = manifest.errorActive;
+		if (epoch === sessionEpoch) recapErrorActive = manifest.errorActive;
 	}
 
 	function showRecap(recap: RecapResult): void {
@@ -497,6 +532,7 @@ export default function recapExtension(pi: ExtensionAPI): void {
 		ctx: ExtensionContext,
 		options: { force: boolean; announce: boolean; requireTimerOwner: boolean },
 	): Promise<boolean> {
+		const runEpoch = sessionEpoch;
 		const recapStore = currentStore(ctx);
 		const checkedAt = new Date();
 		let manifest: RecapManifest | null;
@@ -508,7 +544,7 @@ export default function recapExtension(pi: ExtensionAPI): void {
 		}
 		if (!manifest) return false;
 
-		if (checking) {
+		if (checkingEpoch === runEpoch) {
 			if (options.announce) ctx.ui.notify("Recap is already running", "info");
 			return false;
 		}
@@ -530,28 +566,26 @@ export default function recapExtension(pi: ExtensionAPI): void {
 			return false;
 		}
 
-		checking = true;
+		checkingEpoch = runEpoch;
 		try {
 			manifest = recapStore.read();
 			slice = selectRecapSlice(ctx.sessionManager.getBranch(), manifest.cursor);
 			if (!slice || (!options.force && slice.completedInteractions < manifest.timer.minimumCompletedInteractions)) {
-				releaseGeneration(recapStore);
+				releaseGeneration(recapStore, runEpoch);
 				if (options.announce && !slice) ctx.ui.notify("Nothing new to recap", "info");
 				return false;
 			}
 
 			const conversation = formatConversation(slice.entries);
 			if (!conversation.trim()) {
-				releaseGeneration(recapStore);
+				releaseGeneration(recapStore, runEpoch);
 				if (options.announce) ctx.ui.notify("Nothing new to recap", "info");
 				return false;
 			}
 
 			const rotation = resolveRotation(ctx);
 			if (rotation.length === 0) throw new Error("No recap model is configured and authenticated");
-			const model = rotation[config.rotationIndex % rotation.length]!;
-			config.rotationIndex = (config.rotationIndex + 1) % rotation.length;
-			saveConfig();
+			const model = rotation[takeRotationIndex(rotation.length)]!;
 
 			const previousLogs = recapStore.readRecentLogs(manifest.recapLogKeys, PREVIOUS_RECAP_COUNT);
 			const prompt: UserMessage = {
@@ -573,8 +607,8 @@ export default function recapExtension(pi: ExtensionAPI): void {
 				clearTimeout(timeout);
 				if (activeGenerationAbort === abort) activeGenerationAbort = undefined;
 			}
-			if (shuttingDown) {
-				releaseGeneration(recapStore);
+			if (shuttingDown || runEpoch !== sessionEpoch) {
+				releaseGeneration(recapStore, runEpoch);
 				return false;
 			}
 
@@ -623,9 +657,9 @@ export default function recapExtension(pi: ExtensionAPI): void {
 			if (options.announce) ctx.ui.notify(`Recap saved as ${key}`, "info");
 			return true;
 		} catch (error) {
-			if (shuttingDown) {
+			if (shuttingDown || runEpoch !== sessionEpoch) {
 				try {
-					releaseGeneration(recapStore);
+					releaseGeneration(recapStore, runEpoch);
 				} catch {
 					// A later process can reclaim the stale generation lock.
 				}
@@ -647,19 +681,27 @@ export default function recapExtension(pi: ExtensionAPI): void {
 			ctx.ui.notify("Recap failed; details are in the recap manifest", "error");
 			return false;
 		} finally {
-			checking = false;
+			if (checkingEpoch === runEpoch) checkingEpoch = null;
 		}
 	}
 
 	function startMainTimer(ctx: ExtensionContext, runImmediately: boolean): void {
 		if (mainTimer) clearInterval(mainTimer);
+		mainTimerIntervalMs = intervalMs();
 		mainTimer = setInterval(() => {
 			void runRecapCheck(ctx, { force: false, announce: false, requireTimerOwner: true });
-		}, intervalMs());
+		}, mainTimerIntervalMs);
 		mainTimer.unref?.();
 		if (runImmediately) {
 			void runRecapCheck(ctx, { force: false, announce: false, requireTimerOwner: true });
 		}
+	}
+
+	function startWatchdog(ctx: ExtensionContext): void {
+		if (watchdogTimer) clearInterval(watchdogTimer);
+		watchdogIntervalMs = watchdogMs();
+		watchdogTimer = setInterval(() => inspectTimer(ctx), watchdogIntervalMs);
+		watchdogTimer.unref?.();
 	}
 
 	function inspectTimer(ctx: ExtensionContext): void {
@@ -673,12 +715,16 @@ export default function recapExtension(pi: ExtensionAPI): void {
 			return;
 		}
 
+		adoptScheduleSettings(manifest);
+		if (watchdogIntervalMs !== watchdogMs()) startWatchdog(ctx);
+
 		if (ownsTimer(manifest)) {
 			if (Date.now() - freshnessTime(manifest) > staleTimerMs(manifest)) {
 				if (mainTimer) clearInterval(mainTimer);
 				mainTimer = undefined;
+				mainTimerIntervalMs = undefined;
 				if (claimTimer(ctx)) startMainTimer(ctx, true);
-			} else if (!mainTimer) {
+			} else if (!mainTimer || mainTimerIntervalMs !== manifest.timer.intervalMs) {
 				startMainTimer(ctx, false);
 			}
 			return;
@@ -687,6 +733,7 @@ export default function recapExtension(pi: ExtensionAPI): void {
 		if (mainTimer) {
 			clearInterval(mainTimer);
 			mainTimer = undefined;
+			mainTimerIntervalMs = undefined;
 		}
 		const lockIsStale = !manifest.timer.lock || Date.now() - freshnessTime(manifest) > staleTimerMs(manifest);
 		if (lockIsStale && claimTimer(ctx)) startMainTimer(ctx, true);
@@ -694,10 +741,14 @@ export default function recapExtension(pi: ExtensionAPI): void {
 
 	function startScheduler(ctx: ExtensionContext): void {
 		stopLocalTimers();
+		try {
+			syncScheduleSettings(ctx);
+		} catch {
+			recapErrorActive = true;
+		}
 		if (!enabled) return;
 		if (claimTimer(ctx)) startMainTimer(ctx, true);
-		watchdogTimer = setInterval(() => inspectTimer(ctx), watchdogMs());
-		watchdogTimer.unref?.();
+		startWatchdog(ctx);
 	}
 
 	loadConfig();
@@ -716,6 +767,14 @@ export default function recapExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		sessionEpoch += 1;
+		activeGenerationAbort?.abort();
+		activeGenerationAbort = undefined;
+		stopLocalTimers();
+		releaseTimer();
+		store = undefined;
+		deferredUntilSettled = false;
+		loadConfig();
 		if (ctx.mode !== "tui") return;
 		shuttingDown = false;
 		store = makeStore(ctx);
@@ -735,6 +794,7 @@ export default function recapExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", async () => {
 		shuttingDown = true;
+		sessionEpoch += 1;
 		activeGenerationAbort?.abort();
 		activeGenerationAbort = undefined;
 		stopLocalTimers();
@@ -758,7 +818,7 @@ export default function recapExtension(pi: ExtensionAPI): void {
 				if (value === "reset") {
 					config.markers.recap = DEFAULT_MARKER_RECAP;
 					config.markers.next = DEFAULT_MARKER_NEXT;
-					const saved = saveConfig();
+					const saved = saveConfig({ markers: { recap: config.markers.recap, next: config.markers.next } });
 					ctx.ui.notify(saved ? "Icons reset" : "Icons reset, but could not be saved", saved ? "info" : "warning");
 					return;
 				}
@@ -770,7 +830,7 @@ export default function recapExtension(pi: ExtensionAPI): void {
 				}
 				config.markers.recap = recapGlyph;
 				config.markers.next = nextGlyph;
-				const saved = saveConfig();
+				const saved = saveConfig({ markers: { recap: config.markers.recap, next: config.markers.next } });
 				ctx.ui.notify(
 					saved
 						? `Icons set to ${config.markers.recap} and ${config.markers.next}, saved`
@@ -790,7 +850,7 @@ export default function recapExtension(pi: ExtensionAPI): void {
 					return;
 				}
 				config.style = value as Style;
-				const saved = saveConfig();
+				const saved = saveConfig({ style: config.style });
 				ctx.ui.notify(
 					saved ? `Recap style set to ${config.style}, saved` : `Recap style set to ${config.style}, but could not be saved`,
 					saved ? "info" : "warning",
@@ -810,7 +870,7 @@ export default function recapExtension(pi: ExtensionAPI): void {
 					const checked = manifest.timer.lastCheckedAt ?? "never";
 					const error = manifest.errorActive ? " Last generation failed; details are in the manifest." : "";
 					ctx.ui.notify(
-						`${manifest.recapLogKeys.length} recap log(s). Checking every ${formatMinutes(config.intervalMinutes)} after ${config.minimumCompletedInteractions} completed interaction(s). Last checked: ${checked}. Manifest: ${currentStore(ctx).manifestPath}.${error}`,
+						`${manifest.recapLogKeys.length} recap log(s). Checking every ${formatMinutes(manifest.timer.intervalMs / 60_000)} after ${manifest.timer.minimumCompletedInteractions} completed interaction(s). Last checked: ${checked}. Manifest: ${currentStore(ctx).manifestPath}.${error}`,
 						manifest.errorActive ? "error" : "info",
 					);
 				} catch {
@@ -829,8 +889,7 @@ export default function recapExtension(pi: ExtensionAPI): void {
 					return;
 				}
 				config.intervalMinutes = minutes;
-				const saved = saveConfig();
-				store = makeStore(ctx);
+				const saved = saveConfig({ intervalMinutes: config.intervalMinutes });
 				startScheduler(ctx);
 				ctx.ui.notify(
 					saved
@@ -851,8 +910,7 @@ export default function recapExtension(pi: ExtensionAPI): void {
 					return;
 				}
 				config.minimumCompletedInteractions = interactions;
-				const saved = saveConfig();
-				store = makeStore(ctx);
+				const saved = saveConfig({ minimumCompletedInteractions: config.minimumCompletedInteractions });
 				startScheduler(ctx);
 				ctx.ui.notify(
 					saved

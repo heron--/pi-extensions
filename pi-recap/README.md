@@ -209,7 +209,14 @@ that extension path can be a symlink into a git checkout.
 ```
 
 Missing or invalid fields use built-in defaults. Changes made directly in this
-file take effect when the extension next loads.
+file take effect when the extension next loads. Extension writes acquire a
+cross-process lock, merge only the changed fields into the latest file, and use
+an atomic rename, so model rotation or another pi process cannot overwrite a
+newer setting.
+
+`/recap every` and `/recap rounds` also write the current session manifest even
+when another pi process owns its timer. The owner observes the durable schedule
+and restarts its local interval on its next watchdog inspection.
 
 ## Development
 

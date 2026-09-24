@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { readRecapConfig, updateRecapConfig } from "./config-store.ts";
 import {
 	RecapStore,
 	aggregateUsage,
@@ -73,6 +74,35 @@ test("normalizeRecapSettings accepts configured timer values and rejects invalid
 	assert.equal(isValidIntervalMinutes(0.01), false);
 	assert.equal(isValidMinimumCompletedInteractions(1), true);
 	assert.equal(isValidMinimumCompletedInteractions(0), false);
+});
+
+test("updateRecapConfig atomically merges changed fields with the latest config", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-recap-config-test-"));
+	try {
+		const path = join(root, "config.json");
+		writeFileSync(
+			path,
+			`${JSON.stringify({
+				markers: { recap: "R" },
+				intervalMinutes: 15,
+				minimumCompletedInteractions: 8,
+				rotationIndex: 2,
+				futureSetting: true,
+			})}\n`,
+		);
+		updateRecapConfig(path, (current) => ({
+			rotationIndex: Number(current.rotationIndex) + 1,
+			markers: { next: "N" },
+		}));
+		const updated = readRecapConfig(path);
+		assert.deepEqual(updated.markers, { recap: "R", next: "N" });
+		assert.equal(updated.intervalMinutes, 15);
+		assert.equal(updated.minimumCompletedInteractions, 8);
+		assert.equal(updated.rotationIndex, 3);
+		assert.equal(updated.futureSetting, true);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("createRecapKey produces a sortable filename-safe timestamp", () => {
