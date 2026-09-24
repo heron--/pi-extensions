@@ -32,6 +32,9 @@ Certainly some extensions had more intellectual engagement from me than others.
   extension tools in the shared dark house box, with readable names, a semantic
   one-line summary of each call, dimmed expandable output, and preserved
   renderer ownership during migration from `pi-tool-display`.
+- **[pi-tree-pane](pi-tree-pane/README.md)** — experimentally splits the fullscreen
+  transcript into Pi's original feed and an independently scrollable list of
+  user and assistant messages.
 - **[pi-typewriter](pi-typewriter/README.md)** — reveals streamed assistant
   output at a steady typewriter pace instead of whatever has arrived so far.
   Escape skips the effect for the current message.
