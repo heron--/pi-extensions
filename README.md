@@ -129,6 +129,7 @@ with no flags loads whatever is linked there, and `/reload` hot-reloads it:
 ├── pi-recap           -> ../../pi-recap
 ├── pi-thinking-labels -> ../../pi-thinking-labels
 ├── pi-tool-output     -> ../../pi-tool-output
+├── pi-tree-pane       -> ../../pi-tree-pane
 ├── pi-typewriter      -> ../../pi-typewriter
 ├── pi-user-message    -> ../../pi-user-message
 └── pi-write-lock      -> ../../pi-write-lock

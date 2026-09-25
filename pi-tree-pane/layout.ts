@@ -24,9 +24,10 @@ class RightPane extends VStack {
 	}
 
 	override handleMouse(event: TuiMouseEvent): ReturnType<VStack["handleMouse"]> {
-		if (event.type !== "wheel") return undefined;
+		if (event.type !== "wheel") return super.handleMouse?.(event);
 		// Prevent Pi from falling back to the primary (left) transcript at the
-		// right pane's scroll limits. Clicks and selection remain Pi's own.
+		// right pane's scroll limits. The fullscreen TUI handles scrollbar drags
+		// before dispatching mouse events to components.
 		this.scroll.scrollBy(event.wheelDelta ?? 0);
 		return {
 			handled: true,
