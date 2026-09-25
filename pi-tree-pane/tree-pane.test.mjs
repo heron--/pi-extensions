@@ -7,7 +7,7 @@ import { ConversationPane, conversationItem, conversationItems } from "./message
 
 const theme = {
 	fg(color, text) {
-		const code = { accent: 35, success: 32, muted: 90, dim: 90, border: 90 }[color] ?? 39;
+		const code = { accent: 35, success: 32, muted: 90, dim: 90, border: 90, syntaxType: 34 }[color] ?? 39;
 		return `\x1b[${code}m${text}\x1b[0m`;
 	},
 	bold(text) { return `\x1b[1m${text}\x1b[22m`; },
@@ -67,25 +67,33 @@ test("conversation shows user and assistant text with summaries for hidden activ
 	assert.equal(conversationItems(entries, streamed).length, 3, "the persisted live message appears once");
 });
 
-test("assistant labels show the model stored on each response and omit missing models", () => {
-	const first = { ...assistant([{ type: "text", text: "first" }]), timestamp: undefined, model: "request-alias", responseModel: "served-model-a" };
-	const second = { ...assistant([{ type: "text", text: "second" }]), timestamp: undefined, model: "model-b" };
+test("assistant labels show stored models before timestamps in the assistant color", () => {
+	const firstTimestamp = new Date(2026, 0, 2, 9, 5).getTime();
+	const secondTimestamp = new Date(2026, 0, 3, 10, 15).getTime();
+	const first = { ...assistant([{ type: "text", text: "first" }]), timestamp: firstTimestamp, model: "request-alias", responseModel: "served-model-a" };
+	const second = { ...assistant([{ type: "text", text: "second" }]), timestamp: secondTimestamp, model: "model-b" };
 	const missing = { ...assistant([{ type: "text", text: "third" }]), timestamp: undefined, model: "  " };
 	const entries = [entry("1", first), entry("2", second), entry("3", missing)];
 	assert.deepEqual(conversationItem(first), {
-		role: "assistant", text: "first", timestamp: undefined, model: "served-model-a",
+		role: "assistant", text: "first", timestamp: firstTimestamp, model: "served-model-a",
 	});
 
 	const pane = new ConversationPane(session(entries), theme);
 	const labels = (width) => pane.render(width).map(stripTerminalSequences).map((line) => line.trim()).filter((line) => line.startsWith("Assistant"));
-	assert.deepEqual(labels(80), ["Assistant (served-model-a)", "Assistant (model-b)", "Assistant"]);
+	assert.deepEqual(labels(80), [
+		"Assistant (served-model-a) 2026-01-02 09:05",
+		"Assistant (model-b) 2026-01-03 10:15",
+		"Assistant",
+	]);
 	assert(!labels(80).some((line) => line.includes("request-alias")), "the recorded response model takes precedence");
 	for (const width of [18, 24, 32]) {
 		const lines = pane.render(width);
 		assert(lines.every((line) => visibleWidth(line) === width));
 		assert(lines.map(stripTerminalSequences).join("").replace(/\s/g, "").includes("served-model-a"));
 	}
-	assert(pane.render(80).some((line) => line.includes("\x1b[90m(served-model-a)")), "model ids are dimmed");
+	const firstHeader = pane.render(80).find((line) => stripTerminalSequences(line).includes("(served-model-a)"));
+	assert(firstHeader?.includes("\x1b[32m(served-model-a)\x1b[0m"), "model ids use the assistant label color");
+	assert(firstHeader?.includes("\x1b[90m2026-01-02 09:05\x1b[0m"), "timestamps remain dim");
 
 	const livePane = new ConversationPane(session(), theme);
 	livePane.setLive({ ...assistant([{ type: "text", text: "streaming" }]), timestamp: undefined, model: "live-model" });
@@ -205,7 +213,7 @@ test("streaming reuses rendered history until the branch, width, or theme change
 	const countingTheme = {
 		...theme,
 		fg(color, text) {
-			if (color === "accent" && text.includes("User")) historyLabelRenders++;
+			if (color === "syntaxType" && text.includes("User")) historyLabelRenders++;
 			return theme.fg(color, text);
 		},
 	};
@@ -304,7 +312,7 @@ test("pane wraps long words, lines and wide graphemes within its width", () => {
 	const lines = pane.render(18);
 	assert(lines.length > 9);
 	assert(lines.every((line) => visibleWidth(line) === 18));
-	assert(lines.some((line) => line.includes("\x1b[35m") && line.includes("User")));
+	assert(lines.some((line) => line.includes("\x1b[34m") && line.includes("User")));
 	assert(lines.some((line) => line.includes("\x1b[32m") && line.includes("Assistant")));
 	assert(lines.some((line) => line.includes("new line")));
 	assert.equal(pane.render(18), lines, "an unchanged branch reuses wrapped output");

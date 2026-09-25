@@ -156,11 +156,11 @@ function renderItems(messages: readonly ConversationItem[], width: number, theme
 
 		lines.push(paneRow("", width));
 		const label = message.role === "user" ? "User" : "Assistant";
-		const color = message.role === "user" ? "accent" : "success";
+		const color = message.role === "user" ? "syntaxType" : "success";
 		const timestamp = messageTimestamp(message.timestamp);
+		const model = message.role === "assistant" && message.model ? ` ${theme.fg(color, `(${message.model})`)}` : "";
 		const stamp = timestamp ? ` ${theme.fg("dim", timestamp)}` : "";
-		const model = message.role === "assistant" && message.model ? ` ${theme.fg("dim", `(${message.model})`)}` : "";
-		for (const wrapped of wrapTextWithAnsi(theme.fg(color, theme.bold(label)) + stamp + model, contentWidth)) {
+		for (const wrapped of wrapTextWithAnsi(theme.fg(color, theme.bold(label)) + model + stamp, contentWidth)) {
 			lines.push(paneRow(wrapped, width));
 		}
 		for (const wrapped of wrapTextWithAnsi(message.text, contentWidth)) {
