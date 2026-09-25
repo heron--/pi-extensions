@@ -1,0 +1,18 @@
+#!/bin/sh
+# Runs after every successful `git pull` (post-merge fires for fast-forward
+# and merge pulls alike) and after local merges. scripts/link-extensions.mjs
+# is the idempotent detector: it exits silently when every extension is
+# already linked, so pulls that do not touch extension directories print
+# nothing, and a pull that adds one (e.g. a merged PR) links it immediately.
+#
+# Installed into .git/hooks/ as a symlink by scripts/link-extensions.mjs.
+#
+# Linked worktrees share the main checkout's hooks but have their own root,
+# and are usually transient /tmp checkouts — linking their extensions into
+# ~/.pi/agent/extensions would leave dangling links behind once the worktree
+# is deleted. Only the main checkout self-heals its discovery links.
+
+if [ "$(git rev-parse --git-dir 2>/dev/null)" = "$(git rev-parse --git-common-dir 2>/dev/null)" ]; then
+	node scripts/link-extensions.mjs --yes || \
+		echo "pi-extensions: post-pull link failed — run: node scripts/link-extensions.mjs --yes" >&2
+fi

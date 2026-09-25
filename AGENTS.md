@@ -58,16 +58,27 @@ locations**, and both are required for different reasons:
 | `.pi/extensions/<name>` (project-local, in this repo) | Only when `cwd` is inside `pi-extensions/` | Yes — directory must be in `~/.pi/agent/trust.json` |
 | `~/.pi/agent/extensions/<name>` (global) | Every directory, every project | No |
 
-**Neither symlink set updates itself.** Renaming an extension directory, or
-adding a new one, means manually fixing both. There is no discovery of nested
-directories and no way to point either location at a whole parent folder of
-extensions — confirmed by testing, not assumed. The routine fix is
-`node scripts/link-extensions.mjs` — idempotent, discovers extensions by
-convention (any root directory whose `package.json` has a `pi` key, so no
-edit is needed per extension), links `lib` alongside, and is called from the
-dotfiles install script rather than every shell init (a link broken between
-runs stays broken until the next run). The manual checklist below is the
-fallback and the explanation of *why* the script does what it does. (A single `package.json` with
+**Neither symlink set updates itself on its own**, but `git pull` does it:
+`scripts/link-extensions.mjs` also installs `scripts/hooks/post-merge` into
+`.git/hooks/`, and that hook re-runs the linker after every pull. So an
+extension merged upstream — a PR merged on another machine, then pulled
+here — is linked on the spot instead of silently failing to load. The
+hook is silent when a pull changes nothing extension-shaped, and
+deliberately skips linked worktrees, which share the main checkout's
+hooks but must not link their transient directories globally (a worktree
+still needs manual `pi -e`). Beyond pulls there is no auto-update:
+renaming an extension directory in a local working tree still means
+manually fixing both locations (or just running the linker), and there is
+no discovery of nested directories and no way to point either location at
+a whole parent folder of extensions — confirmed by testing, not assumed.
+The routine fix for all of it is `node scripts/link-extensions.mjs` —
+idempotent, discovers extensions by convention (any root directory whose
+`package.json` has a `pi` key, so no edit is needed per extension), links
+`lib` alongside, and is called from the dotfiles install script rather
+than every shell init (a machine that never pulls and never runs
+install.sh keeps whatever links it has until the next linker run). The
+manual checklist below is the fallback and the explanation of *why* the
+script does what it does. (A single `package.json` with
 a `"pi": { "extensions": [...] }` array *can* bundle several extensions behind
 one `pi install`, but that trades away installing/removing them one at a time,
 which is the current preference here — do not switch to it without asking.)
