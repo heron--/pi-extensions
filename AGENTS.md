@@ -93,8 +93,8 @@ otherwise a rename can leave a symlink pointing at nothing, and pi errors on
 next launch (this happened during the `pi-throttle-stream` → `pi-typewriter`
 rename).
 
-Currently symlinked, both locations: `pi-recap`, `pi-context-footer`, `pi-model-picker`,
-`pi-thinking-labels`, `pi-tool-output`, `pi-typewriter`, `pi-user-message`, `pi-write-lock`, `lib`.
+Standard setup links both locations for `pi-recap`, `pi-context-footer`, `pi-model-picker`,
+`pi-thinking-labels`, `pi-tool-output`, `pi-tree-pane`, `pi-typewriter`, `pi-user-message`, `pi-write-lock`, and `lib`.
 
 ## The `lib` symlink rule
 

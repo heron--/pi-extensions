@@ -1,0 +1,12 @@
+{
+  "name": "pi-tree-pane",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Experimental split fullscreen transcript with a scrollable conversation pane.",
+  "type": "module",
+  "main": "index.ts",
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "keywords": ["pi", "pi-package", "tui", "layout"]
+}
