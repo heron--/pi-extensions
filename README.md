@@ -88,7 +88,9 @@ pi-extensions/
 ├── tsconfig.paths.json    # GENERATED, gitignored
 ├── scripts/
 │   ├── sync-pi-types.mjs
-│   └── link-extensions.mjs
+│   ├── link-extensions.mjs
+│   └── hooks/
+│       └── post-merge     # re-runs link-extensions.mjs after every git pull
 ├── lib/                   # shared helpers, imported as "../lib/x.ts"
 │   ├── pricing.ts
 │   └── pricing.test.cjs   # npm run test:pricing
@@ -141,6 +143,17 @@ creates all of these (and their global counterparts) idempotently — it
 discovers extensions by convention, so it never needs an edit per extension. For a one-off experiment, drop a plain `.ts` file in there (that
 path is discovered too) and delete it when done; or skip the directory entirely
 and use `pi -e ./pi-thing/index.ts`.
+
+The same script also installs `scripts/hooks/post-merge` into `.git/hooks/`
+(main checkout only). That hook re-runs the linker after every `git pull`,
+so an extension merged upstream — a PR merged on another machine, then
+pulled here — is linked on the spot instead of failing to load. The linker
+is silent when there is nothing to do, so pulls that change no extension
+directories print nothing. Worktrees are deliberately excluded: they share
+the main checkout's hooks but skip linking (a transient `/tmp` worktree
+would leave dangling global links behind), so a worktree still needs
+`pi -e` (see AGENTS.md). Removing an extension is still manual: delete
+its symlinks first, then the directory, in both locations.
 
 ### The `lib` symlink is required, not decorative
 

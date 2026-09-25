@@ -9,6 +9,10 @@
  *                                                    cwd is inside this repo)
  *   ~/.pi/agent/extensions/<name> -> <repo>/<name>  (global; no trust gate;
  *                                                    active from anywhere)
+ *   .git/hooks/post-merge        -> ../../scripts/hooks/post-merge
+ *                                 (main checkout only; re-runs this script
+ *                                  after every git pull, so an extension
+ *                                  merged upstream is linked on the spot)
  *
  * Extensions are discovered by convention, not hardcoded: any directory at
  * the repo root with a package.json carrying a "pi": { "extensions": [...] }
@@ -23,17 +27,23 @@
  * IDEMPOTENT: state is checked (via realpath, not raw symlink text, so a
  * syntactically different but equivalent target does not count as drift)
  * before anything is planned. If nothing needs doing, this exits silently
- * with no prompt.
+ * with no prompt and no output — which is what lets the post-merge hook
+ * run it after every pull unconditionally.
  *
  * NEVER overwrites a real (non-symlink) file or directory in the way; that
- * is reported and skipped, not deleted.
+ * is reported and skipped, not deleted. Links whose target is gone are
+ * likewise left alone — removing an extension still means deleting its
+ * symlinks by hand first (see AGENTS.md).
  *
  * Meant to be called once from a dotfiles install script, same as that
  * script's tmux/nvim config-linking steps — see heron--dotfiles/install.sh
  * for the call site. Deliberately does NOT run this on every shell init;
  * there is no per-shell cache here because there is nothing that needs one.
- * If a symlink breaks between install.sh runs (e.g. deleted by hand), it
- * stays broken until the next run — same as a broken tmux/nvim link would.
+ * After that one install the post-merge hook self-heals the links on every
+ * pull; a link broken between pulls (e.g. deleted by hand) is repaired by
+ * the next one. Worktrees are not covered: they share the main checkout's
+ * hooks but skip linking (transient /tmp checkouts would leave dangling
+ * global links behind), so a worktree still needs manual `pi -e`.
  *
  * Usage:
  *   node scripts/link-extensions.mjs            # plan, confirm, apply
@@ -51,6 +61,7 @@ import {
 	realpathSync,
 	renameSync,
 	rmSync,
+	statSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -241,15 +252,51 @@ const trustAction = planTrustAction();
 if (trustAction) plan.push(trustAction);
 
 /* -------------------------------------------------------------------------- */
+/* Git hook                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The post-merge hook (scripts/hooks/post-merge) re-runs this script after
+ * every pull, so an extension merged upstream is linked on the spot. Only
+ * the main checkout installs it: linked worktrees share the main checkout's
+ * hooks already, and linking a transient /tmp worktree's extensions globally
+ * would leave dangling links behind once it is deleted.
+ */
+function planHookAction() {
+	const gitDir = join(REPO_ROOT, ".git");
+	const hookSource = join(REPO_ROOT, "scripts", "hooks", "post-merge");
+	if (!existsSync(gitDir) || !statSync(gitDir).isDirectory()) return null;
+	if (!existsSync(hookSource)) return null;
+	const hooksDir = join(gitDir, "hooks");
+	return planLinkAction(
+		join(hooksDir, "post-merge"),
+		relative(hooksDir, hookSource),
+		realpathSync(hookSource),
+		".git/hooks/post-merge",
+	);
+}
+
+const hookAction = planHookAction();
+if (hookAction) plan.push(hookAction);
+
+/* -------------------------------------------------------------------------- */
 /* Status-only / already-set-up exits                                        */
 /* -------------------------------------------------------------------------- */
 
-console.log(`pi-extensions: ${extensionNames.join(", ")}${hasLib ? " (+ lib)" : ""}`);
+const summary = `pi-extensions: ${extensionNames.join(", ")}${hasLib ? " (+ lib)" : ""}`;
 
 if (plan.length === 0) {
-	console.log("Already set up — nothing to do.");
+	// A no-op run prints nothing: the post-merge hook invokes this after
+	// every pull, and a pull that changed nothing extension-shaped must not
+	// add noise. --status still reports, for humans.
+	if (FLAG_STATUS) {
+		console.log(summary);
+		console.log("Already set up — nothing to do.");
+	}
 	process.exit(0);
 }
+
+console.log(summary);
 
 if (FLAG_STATUS) {
 	console.log("\nWould do:");
