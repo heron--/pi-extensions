@@ -12,18 +12,10 @@ pi --tui-mode fullscreen
 
 Enter `/tree-pane` to enable the split; enter it again to disable it. `/tree-pane on|off|status` is also available. The toggle starts off, so loading the extension does not change the layout until you enable it.
 
-To test a temporary worktree without changing global links, launch it explicitly from that worktree:
+The right pane shows user and assistant text from the active session branch, updates as assistant text streams, and represents image attachments as `[image]`. It omits thinking text, tool details and results, and extension messages; brief counts show thinking blocks and tool calls between messages. It follows the latest message until you scroll. Scroll over either pane with the mouse or drag the right scrollbar. Use **Alt+K** to page up, **Alt+J** to page down, and **Alt+G** to return to the latest message. Pi's normal transcript keys still scroll the left pane.
 
-```bash
-pi --tui-mode fullscreen --no-extensions -e ./pi-tree-pane/index.ts
-```
-
-`--no-extensions` isolates the experiment from installed extensions; omit it to test alongside them.
-
-The right pane follows the latest message until you scroll it. Wheel/trackpad scrolling over either pane and dragging the right scrollbar scroll that pane. **Alt+K** / **Alt+J** page the right pane up/down; **Alt+G** returns to its newest message. Pi's normal transcript keys still scroll the left pane. The right pane shows user text (with `[image]` for attachments) and assistant text. User labels use the same theme color as the pi-context-footer frame, assistant labels use the `success` color, and each message's local date and time (`YYYY-MM-DD HH:mm`) appears beside its label. Assistant labels show the model ID in the assistant label color between `Assistant` and its timestamp; the ID comes from that response's stored `responseModel` when present, otherwise `model`, so model changes appear on the messages that used them. Messages without a stored model ID omit it. Labels, timestamps, and model IDs wrap in narrow panes. Messages without a valid timestamp omit the timestamp but retain any stored model ID. Thinking content and tool-call details remain hidden; an italic, dim summary reports the number of thinking blocks and tool calls between visible messages, including while those counts update during a streamed response. Tool results, recap entries, and other extension messages remain hidden. It follows the active session branch, including messages retained in the session after compaction, and updates as assistant text streams.
-
-The split uses half the available columns per pane, apart from a one-column divider. Below 36 terminal columns the right pane is hidden so the feed remains usable; it reappears on resize. The toggle starts off in each session and after `/reload`. Switching away from fullscreen mode via `/settings` detaches the split; toggle it on again after returning to fullscreen.
+Below 36 terminal columns, the right pane is hidden; it reappears on resize. Switching away from fullscreen mode via `/settings` detaches the split; toggle it on again after returning to fullscreen.
 
 ## Compatibility
 
-Pi's regular TUI writes to terminal scrollback, which cannot provide independent application-owned scrolling. The command reports that fullscreen mode is required if started without `--tui-mode fullscreen`. This extension reads the fullscreen TUI's internal `layoutRoot` field and checks for Pi's transcript/dock structure before replacing it; if that structure changes, enabling fails without altering the layout. Disabling or ending the session restores the original root. Pi 0.85.1 and 0.87.1 are tested runtimes; Pi 0.84.1 lacks the mouse and scrollbar styling APIs used here.
+Fullscreen mode is required. The split is available only on supported Pi transcript layouts. Pi 0.85.1 and 0.87.1 are tested; Pi 0.84.1 lacks the mouse and scrollbar APIs used here.
