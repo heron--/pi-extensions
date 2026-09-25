@@ -64,6 +64,66 @@ test("conversation includes only user and assistant text, without tool calls or 
 	assert.equal(conversationItems(entries, streamed).length, 2, "the persisted live message appears once");
 });
 
+test("streaming reuses rendered history until the branch, width, or theme changes", () => {
+	const entries = [entry("1", user("history"))];
+	let branchReads = 0;
+	let historyLabelRenders = 0;
+	const countingTheme = {
+		...theme,
+		fg(color, text) {
+			if (color === "accent" && text.includes("User")) historyLabelRenders++;
+			return theme.fg(color, text);
+		},
+	};
+	const pane = new ConversationPane({
+		getLeafId: () => entries.at(-1)?.id ?? null,
+		getBranch: () => { branchReads++; return entries; },
+	}, countingTheme);
+	const history = pane.render(32);
+	assert.equal(branchReads, 1);
+	assert.equal(historyLabelRenders, 1);
+
+	const live = assistant([{ type: "text", text: "chunk 0" }]);
+	for (let index = 0; index < 12; index++) {
+		live.content = [{ type: "text", text: `chunk ${index}` }];
+		pane.setLive(live);
+		const lines = pane.render(32);
+		assert.deepEqual(lines.slice(0, history.length), history);
+		assert(lines.some((line) => line.includes(`chunk ${index}`)));
+		assert.equal(branchReads, 1, "stream updates do not re-read the branch");
+		assert.equal(historyLabelRenders, 1, "stream updates do not re-render history");
+	}
+
+	entries.push(entry("2", live));
+	const finalized = pane.render(32);
+	assert.equal(branchReads, 2, "a new leaf refreshes the history");
+	assert.equal(historyLabelRenders, 2);
+	assert.equal(finalized.filter((line) => line.includes("chunk 11")).length, 1, "persisted live messages appear once");
+	pane.setLive(undefined);
+	assert.equal(pane.render(32).filter((line) => line.includes("chunk 11")).length, 1);
+	pane.render(18);
+	assert.equal(branchReads, 3, "a new width rewraps history");
+	assert.equal(historyLabelRenders, 3);
+	pane.invalidate();
+	pane.render(18);
+	assert.equal(branchReads, 4, "theme/session invalidation rebuilds history");
+	assert.equal(historyLabelRenders, 4);
+});
+
+test("live text replaces the empty-state hint without rebuilding an empty branch", () => {
+	let branchReads = 0;
+	const pane = new ConversationPane({
+		getLeafId: () => null,
+		getBranch: () => { branchReads++; return []; },
+	}, theme);
+	assert(pane.render(24)[0].includes("No messages yet"));
+	pane.setLive(assistant([{ type: "text", text: "partial" }]));
+	assert(!pane.render(24).some((line) => line.includes("No messages yet")));
+	pane.setLive(undefined);
+	assert(pane.render(24)[0].includes("No messages yet"));
+	assert.equal(branchReads, 1);
+});
+
 test("labels show the message's local date and time across days and streaming updates", () => {
 	const first = { ...user("hello"), timestamp: new Date(2025, 11, 31, 23, 5).getTime() };
 	const reply = { ...assistant([{ type: "text", text: "answer" }]), timestamp: new Date(2026, 0, 1, 14, 32).getTime() };

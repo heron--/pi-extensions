@@ -66,10 +66,34 @@ function messageTimestamp(timestamp: number | undefined): string | undefined {
 	return `${day} ${time}`;
 }
 
+function paneRow(text: string, width: number): string {
+	return width < 3 ? " ".repeat(width) : ` ${truncateToWidth(text, width - 2, "", true)} `;
+}
+
+function renderItems(messages: readonly ConversationItem[], width: number, theme: Theme): string[] {
+	const lines: string[] = [];
+	const contentWidth = Math.max(1, width - 2);
+	for (const message of messages) {
+		lines.push(paneRow("", width));
+		const label = message.role === "user" ? "User" : "Assistant";
+		const color = message.role === "user" ? "accent" : "success";
+		const timestamp = messageTimestamp(message.timestamp);
+		const stamp = timestamp ? ` ${theme.fg("dim", timestamp)}` : "";
+		for (const wrapped of wrapTextWithAnsi(theme.fg(color, theme.bold(label)) + stamp, contentWidth)) {
+			lines.push(paneRow(wrapped, width));
+		}
+		for (const wrapped of wrapTextWithAnsi(message.text, contentWidth)) {
+			lines.push(paneRow(wrapped, width));
+		}
+	}
+	return lines;
+}
+
 /** Read-only view of the active session branch, including the current streamed message. */
 export class ConversationPane implements Component {
 	private live?: ConversationMessage;
 	private revision = 0;
+	private history?: { width: number; leaf: string | null; lines: string[]; persisted: Set<AgentMessage> };
 	private cached?: { width: number; leaf: string | null; revision: number; lines: string[] };
 	private readonly session: SessionSource;
 	private readonly theme: Theme;
@@ -82,10 +106,10 @@ export class ConversationPane implements Component {
 	setLive(message?: ConversationMessage): void {
 		this.live = message;
 		this.revision++;
-		this.invalidate();
 	}
 
 	invalidate(): void {
+		this.history = undefined;
 		this.cached = undefined;
 	}
 
@@ -96,26 +120,21 @@ export class ConversationPane implements Component {
 			return this.cached.lines;
 		}
 
-		const lines: string[] = [];
-		const contentWidth = Math.max(1, w - 2);
-		const row = (text: string) => w < 3 ? " ".repeat(w) : ` ${truncateToWidth(text, contentWidth, "", true)} `;
-		const messages = conversationItems(this.session.getBranch(), this.live);
-		if (messages.length === 0) {
-			lines.push(row(this.theme.fg("dim", "No messages yet")));
-		}
-		for (const message of messages) {
-			lines.push(row(""));
-			const label = message.role === "user" ? "User" : "Assistant";
-			const color = message.role === "user" ? "accent" : "success";
-			const timestamp = messageTimestamp(message.timestamp);
-			const stamp = timestamp ? ` ${this.theme.fg("dim", timestamp)}` : "";
-			for (const wrapped of wrapTextWithAnsi(this.theme.fg(color, this.theme.bold(label)) + stamp, contentWidth)) {
-				lines.push(row(wrapped));
+		let history = this.history;
+		if (!history || history.width !== w || history.leaf !== leaf) {
+			const branch = this.session.getBranch();
+			const persisted = new Set<AgentMessage>();
+			for (const entry of branch) {
+				if (entry.type === "message") persisted.add(entry.message);
 			}
-			for (const wrapped of wrapTextWithAnsi(message.text, contentWidth)) {
-				lines.push(row(wrapped));
-			}
+			history = { width: w, leaf, lines: renderItems(conversationItems(branch), w, this.theme), persisted };
+			this.history = history;
 		}
+
+		const live = this.live && !history.persisted.has(this.live) ? conversationItem(this.live) : undefined;
+		const lines = live
+			? history.lines.concat(renderItems([live], w, this.theme))
+			: history.lines.length > 0 ? history.lines : [paneRow(this.theme.fg("dim", "No messages yet"), w)];
 		this.cached = { width: w, leaf, revision: this.revision, lines };
 		return lines;
 	}
