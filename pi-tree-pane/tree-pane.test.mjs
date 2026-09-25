@@ -11,6 +11,7 @@ const theme = {
 		return `\x1b[${code}m${text}\x1b[0m`;
 	},
 	bold(text) { return `\x1b[1m${text}\x1b[22m`; },
+	italic(text) { return `\x1b[3m${text}\x1b[23m`; },
 };
 
 function user(text) { return { role: "user", content: text, timestamp: 1 }; }
@@ -37,7 +38,7 @@ test("the slash command is /tree-pane and its usage matches", async () => {
 	assert.deepEqual(notices, [{ message: "Usage: /tree-pane [on|off|status]", level: "warning" }]);
 });
 
-test("conversation includes only user and assistant text, without tool calls or recap entries", () => {
+test("conversation shows user and assistant text with summaries for hidden activity", () => {
 	const withImage = {
 		role: "user",
 		content: [{ type: "text", text: "look\x1b[2J\tat" }, { type: "image", data: "...", mimeType: "image/png" }],
@@ -58,10 +59,118 @@ test("conversation includes only user and assistant text, without tool calls or 
 		{ type: "custom", customType: "pi-recap", data: {} },
 		entry("3", { role: "toolResult", content: [{ type: "text", text: "tool output" }] })];
 	assert.deepEqual(conversationItems(entries, streamed), [
-		{ role: "user", text: "hello", timestamp: 1 }, { role: "assistant", text: "partial", timestamp: 2 },
+		{ role: "user", text: "hello", timestamp: 1 },
+		{ role: "activity", toolCalls: 1, thinkingBlocks: 0 },
+		{ role: "assistant", text: "partial", timestamp: 2 },
 	]);
 	entries.push(entry("4", streamed));
-	assert.equal(conversationItems(entries, streamed).length, 2, "the persisted live message appears once");
+	assert.equal(conversationItems(entries, streamed).length, 3, "the persisted live message appears once");
+});
+
+test("activity summaries count thinking blocks and tool calls between visible messages", () => {
+	const toolCall = { type: "toolCall", id: "t", name: "bash", arguments: {} };
+	const thinking = { type: "thinking", thinking: "hidden reasoning" };
+	const entries = [
+		entry("1", user("question")),
+		entry("2", assistant([thinking, toolCall])),
+		entry("3", { role: "toolResult", content: [{ type: "text", text: "tool output" }] }),
+		entry("4", assistant([{ type: "thinking", thinking: "more reasoning" }, { type: "text", text: "answer" }])),
+	];
+	assert.deepEqual(conversationItems(entries), [
+		{ role: "user", text: "question", timestamp: 1 },
+		{ role: "activity", toolCalls: 1, thinkingBlocks: 2 },
+		{ role: "assistant", text: "answer", timestamp: 2 },
+	]);
+
+	const trailing = new ConversationPane(session(entries.slice(0, 3)), theme).render(18);
+	assert(trailing.every((line) => visibleWidth(line) === 18));
+	assert(trailing.map(stripTerminalSequences).map((line) => line.trim()).join(" ").includes("1 tool call, 1 thinking block"));
+});
+
+test("live activity summaries update as thinking blocks and tool calls arrive", () => {
+	const pane = new ConversationPane(session([entry("1", user("question"))]), theme);
+	const live = assistant([]);
+	const plainLines = () => pane.render(64).map(stripTerminalSequences).map((line) => line.trim());
+	pane.setLive(live);
+	assert(!plainLines().some((line) => line.includes("tool call")));
+
+	live.content = [{ type: "thinking", thinking: "reasoning" }];
+	pane.setLive(live);
+	let lines = pane.render(64);
+	assert(plainLines().includes("0 tool calls, 1 thinking block"));
+	const summary = lines.find((line) => stripTerminalSequences(line).includes("0 tool calls, 1 thinking block"));
+	assert(summary?.includes("\x1b[3m"), "activity summaries are italic");
+	assert(summary?.includes("\x1b[90m"), "activity summaries use the dim color");
+
+	live.content.push({ type: "toolCall", id: "t", name: "bash", arguments: {} });
+	pane.setLive(live);
+	assert(plainLines().includes("1 tool call, 1 thinking block"));
+
+	live.content.push({ type: "text", text: "answer" });
+	pane.setLive(live);
+	lines = pane.render(64);
+	const plain = lines.map(stripTerminalSequences).map((line) => line.trim());
+	const activityIndex = plain.indexOf("1 tool call, 1 thinking block");
+	assert(activityIndex > plain.indexOf("question"));
+	assert(activityIndex < plain.findIndex((line) => line.startsWith("Assistant")), "the live summary stays between visible messages");
+	assert(lines.every((line) => visibleWidth(line) === 64));
+});
+
+test("persisted live activity is not counted twice", () => {
+	const entries = [entry("1", user("question"))];
+	const live = assistant([
+		{ type: "thinking", thinking: "reasoning" },
+		{ type: "toolCall", id: "t", name: "bash", arguments: {} },
+	]);
+	const pane = new ConversationPane(session(entries), theme);
+	const summaryCount = () => pane.render(64).map(stripTerminalSequences).join("\n").match(/1 tool call, 1 thinking block/g)?.length ?? 0;
+
+	pane.setLive(live);
+	assert.equal(summaryCount(), 1);
+	entries.push(entry("2", live));
+	pane.setLive(live);
+	assert.equal(summaryCount(), 1);
+});
+
+test("activity summaries follow text that precedes tool calls in persisted and live messages", () => {
+	const first = assistant([
+		{ type: "text", text: "I'll check that." },
+		{ type: "toolCall", id: "t", name: "bash", arguments: {} },
+	]);
+	const answer = assistant([{ type: "text", text: "Done." }]);
+	const entries = [
+		entry("1", user("question")),
+		entry("2", first),
+		entry("3", { role: "toolResult", content: [{ type: "text", text: "tool output" }] }),
+		entry("4", answer),
+	];
+	assert.deepEqual(conversationItems(entries), [
+		{ role: "user", text: "question", timestamp: 1 },
+		{ role: "assistant", text: "I'll check that.", timestamp: 2 },
+		{ role: "activity", toolCalls: 1, thinkingBlocks: 0 },
+		{ role: "assistant", text: "Done.", timestamp: 2 },
+	]);
+
+	const pane = new ConversationPane(session(entries), theme);
+	const persisted = pane.render(64).map(stripTerminalSequences).map((line) => line.trim());
+	assert(persisted.indexOf("I'll check that.") < persisted.indexOf("1 tool call, 0 thinking blocks"));
+	assert(persisted.indexOf("1 tool call, 0 thinking blocks") < persisted.indexOf("Done."));
+
+	const livePane = new ConversationPane(session([entry("1", user("question"))]), theme);
+	const live = assistant([
+		{ type: "text", text: "I'll check that." },
+		{ type: "toolCall", id: "t", name: "bash", arguments: {} },
+	]);
+	const liveLines = () => livePane.render(64).map(stripTerminalSequences).map((line) => line.trim());
+	livePane.setLive(live);
+	let current = liveLines();
+	assert(current.indexOf("I'll check that.") < current.indexOf("1 tool call, 0 thinking blocks"));
+
+	live.content.push({ type: "text", text: "Done." });
+	livePane.setLive(live);
+	current = liveLines();
+	assert(current.indexOf("I'll check that.") < current.indexOf("1 tool call, 0 thinking blocks"));
+	assert(current.indexOf("1 tool call, 0 thinking blocks") < current.indexOf("Done."));
 });
 
 test("streaming reuses rendered history until the branch, width, or theme changes", () => {
