@@ -67,6 +67,31 @@ test("conversation shows user and assistant text with summaries for hidden activ
 	assert.equal(conversationItems(entries, streamed).length, 3, "the persisted live message appears once");
 });
 
+test("assistant labels show the model stored on each response and omit missing models", () => {
+	const first = { ...assistant([{ type: "text", text: "first" }]), timestamp: undefined, model: "request-alias", responseModel: "served-model-a" };
+	const second = { ...assistant([{ type: "text", text: "second" }]), timestamp: undefined, model: "model-b" };
+	const missing = { ...assistant([{ type: "text", text: "third" }]), timestamp: undefined, model: "  " };
+	const entries = [entry("1", first), entry("2", second), entry("3", missing)];
+	assert.deepEqual(conversationItem(first), {
+		role: "assistant", text: "first", timestamp: undefined, model: "served-model-a",
+	});
+
+	const pane = new ConversationPane(session(entries), theme);
+	const labels = (width) => pane.render(width).map(stripTerminalSequences).map((line) => line.trim()).filter((line) => line.startsWith("Assistant"));
+	assert.deepEqual(labels(80), ["Assistant (served-model-a)", "Assistant (model-b)", "Assistant"]);
+	assert(!labels(80).some((line) => line.includes("request-alias")), "the recorded response model takes precedence");
+	for (const width of [18, 24, 32]) {
+		const lines = pane.render(width);
+		assert(lines.every((line) => visibleWidth(line) === width));
+		assert(lines.map(stripTerminalSequences).join("").replace(/\s/g, "").includes("served-model-a"));
+	}
+	assert(pane.render(80).some((line) => line.includes("\x1b[90m(served-model-a)")), "model ids are dimmed");
+
+	const livePane = new ConversationPane(session(), theme);
+	livePane.setLive({ ...assistant([{ type: "text", text: "streaming" }]), timestamp: undefined, model: "live-model" });
+	assert(livePane.render(80).map(stripTerminalSequences).map((line) => line.trim()).includes("Assistant (live-model)"));
+});
+
 test("activity summaries count thinking blocks and tool calls between visible messages", () => {
 	const toolCall = { type: "toolCall", id: "t", name: "bash", arguments: {} };
 	const thinking = { type: "thinking", thinking: "hidden reasoning" };

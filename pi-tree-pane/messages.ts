@@ -9,6 +9,7 @@ export interface ConversationMessageItem {
 	role: "user" | "assistant";
 	text: string;
 	timestamp?: number;
+	model?: string;
 }
 
 export interface ConversationActivityItem {
@@ -26,6 +27,16 @@ function safeText(text: string): string {
 		.replace(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/g, "");
 }
 
+function storedModelId(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const model = safeText(value).replace(/\s+/g, " ").trim();
+	return model || undefined;
+}
+
+function assistantModelId(message: Extract<AgentMessage, { role: "assistant" }>): string | undefined {
+	return storedModelId(message.responseModel) ?? storedModelId(message.model);
+}
+
 export function conversationItem(message: AgentMessage): ConversationMessageItem | undefined {
 	if (message.role === "user") {
 		const content = typeof message.content === "string"
@@ -40,7 +51,10 @@ export function conversationItem(message: AgentMessage): ConversationMessageItem
 			.map((block) => block.text)
 			.join("\n"));
 		// A tool-only or thinking-only assistant turn has no message to list.
-		return text.trim() ? { role: "assistant", text, timestamp: message.timestamp } : undefined;
+		const model = assistantModelId(message);
+		return text.trim()
+			? { role: "assistant", text, timestamp: message.timestamp, ...(model ? { model } : {}) }
+			: undefined;
 	}
 	return undefined;
 }
@@ -58,13 +72,14 @@ function appendAssistantMessage(
 	pendingActivity: Omit<ConversationActivityItem, "role">,
 ): void {
 	let textBlocks: string[] = [];
+	const model = assistantModelId(message);
 	const appendText = () => {
 		if (textBlocks.length === 0) return;
 		const text = safeText(textBlocks.join("\n"));
 		textBlocks = [];
 		if (!text.trim()) return;
 		appendActivity(items, pendingActivity);
-		items.push({ role: "assistant", text, timestamp: message.timestamp });
+		items.push({ role: "assistant", text, timestamp: message.timestamp, ...(model ? { model } : {}) });
 	};
 
 	for (const block of message.content) {
@@ -144,7 +159,8 @@ function renderItems(messages: readonly ConversationItem[], width: number, theme
 		const color = message.role === "user" ? "accent" : "success";
 		const timestamp = messageTimestamp(message.timestamp);
 		const stamp = timestamp ? ` ${theme.fg("dim", timestamp)}` : "";
-		for (const wrapped of wrapTextWithAnsi(theme.fg(color, theme.bold(label)) + stamp, contentWidth)) {
+		const model = message.role === "assistant" && message.model ? ` ${theme.fg("dim", `(${message.model})`)}` : "";
+		for (const wrapped of wrapTextWithAnsi(theme.fg(color, theme.bold(label)) + stamp + model, contentWidth)) {
 			lines.push(paneRow(wrapped, width));
 		}
 		for (const wrapped of wrapTextWithAnsi(message.text, contentWidth)) {
