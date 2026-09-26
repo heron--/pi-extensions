@@ -16,31 +16,42 @@ Certainly some extensions had more intellectual engagement from me than others.
 ## Extensions
 
 <!-- Keep this alphabetized -->
-- **[pi-context-footer](pi-context-footer/README.md)** — puts model, thinking,
-  path, context, git, cost, token, and extension status information directly
+  - **[pi-context-footer](pi-context-footer/README.md)** — I tried to make a
+  footer that is light weight, but has all the info I care about. Displays model,
+  thinking, path, context, git, cost, token, and extension status information directly
   into the prompt editor's top and bottom border rows.
-- **[pi-model-picker](pi-model-picker/README.md)** — takes over `/model` with a
+- **[pi-model-picker](pi-model-picker/README.md)** — I really just wanted to be
+  able to set model and effort level at the same time. This takes over `/model` with a
   two-stage picker that sets the model and its thinking level in one flow, with
   type-to-filter, capability icons, and a pricing column.
-- **[pi-recap](pi-recap/README.md)** — periodically writes durable,
-  cursor-driven session recap logs with a rotating cheap model, and renders
+- **[pi-recap](pi-recap/README.md)** — I took my own shot at the recaps that Claude code has.
+  I made it rotate between the various cheap/fast models I have. It periodically writes
+  durable, cursor-driven session recap logs with a rotating cheap model, and renders
   each recap in the transcript.
-- **[pi-thinking-labels](pi-thinking-labels/README.md)** — labels thinking
+- **[pi-thinking-labels](pi-thinking-labels/README.md)** — I liked the thinking labels
+  in powerline-footer, but I wanted them to be _even fancier_. This labels thinking
   blocks in the transcript using the shared level colors while stripping those
   presentation labels before the next model turn.
-- **[pi-tool-output](pi-tool-output/README.md)** — frames built-in and known
+- **[pi-tool-output](pi-tool-output/README.md)** — I wanted tool output to be concise
+  and consistent with the design of my other extensions. This frames built-in and known
   extension tools in the shared dark house box, with readable names, a semantic
   one-line summary of each call, dimmed expandable output, and preserved
   renderer ownership during migration from `pi-tool-display`.
-- **[pi-tree-pane](pi-tree-pane/README.md)** — experimentally splits the fullscreen
-  transcript into Pi's original feed and an independently scrollable list of
-  user and assistant messages.
-- **[pi-typewriter](pi-typewriter/README.md)** — reveals streamed assistant
-  output at a steady typewriter pace instead of whatever has arrived so far.
-  Escape skips the effect for the current message.
-- **[pi-user-message](pi-user-message/README.md)** — frames user turns in the
+- **[pi-tree-pane](pi-tree-pane/README.md)** — **EXPERIMENTAL** I really struggled to keep up
+  with an Astra conversation with all of it's tool calls. I wanted a more compact view where I
+  could just see our conversation. This exists in pi with the `/tree` command.
+  Requires fullscreen mode, which is itself experimental. I've been tuning the performance of
+  this one to make sure it runs well.
+- **[pi-typewriter](pi-typewriter/README.md)** — I got motion sick when I first used Opus
+  with pi because of how text streamed in as large chunks. This was one of my first
+  extensions to add an RPG-style "typewriter" effect to output. Different models stream
+  differently and I've been trying to adapt it to all of them, but no guarantee this
+  will always work. Escape skips the effect for the current message.
+- **[pi-user-message](pi-user-message/README.md)** — Just making our messages consistent with
+  the other extensions (recap, tool-output, context-footer). This frames user turns in the
   house box while retaining Pi's native markdown and shell-integration markers.
-- **[pi-write-lock](pi-write-lock/README.md)** — adds a session-scoped
+- **[pi-write-lock](pi-write-lock/README.md)** — A lever for when you really don't want an
+  agent making changes and you don't want to test their adherence. It adds a session-scoped
   read-only mode that removes write tools, injects a read-only instruction, and
   blocks common mutating shell commands while the lock is on.
 
@@ -304,6 +315,8 @@ railRow({ line, paint, padX: 1, padTo: inner, bg: filled });
 The thinking-level colour scheme, shared by `pi-context-footer` (the
 `thinking:level` label in the frame) and `pi-model-picker` (the stage-2 level
 rows), so a given level looks the same everywhere it appears.
+
+![Thinking levels and reasoning effort](docs/images/thinking-level.gif)
 
 Two tiers, mirroring the escalation they encode:
 

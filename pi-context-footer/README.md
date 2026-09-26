@@ -5,6 +5,8 @@ draws a continuous border around the prompt editor and sets session status
 items into the rule itself, inspired by
 [`pi-powerline-footer`](https://github.com/nicobailon/pi-powerline-footer).
 
+![Context footer framing the editor with model, thinking level, context, branch, cost, token, and write-lock status](../docs/images/context-footer-prompt-frame.png)
+
 ## Layout
 
 The frame is one unbroken box — `╭──╮`, vertical rails down both sides, `╰──╯` —

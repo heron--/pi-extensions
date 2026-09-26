@@ -4,6 +4,8 @@ A [pi](https://github.com/earendil-works/pi-coding-agent) extension that draws
 the user's message in the house box, under the house crow (, nf-fa-crow —
 the bestiary already has spider, skull, and flower):
 
+![A user message displayed in the house box with the crow icon](../docs/images/user-message-box.png)
+
 ```text
 ╭  User ────────────────────────────────────╮
 │ what shape should the border take?         │

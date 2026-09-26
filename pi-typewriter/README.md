@@ -6,6 +6,8 @@ roughly one character at a time, at a steady pace — instead of however much
 text the provider has sent so far. Includes an Escape hatch to skip the
 effect for a single message when you're in a rush.
 
+![The typewriter effect revealing streamed assistant text](../docs/images/typewriter-demo.gif)
+
 Pi has no built-in "typing speed" setting — it draws whatever text has
 arrived from the model so far, whenever it arrives. Fast/bursty streamers
 (Opus in particular) can dump large blocks of text onto the screen almost

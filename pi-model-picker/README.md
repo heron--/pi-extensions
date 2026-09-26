@@ -4,6 +4,10 @@ A [pi](https://github.com/earendil-works/pi-coding-agent) extension that changes
 model selection: a two-stage picker that sets the model **and** its thinking
 level in one flow.
 
+![Stage 1: model selection with grouped models, capability icons, context windows, and pricing](../docs/images/model-picker-model-selection.png)
+
+![Stage 2: thinking-level selection with reasoning effort and intensity gauge](../docs/images/model-picker-thinking-levels.png)
+
 - **Stage 1** — pick a model, with **type-to-filter** matching across
   `provider/id` and display name (e.g. typing `sonnet` finds
   `anthropic/claude-sonnet-4-5`). Fixed-width columns show capability icons,
