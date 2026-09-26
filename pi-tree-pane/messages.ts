@@ -3,7 +3,7 @@ import type { ExtensionContext, SessionEntry, Theme } from "@earendil-works/pi-c
 import { stripTerminalSequences, truncateToWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
 export type ConversationMessage = Extract<AgentMessage, { role: "user" | "assistant" }>;
-type SessionSource = Pick<ExtensionContext["sessionManager"], "getBranch" | "getLeafId">;
+type SessionSource = Pick<ExtensionContext["sessionManager"], "getBranch" | "getLeafId"> & Partial<Pick<ExtensionContext["sessionManager"], "getEntry">>;
 
 export interface ConversationMessageItem {
 	role: "user" | "assistant";
@@ -29,7 +29,8 @@ export interface ConversationStats {
 
 interface ConversationStatsState extends ConversationStats {
 	leaf: string | null;
-	entries: SessionEntry[];
+	entryCount: number;
+	lastEntry?: SessionEntry;
 	persisted: Set<AgentMessage>;
 }
 
@@ -147,6 +148,22 @@ export function conversationItems(entries: readonly SessionEntry[], live?: Conve
 	return items;
 }
 
+function appendedBranchEntries(
+	session: SessionSource,
+	entryCount: number,
+	lastEntry: SessionEntry | undefined,
+	leaf: string | null,
+): SessionEntry[] | undefined {
+	if (!session.getEntry || entryCount === 0 || !lastEntry || !leaf) return undefined;
+	const reversed: SessionEntry[] = [];
+	let entry = session.getEntry(leaf);
+	while (entry && entry.id !== lastEntry.id) {
+		reversed.push(entry);
+		entry = entry.parentId ? session.getEntry(entry.parentId) : undefined;
+	}
+	return entry?.id === lastEntry.id ? reversed.reverse() : undefined;
+}
+
 function countMessage(message: AgentMessage, stats: ConversationStatsState): void {
 	if (message.role === "user") {
 		stats.userMessages++;
@@ -216,13 +233,15 @@ export class ConversationPane implements Component {
 	private history?: {
 		width: number;
 		leaf: string | null;
-		entries: SessionEntry[];
+		entryCount: number;
+		lastEntry?: SessionEntry;
 		lines: string[];
 		hasVisibleMessage: boolean;
 		persisted: Set<AgentMessage>;
 		pendingActivity: ActivityCounts;
 	};
 	private cached?: { width: number; leaf: string | null; revision: number; lines: string[] };
+	private composed?: { source: object; persistedLength: number; lines: string[] };
 	private stats?: ConversationStatsState;
 	private readonly session: SessionSource;
 	private readonly theme: Theme;
@@ -240,6 +259,7 @@ export class ConversationPane implements Component {
 	invalidate(): void {
 		this.history = undefined;
 		this.cached = undefined;
+		this.composed = undefined;
 		this.stats = undefined;
 	}
 
@@ -247,23 +267,24 @@ export class ConversationPane implements Component {
 		const leaf = this.session.getLeafId();
 		let stats = this.stats;
 		if (!stats || stats.leaf !== leaf) {
-			const branch = this.session.getBranch();
-			const statsLength = stats?.entries.length ?? 0;
-			const extendsStats = branch.length >= statsLength
-				&& (statsLength === 0 || branch[statsLength - 1] === stats?.entries[statsLength - 1]);
-			if (stats && extendsStats) {
-				for (let index = stats.entries.length; index < branch.length; index++) {
-					const entry = branch[index]!;
+			const appended = stats
+				? appendedBranchEntries(this.session, stats.entryCount, stats.lastEntry, leaf)
+				: undefined;
+			if (stats && appended) {
+				for (const entry of appended) {
 					if (entry.type !== "message") continue;
 					stats.persisted.add(entry.message);
 					countMessage(entry.message, stats);
 				}
-				stats.entries = branch.slice();
+				stats.entryCount += appended.length;
+				stats.lastEntry = appended.at(-1) ?? stats.lastEntry;
 				stats.leaf = leaf;
 			} else {
+				const branch = this.session.getBranch();
 				stats = {
 					leaf,
-					entries: branch.slice(),
+					entryCount: branch.length,
+					lastEntry: branch.at(-1),
 					persisted: new Set<AgentMessage>(),
 					userMessages: 0,
 					agentMessages: 0,
@@ -298,17 +319,12 @@ export class ConversationPane implements Component {
 
 		let history = this.history;
 		if (!history || history.width !== w || history.leaf !== leaf) {
-			const branch = this.session.getBranch();
-			const historyLength = history?.entries.length ?? 0;
-			// Session entries have one immutable parent, so the same entry at the
-			// previous leaf depth proves the complete path prefix is unchanged.
-			const extendsHistory = history?.width === w
-				&& branch.length >= historyLength
-				&& (historyLength === 0 || branch[historyLength - 1] === history.entries[historyLength - 1]);
-			if (history && extendsHistory) {
+			const appended = history?.width === w
+				? appendedBranchEntries(this.session, history.entryCount, history.lastEntry, leaf)
+				: undefined;
+			if (history && appended) {
 				const appendedItems: ConversationItem[] = [];
-				for (let index = history.entries.length; index < branch.length; index++) {
-					const entry = branch[index]!;
+				for (const entry of appended) {
 					if (entry.type !== "message") continue;
 					history.persisted.add(entry.message);
 					appendConversationMessage(entry.message, appendedItems, history.pendingActivity);
@@ -317,14 +333,17 @@ export class ConversationPane implements Component {
 					history.lines.push(...renderItems(appendedItems, w, this.theme, history.hasVisibleMessage));
 					if (appendedItems.some((item) => item.role !== "activity")) history.hasVisibleMessage = true;
 				}
-				history.entries = branch.slice();
+				history.entryCount += appended.length;
+				history.lastEntry = appended.at(-1) ?? history.lastEntry;
 				history.leaf = leaf;
 			} else {
+				const branch = this.session.getBranch();
 				const { items, persisted, pendingActivity } = buildConversation(branch);
 				history = {
 					width: w,
 					leaf,
-					entries: branch.slice(),
+					entryCount: branch.length,
+					lastEntry: branch.at(-1),
 					lines: renderItems(items, w, this.theme),
 					hasVisibleMessage: items.some((item) => item.role !== "activity"),
 					persisted,
@@ -340,10 +359,22 @@ export class ConversationPane implements Component {
 			appendConversationMessage(this.live, tailItems, pendingActivity);
 		}
 		appendActivity(tailItems, pendingActivity);
-		const lines = history.lines.slice();
-		if (tailItems.length > 0) lines.push(...renderItems(tailItems, w, this.theme, history.hasVisibleMessage));
-		if (lines.length === 0) lines.push(paneRow(this.theme.fg("dim", "No messages yet"), w));
-		this.cached = { width: w, leaf, revision: this.revision, lines };
-		return lines;
+		// Reuse one flattened output buffer so live tails never copy persisted rows.
+		let composed = this.composed;
+		if (!composed || composed.source !== history) {
+			composed = { source: history, persistedLength: history.lines.length, lines: [...history.lines] };
+			this.composed = composed;
+		} else {
+			composed.lines.length = composed.persistedLength;
+			for (let index = composed.persistedLength; index < history.lines.length; index++) {
+				composed.lines.push(history.lines[index]!);
+			}
+			composed.persistedLength = history.lines.length;
+		}
+		composed.lines.length = composed.persistedLength;
+		if (tailItems.length > 0) composed.lines.push(...renderItems(tailItems, w, this.theme, history.hasVisibleMessage));
+		if (composed.lines.length === 0) composed.lines.push(paneRow(this.theme.fg("dim", "No messages yet"), w));
+		this.cached = { width: w, leaf, revision: this.revision, lines: composed.lines };
+		return composed.lines;
 	}
 }

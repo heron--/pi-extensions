@@ -35,6 +35,11 @@ function createEntries(count) {
 function createSession(entries) {
 	return {
 		getLeafId: () => entries.at(-1)?.id ?? null,
+		getEntry(id) {
+			const index = Number(id);
+			const item = entries[index];
+			return item ? { ...item, parentId: entries[index - 1]?.id ?? null } : undefined;
+		},
 		getBranch: () => entries,
 	};
 }

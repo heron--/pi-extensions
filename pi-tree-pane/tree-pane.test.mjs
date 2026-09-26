@@ -17,10 +17,15 @@ const theme = {
 function user(text) { return { role: "user", content: text, timestamp: 1 }; }
 function assistant(content) { return { role: "assistant", content, timestamp: 2 }; }
 function entry(id, message) { return { type: "message", id, message }; }
+function getEntry(entries, id) {
+	const index = entries.findIndex((item) => item.id === id);
+	return index < 0 ? undefined : { ...entries[index], parentId: entries[index].parentId ?? entries[index - 1]?.id ?? null };
+}
 
 function session(entries = []) {
 	return {
 		getLeafId: () => entries.at(-1)?.id ?? null,
+		getEntry: (id) => getEntry(entries, id),
 		getBranch: () => entries,
 	};
 }
@@ -253,9 +258,10 @@ test("streaming reuses rendered history until the branch, width, or theme change
 	};
 	const pane = new ConversationPane({
 		getLeafId: () => entries.at(-1)?.id ?? null,
+		getEntry: (id) => getEntry(entries, id),
 		getBranch: () => { branchReads++; return entries; },
 	}, countingTheme);
-	const history = pane.render(32);
+	const history = [...pane.render(32)];
 	assert.equal(branchReads, 1);
 	assert.equal(historyLabelRenders, 1);
 
@@ -272,17 +278,17 @@ test("streaming reuses rendered history until the branch, width, or theme change
 
 	entries.push(entry("2", live));
 	const finalized = pane.render(32);
-	assert.equal(branchReads, 2, "a new leaf reads the appended branch entries");
+	assert.equal(branchReads, 1, "a new leaf reads only the appended branch entries");
 	assert.equal(historyLabelRenders, 1, "appending a leaf does not re-render existing history");
 	assert.equal(finalized.filter((line) => line.includes("chunk 11")).length, 1, "persisted live messages appear once");
 	pane.setLive(undefined);
 	assert.equal(pane.render(32).filter((line) => line.includes("chunk 11")).length, 1);
 	pane.render(18);
-	assert.equal(branchReads, 3, "a new width rewraps history");
+	assert.equal(branchReads, 2, "a new width rewraps history");
 	assert.equal(historyLabelRenders, 2);
 	pane.invalidate();
 	pane.render(18);
-	assert.equal(branchReads, 4, "theme/session invalidation rebuilds history");
+	assert.equal(branchReads, 3, "theme/session invalidation rebuilds history");
 	assert.equal(historyLabelRenders, 3);
 });
 
@@ -299,6 +305,7 @@ test("append-only branches render incrementally while branch changes rebuild his
 	};
 	const pane = new ConversationPane({
 		getLeafId: () => branch.at(-1)?.id ?? null,
+		getEntry: (id) => getEntry(branch, id),
 		getBranch: () => branch,
 	}, countingTheme);
 	pane.render(40);
