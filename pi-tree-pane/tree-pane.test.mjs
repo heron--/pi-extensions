@@ -403,11 +403,13 @@ test("layout keeps Pi's transcript and dock, splits evenly and restores the orig
 	const right = split.children[2];
 	assert(right instanceof VStack);
 	const title = right.children[0];
-	assert.equal(title.render(100).map(stripTerminalSequences).map((line) => line.trim()).join(" "),
-		"Conversation - 1 User Messages · 0 Assistant Messages · 0 Total Turns");
-	assert.deepEqual(title.render(40).map(stripTerminalSequences).map((line) => line.trim()), [
-		"Conversation",
+	assert.deepEqual(title.render(40).map(stripTerminalSequences).map((line) => line.trim()), ["Conversation"]);
+	const footer = right.children[2];
+	assert.equal(footer.render(100).map(stripTerminalSequences).map((line) => line.trim()).join(" "),
+		"1 User Messages · 0 Assistant Messages · 0 Total Turns");
+	assert.deepEqual(footer.render(40).map(stripTerminalSequences).map((line) => line.trim()), [
 		"1 User Messages · 0 Assistant Messages",
+		"0 Total Turns",
 	]);
 	const side = right.children[1];
 	assert(side instanceof ScrollView);
@@ -434,7 +436,7 @@ test("layout keeps Pi's transcript and dock, splits evenly and restores the orig
 	pane.handleMouse = (event) => { forwarded.push(event); return { handled: true }; };
 	if (typeof VStack.prototype.handleMouse === "function") {
 		assert.equal(right.handleMouse(click)?.target.component, pane, "nested controls receive non-wheel events");
-		assert.equal(forwarded[0].y, 0, "the title rows are excluded from child coordinates");
+		assert.equal(forwarded[0].y, 1, "the title row is excluded from child coordinates");
 	} else {
 		assert.equal(right.handleMouse(click), undefined, "older renderers leave clicks to Pi");
 	}
@@ -470,7 +472,7 @@ test("fullscreen mouse press and drag scroll the right scrollbar independently",
 		const atEnd = side.scrollTop;
 		assert(atEnd > 0, "conversation exceeds its viewport");
 		const x = terminal.columns;
-		const thumbY = 2 + side.viewportHeight; // two title rows precede the last scrollbar row
+		const thumbY = 1 + side.viewportHeight; // the title row precedes the last scrollbar row
 		tui.handleTerminalInput(`\x1b[<0;${x};${thumbY}M`); // press the scrollbar thumb
 		tui.handleTerminalInput(`\x1b[<32;${x};4M`); // drag while holding the primary button
 		assert(side.scrollTop < atEnd, "drag moves the right pane up");

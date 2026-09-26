@@ -120,20 +120,35 @@ export class TreePaneLayout {
 		const title: Component = {
 			render: (width) => {
 				const w = Math.max(1, width);
+				return [w < 3 ? " ".repeat(w) : ` ${truncateToWidth(this.theme.fg("muted", this.theme.bold("Conversation")), w - 2, "", true)} `];
+			},
+			invalidate: () => {},
+		};
+		const footer: Component = {
+			render: (width) => {
+				const w = Math.max(1, width);
 				if (w < 3) return [" ".repeat(w)];
-				const row = (text: string) => ` ${truncateToWidth(text, w - 2, "", true)} `;
+				const innerWidth = w - 2;
 				const stats = this.messages.getStats();
-				const summary = `${stats.userMessages} User Messages · ${stats.assistantMessages} Assistant Messages · ${stats.totalTurns} Total Turns`;
-				const heading = this.theme.fg("muted", this.theme.bold("Conversation"));
-				const detail = this.theme.fg("muted", summary);
-				const combined = `${heading}${this.theme.fg("muted", ` - ${summary}`)}`;
-				return visibleWidth(combined) <= w - 2 ? [row(combined)] : [row(heading), row(detail)];
+				const user = `${stats.userMessages} User Messages`;
+				const assistant = `${stats.assistantMessages} Assistant Messages`;
+				const turns = `${stats.totalTurns} Total Turns`;
+				const messages = `${user} · ${assistant}`;
+				const summary = `${messages} · ${turns}`;
+				const rows = visibleWidth(summary) <= innerWidth
+					? [summary]
+					: visibleWidth(messages) <= innerWidth ? [messages, turns] : [user, assistant, turns];
+				return rows.map((text) => {
+					const clipped = truncateToWidth(this.theme.fg("muted", text), innerWidth, "", true);
+					return ` ${" ".repeat(Math.max(0, innerWidth - visibleWidth(clipped)))}${clipped} `;
+				});
 			},
 			invalidate: () => {},
 		};
 		const right = new RightPane([
 			{ component: title, basis: "auto", grow: 0, shrink: 0, minSize: 1 },
 			{ component: side, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+			{ component: footer, basis: "auto", grow: 0, shrink: 0, minSize: 1 },
 		], side);
 		const splitVisible = ({ width }: { width: number }) => width >= MIN_SPLIT_COLUMNS;
 		const split = new HalfWidthStack([
