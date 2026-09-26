@@ -3,7 +3,7 @@ import type { ExtensionContext, SessionEntry, Theme } from "@earendil-works/pi-c
 import { stripTerminalSequences, truncateToWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
 export type ConversationMessage = Extract<AgentMessage, { role: "user" | "assistant" }>;
-type SessionSource = Pick<ExtensionContext["sessionManager"], "getBranch" | "getLeafId">;
+type SessionSource = Pick<ExtensionContext["sessionManager"], "getBranch" | "getLeafId"> & Partial<Pick<ExtensionContext["sessionManager"], "getEntry">>;
 
 export interface ConversationMessageItem {
 	role: "user" | "assistant";
@@ -19,6 +19,20 @@ export interface ConversationActivityItem {
 }
 
 export type ConversationItem = ConversationMessageItem | ConversationActivityItem;
+
+export interface ConversationStats {
+	userMessages: number;
+	agentMessages: number;
+	toolCalls: number;
+	thinkingBlocks: number;
+}
+
+interface ConversationStatsState extends ConversationStats {
+	leaf: string | null;
+	entryCount: number;
+	lastEntry?: SessionEntry;
+	persisted: Set<AgentMessage>;
+}
 
 function safeText(text: string): string {
 	return stripTerminalSequences(text)
@@ -96,31 +110,70 @@ function appendAssistantMessage(
 	appendText();
 }
 
-export function conversationItems(entries: readonly SessionEntry[], live?: ConversationMessage): ConversationItem[] {
+type ActivityCounts = Omit<ConversationActivityItem, "role">;
+
+function appendConversationMessage(message: AgentMessage, items: ConversationItem[], pendingActivity: ActivityCounts): void {
+	if (message.role === "assistant") {
+		appendAssistantMessage(message, items, pendingActivity);
+		return;
+	}
+	const item = conversationItem(message);
+	if (!item) return;
+	appendActivity(items, pendingActivity);
+	items.push(item);
+}
+
+function buildConversation(entries: readonly SessionEntry[]): {
+	items: ConversationItem[];
+	persisted: Set<AgentMessage>;
+	pendingActivity: ActivityCounts;
+} {
 	const items: ConversationItem[] = [];
 	const persisted = new Set<AgentMessage>();
 	const pendingActivity = { toolCalls: 0, thinkingBlocks: 0 };
-	const appendMessage = (message: AgentMessage) => {
-		if (message.role === "assistant") {
-			appendAssistantMessage(message, items, pendingActivity);
-			return;
-		}
-		const item = conversationItem(message);
-		if (!item) return;
-		appendActivity(items, pendingActivity);
-		items.push(item);
-	};
-
 	for (const entry of entries) {
 		if (entry.type !== "message") continue;
 		persisted.add(entry.message);
-		appendMessage(entry.message);
+		appendConversationMessage(entry.message, items, pendingActivity);
 	}
+	return { items, persisted, pendingActivity };
+}
+
+export function conversationItems(entries: readonly SessionEntry[], live?: ConversationMessage): ConversationItem[] {
+	const { items, persisted, pendingActivity } = buildConversation(entries);
 	// Pi emits message_end before appending the message to SessionManager. The
 	// finalized message is the same object it appends, so identity avoids duplicates.
-	if (live && !persisted.has(live)) appendMessage(live);
+	if (live && !persisted.has(live)) appendConversationMessage(live, items, pendingActivity);
 	appendActivity(items, pendingActivity);
 	return items;
+}
+
+function appendedBranchEntries(
+	session: SessionSource,
+	entryCount: number,
+	lastEntry: SessionEntry | undefined,
+	leaf: string | null,
+): SessionEntry[] | undefined {
+	if (!session.getEntry || entryCount === 0 || !lastEntry || !leaf) return undefined;
+	const reversed: SessionEntry[] = [];
+	let entry = session.getEntry(leaf);
+	while (entry && entry.id !== lastEntry.id) {
+		reversed.push(entry);
+		entry = entry.parentId ? session.getEntry(entry.parentId) : undefined;
+	}
+	return entry?.id === lastEntry.id ? reversed.reverse() : undefined;
+}
+
+function countMessage(message: AgentMessage, stats: ConversationStatsState): void {
+	if (message.role === "user") {
+		stats.userMessages++;
+	} else if (message.role === "assistant") {
+		stats.agentMessages++;
+		for (const block of message.content) {
+			if (block.type === "toolCall") stats.toolCalls++;
+			else if (block.type === "thinking") stats.thinkingBlocks++;
+		}
+	}
 }
 
 function messageTimestamp(timestamp: number | undefined): string | undefined {
@@ -140,9 +193,10 @@ function paneRow(text: string, width: number): string {
 	return width < 3 ? " ".repeat(width) : ` ${truncateToWidth(text, width - 2, "", true)} `;
 }
 
-function renderItems(messages: readonly ConversationItem[], width: number, theme: Theme): string[] {
+function renderItems(messages: readonly ConversationItem[], width: number, theme: Theme, hasPriorMessage = false): string[] {
 	const lines: string[] = [];
 	const contentWidth = Math.max(1, width - 2);
+	let hasMessage = hasPriorMessage;
 	for (const message of messages) {
 		if (message.role === "activity") {
 			const toolCalls = `${message.toolCalls} tool call${message.toolCalls === 1 ? "" : "s"}`;
@@ -155,7 +209,9 @@ function renderItems(messages: readonly ConversationItem[], width: number, theme
 		}
 
 		lines.push(paneRow("", width));
-		const label = message.role === "user" ? "User" : "Assistant";
+		if (hasMessage) lines.push(paneRow("", width));
+		hasMessage = true;
+		const label = message.role === "user" ? "User" : "Agent";
 		const color = message.role === "user" ? "syntaxType" : "success";
 		const timestamp = messageTimestamp(message.timestamp);
 		const model = message.role === "assistant" && message.model ? ` ${theme.fg(color, `(${message.model})`)}` : "";
@@ -177,11 +233,16 @@ export class ConversationPane implements Component {
 	private history?: {
 		width: number;
 		leaf: string | null;
+		entryCount: number;
+		lastEntry?: SessionEntry;
 		lines: string[];
+		hasVisibleMessage: boolean;
 		persisted: Set<AgentMessage>;
-		pendingActivity?: ConversationActivityItem;
+		pendingActivity: ActivityCounts;
 	};
 	private cached?: { width: number; leaf: string | null; revision: number; lines: string[] };
+	private composed?: { source: object; persistedLength: number; lines: string[] };
+	private stats?: ConversationStatsState;
 	private readonly session: SessionSource;
 	private readonly theme: Theme;
 
@@ -198,6 +259,55 @@ export class ConversationPane implements Component {
 	invalidate(): void {
 		this.history = undefined;
 		this.cached = undefined;
+		this.composed = undefined;
+		this.stats = undefined;
+	}
+
+	getStats(): ConversationStats {
+		const leaf = this.session.getLeafId();
+		let stats = this.stats;
+		if (!stats || stats.leaf !== leaf) {
+			const appended = stats
+				? appendedBranchEntries(this.session, stats.entryCount, stats.lastEntry, leaf)
+				: undefined;
+			if (stats && appended) {
+				for (const entry of appended) {
+					if (entry.type !== "message") continue;
+					stats.persisted.add(entry.message);
+					countMessage(entry.message, stats);
+				}
+				stats.entryCount += appended.length;
+				stats.lastEntry = appended.at(-1) ?? stats.lastEntry;
+				stats.leaf = leaf;
+			} else {
+				const branch = this.session.getBranch();
+				stats = {
+					leaf,
+					entryCount: branch.length,
+					lastEntry: branch.at(-1),
+					persisted: new Set<AgentMessage>(),
+					userMessages: 0,
+					agentMessages: 0,
+					toolCalls: 0,
+					thinkingBlocks: 0,
+				};
+				for (const entry of branch) {
+					if (entry.type !== "message") continue;
+					stats.persisted.add(entry.message);
+					countMessage(entry.message, stats);
+				}
+				this.stats = stats;
+			}
+		}
+
+		const result = this.live && !stats.persisted.has(this.live) ? { ...stats } : stats;
+		if (result !== stats) countMessage(this.live!, result);
+		return {
+			userMessages: result.userMessages,
+			agentMessages: result.agentMessages,
+			toolCalls: result.toolCalls,
+			thinkingBlocks: result.thinkingBlocks,
+		};
 	}
 
 	render(width: number): string[] {
@@ -209,43 +319,62 @@ export class ConversationPane implements Component {
 
 		let history = this.history;
 		if (!history || history.width !== w || history.leaf !== leaf) {
-			const branch = this.session.getBranch();
-			const persisted = new Set<AgentMessage>();
-			for (const entry of branch) {
-				if (entry.type === "message") persisted.add(entry.message);
+			const appended = history?.width === w
+				? appendedBranchEntries(this.session, history.entryCount, history.lastEntry, leaf)
+				: undefined;
+			if (history && appended) {
+				const appendedItems: ConversationItem[] = [];
+				for (const entry of appended) {
+					if (entry.type !== "message") continue;
+					history.persisted.add(entry.message);
+					appendConversationMessage(entry.message, appendedItems, history.pendingActivity);
+				}
+				if (appendedItems.length > 0) {
+					history.lines.push(...renderItems(appendedItems, w, this.theme, history.hasVisibleMessage));
+					if (appendedItems.some((item) => item.role !== "activity")) history.hasVisibleMessage = true;
+				}
+				history.entryCount += appended.length;
+				history.lastEntry = appended.at(-1) ?? history.lastEntry;
+				history.leaf = leaf;
+			} else {
+				const branch = this.session.getBranch();
+				const { items, persisted, pendingActivity } = buildConversation(branch);
+				history = {
+					width: w,
+					leaf,
+					entryCount: branch.length,
+					lastEntry: branch.at(-1),
+					lines: renderItems(items, w, this.theme),
+					hasVisibleMessage: items.some((item) => item.role !== "activity"),
+					persisted,
+					pendingActivity,
+				};
+				this.history = history;
 			}
-			const items = conversationItems(branch);
-			const last = items.at(-1);
-			let pendingActivity: ConversationActivityItem | undefined;
-			if (last?.role === "activity") {
-				pendingActivity = last;
-				items.pop();
-			}
-			history = { width: w, leaf, lines: renderItems(items, w, this.theme), persisted, pendingActivity };
-			this.history = history;
 		}
 
-		const live = this.live && !history.persisted.has(this.live) ? this.live : undefined;
-		const liveItems = live ? conversationItems([], live) : [];
-		const activity = {
-			role: "activity" as const,
-			toolCalls: history.pendingActivity?.toolCalls ?? 0,
-			thinkingBlocks: history.pendingActivity?.thinkingBlocks ?? 0,
-		};
-		while (true) {
-			const leading = liveItems[0];
-			if (!leading || leading.role !== "activity") break;
-			liveItems.shift();
-			activity.toolCalls += leading.toolCalls;
-			activity.thinkingBlocks += leading.thinkingBlocks;
+		const tailItems: ConversationItem[] = [];
+		const pendingActivity = { ...history.pendingActivity };
+		if (this.live && !history.persisted.has(this.live)) {
+			appendConversationMessage(this.live, tailItems, pendingActivity);
 		}
-		const lines = history.lines.slice();
-		if (activity.toolCalls > 0 || activity.thinkingBlocks > 0) {
-			lines.push(...renderItems([activity], w, this.theme));
+		appendActivity(tailItems, pendingActivity);
+		// Reuse one flattened output buffer so live tails never copy persisted rows.
+		let composed = this.composed;
+		if (!composed || composed.source !== history) {
+			composed = { source: history, persistedLength: history.lines.length, lines: [...history.lines] };
+			this.composed = composed;
+		} else {
+			composed.lines.length = composed.persistedLength;
+			for (let index = composed.persistedLength; index < history.lines.length; index++) {
+				composed.lines.push(history.lines[index]!);
+			}
+			composed.persistedLength = history.lines.length;
 		}
-		if (liveItems.length > 0) lines.push(...renderItems(liveItems, w, this.theme));
-		if (lines.length === 0) lines.push(paneRow(this.theme.fg("dim", "No messages yet"), w));
-		this.cached = { width: w, leaf, revision: this.revision, lines };
-		return lines;
+		composed.lines.length = composed.persistedLength;
+		if (tailItems.length > 0) composed.lines.push(...renderItems(tailItems, w, this.theme, history.hasVisibleMessage));
+		if (composed.lines.length === 0) composed.lines.push(paneRow(this.theme.fg("dim", "No messages yet"), w));
+		this.cached = { width: w, leaf, revision: this.revision, lines: composed.lines };
+		return composed.lines;
 	}
 }

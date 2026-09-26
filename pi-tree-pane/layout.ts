@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Container, HStack, ScrollView, VStack, truncateToWidth, type Component, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { Container, HStack, ScrollView, VStack, truncateToWidth, visibleWidth, type Component, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { ConversationPane, type ConversationMessage } from "./messages.ts";
 
 export const MIN_SPLIT_COLUMNS = 36;
@@ -120,13 +120,41 @@ export class TreePaneLayout {
 		const title: Component = {
 			render: (width) => {
 				const w = Math.max(1, width);
-				return [w < 3 ? " ".repeat(w) : ` ${truncateToWidth(this.theme.fg("muted", this.theme.bold("Conversation")), w - 2, "", true)} `];
+				return [w < 3 ? " ".repeat(w) : ` ${truncateToWidth(this.theme.fg("muted", this.theme.bold("Transcript")), w - 2, "", true)} `];
+			},
+			invalidate: () => {},
+		};
+		const footer: Component = {
+			render: (width) => {
+				const w = Math.max(1, width);
+				if (w < 3) return [" ".repeat(w)];
+				const innerWidth = w - 2;
+				const stats = this.messages.getStats();
+				const parts = [
+					`${stats.userMessages} User Messages`,
+					`${stats.agentMessages} Agent Messages`,
+					`${stats.toolCalls} Tool Calls`,
+					`${stats.thinkingBlocks} Thinking Blocks`,
+				];
+				const rows: string[] = [];
+				for (const part of parts) {
+					const previous = rows.at(-1);
+					const combined = previous ? `${previous} · ${part}` : part;
+					if (previous && visibleWidth(combined) > innerWidth) rows.push(part);
+					else if (previous) rows[rows.length - 1] = combined;
+					else rows.push(part);
+				}
+				return rows.map((text) => {
+					const clipped = truncateToWidth(this.theme.fg("muted", text), innerWidth, "", true);
+					return ` ${" ".repeat(Math.max(0, innerWidth - visibleWidth(clipped)))}${clipped} `;
+				});
 			},
 			invalidate: () => {},
 		};
 		const right = new RightPane([
 			{ component: title, basis: "auto", grow: 0, shrink: 0, minSize: 1 },
 			{ component: side, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+			{ component: footer, basis: "auto", grow: 0, shrink: 0, minSize: 1 },
 		], side);
 		const splitVisible = ({ width }: { width: number }) => width >= MIN_SPLIT_COLUMNS;
 		const split = new HalfWidthStack([

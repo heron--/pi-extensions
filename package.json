@@ -11,6 +11,7 @@
 		"test:pricing": "npm run sync-types && node --test lib/pricing.test.cjs",
 		"test:recap": "node --no-warnings --experimental-strip-types --test pi-recap/*.test.mjs",
 		"test:tree-pane": "npm run sync-types && node --no-warnings --experimental-strip-types --import ./scripts/pi-test-loader.mjs --test pi-tree-pane/*.test.mjs",
+		"profile:tree-pane": "npm run sync-types && node --no-warnings --experimental-strip-types --import ./scripts/pi-test-loader.mjs pi-tree-pane/profile.mjs",
 		"check": "npm run typecheck && npm run test:tool-output && npm run test:pricing && npm run test:recap && npm run test:tree-pane",
 		"watch": "npm run sync-types && tsc -p tsconfig.json --watch --preserveWatchOutput",
 		"postinstall": "node scripts/sync-pi-types.mjs || true"
