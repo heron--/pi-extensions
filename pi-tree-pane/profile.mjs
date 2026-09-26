@@ -46,10 +46,12 @@ function profileAppend(args) {
 	const entries = createEntries(initialMessages);
 	const pane = new ConversationPane(createSession(entries), theme);
 	pane.render(width);
+	pane.getStats();
 	const startedAt = performance.now();
 	for (let index = 0; index < appendedMessages; index++) {
 		entries.push(messageEntry(initialMessages + index));
 		pane.render(width);
+		pane.getStats();
 	}
 	const elapsedMs = performance.now() - startedAt;
 	console.log(JSON.stringify({

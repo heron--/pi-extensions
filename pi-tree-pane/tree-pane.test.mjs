@@ -100,6 +100,25 @@ test("assistant labels show stored models before timestamps in the assistant col
 	assert(livePane.render(80).map(stripTerminalSequences).map((line) => line.trim()).includes("Assistant (live-model)"));
 });
 
+test("conversation stats count messages and completed user-assistant turns", () => {
+	const firstUser = user("question");
+	const toolUse = { ...assistant([{ type: "toolCall", id: "t", name: "bash", arguments: {} }]), stopReason: "toolUse" };
+	const finalReply = { ...assistant([{ type: "text", text: "answer" }]), stopReason: "stop" };
+	const secondUser = user("follow-up");
+	const entries = [entry("1", firstUser), entry("2", toolUse), entry("3", finalReply), entry("4", secondUser)];
+	const pane = new ConversationPane(session(entries), theme);
+	assert.deepEqual(pane.getStats(), { userMessages: 2, assistantMessages: 2, totalTurns: 1 });
+
+	const live = { ...assistant([{ type: "text", text: "partial" }]), stopReason: "pending" };
+	pane.setLive(live);
+	assert.deepEqual(pane.getStats(), { userMessages: 2, assistantMessages: 3, totalTurns: 1 });
+	live.stopReason = "stop";
+	pane.setLive(live);
+	assert.deepEqual(pane.getStats(), { userMessages: 2, assistantMessages: 3, totalTurns: 2 });
+	entries.push(entry("5", live));
+	assert.deepEqual(pane.getStats(), { userMessages: 2, assistantMessages: 3, totalTurns: 2 }, "persisting live replies does not double count them");
+});
+
 test("activity summaries count thinking blocks and tool calls between visible messages", () => {
 	const toolCall = { type: "toolCall", id: "t", name: "bash", arguments: {} };
 	const thinking = { type: "thinking", thinking: "hidden reasoning" };
@@ -383,6 +402,13 @@ test("layout keeps Pi's transcript and dock, splits evenly and restores the orig
 	assert.equal(tui.layoutRoot.children[1], dock, "the input dock is unchanged");
 	const right = split.children[2];
 	assert(right instanceof VStack);
+	const title = right.children[0];
+	assert.equal(title.render(100).map(stripTerminalSequences).map((line) => line.trim()).join(" "),
+		"Conversation - 1 User Messages · 0 Assistant Messages · 0 Total Turns");
+	assert.deepEqual(title.render(40).map(stripTerminalSequences).map((line) => line.trim()), [
+		"Conversation",
+		"1 User Messages · 0 Assistant Messages",
+	]);
 	const side = right.children[1];
 	assert(side instanceof ScrollView);
 	assert.equal(side.scrollbar, "always");
@@ -408,7 +434,7 @@ test("layout keeps Pi's transcript and dock, splits evenly and restores the orig
 	pane.handleMouse = (event) => { forwarded.push(event); return { handled: true }; };
 	if (typeof VStack.prototype.handleMouse === "function") {
 		assert.equal(right.handleMouse(click)?.target.component, pane, "nested controls receive non-wheel events");
-		assert.equal(forwarded[0].y, 1, "the title's row is excluded from child coordinates");
+		assert.equal(forwarded[0].y, 0, "the title rows are excluded from child coordinates");
 	} else {
 		assert.equal(right.handleMouse(click), undefined, "older renderers leave clicks to Pi");
 	}
@@ -444,7 +470,7 @@ test("fullscreen mouse press and drag scroll the right scrollbar independently",
 		const atEnd = side.scrollTop;
 		assert(atEnd > 0, "conversation exceeds its viewport");
 		const x = terminal.columns;
-		const thumbY = 1 + side.viewportHeight; // scrollbar thumb ends on the last viewport row
+		const thumbY = 2 + side.viewportHeight; // two title rows precede the last scrollbar row
 		tui.handleTerminalInput(`\x1b[<0;${x};${thumbY}M`); // press the scrollbar thumb
 		tui.handleTerminalInput(`\x1b[<32;${x};4M`); // drag while holding the primary button
 		assert(side.scrollTop < atEnd, "drag moves the right pane up");

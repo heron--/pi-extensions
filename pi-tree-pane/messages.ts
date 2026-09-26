@@ -20,6 +20,19 @@ export interface ConversationActivityItem {
 
 export type ConversationItem = ConversationMessageItem | ConversationActivityItem;
 
+export interface ConversationStats {
+	userMessages: number;
+	assistantMessages: number;
+	totalTurns: number;
+}
+
+interface ConversationStatsState extends ConversationStats {
+	leaf: string | null;
+	entries: SessionEntry[];
+	persisted: Set<AgentMessage>;
+	awaitingAssistant: boolean;
+}
+
 function safeText(text: string): string {
 	return stripTerminalSequences(text)
 		.replace(/\r\n?|\n/g, "\n")
@@ -134,6 +147,25 @@ export function conversationItems(entries: readonly SessionEntry[], live?: Conve
 	return items;
 }
 
+function assistantReturnsControl(message: Extract<AgentMessage, { role: "assistant" }>): boolean {
+	return message.stopReason !== "pending"
+		&& message.stopReason !== "deferred"
+		&& !message.content.some((block) => block.type === "toolCall");
+}
+
+function countMessage(message: AgentMessage, stats: ConversationStatsState): void {
+	if (message.role === "user") {
+		stats.userMessages++;
+		stats.awaitingAssistant = true;
+	} else if (message.role === "assistant") {
+		stats.assistantMessages++;
+		if (stats.awaitingAssistant && assistantReturnsControl(message)) {
+			stats.totalTurns++;
+			stats.awaitingAssistant = false;
+		}
+	}
+}
+
 function messageTimestamp(timestamp: number | undefined): string | undefined {
 	if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) return undefined;
 	const date = new Date(timestamp);
@@ -194,6 +226,7 @@ export class ConversationPane implements Component {
 		pendingActivity: ActivityCounts;
 	};
 	private cached?: { width: number; leaf: string | null; revision: number; lines: string[] };
+	private stats?: ConversationStatsState;
 	private readonly session: SessionSource;
 	private readonly theme: Theme;
 
@@ -210,6 +243,52 @@ export class ConversationPane implements Component {
 	invalidate(): void {
 		this.history = undefined;
 		this.cached = undefined;
+		this.stats = undefined;
+	}
+
+	getStats(): ConversationStats {
+		const leaf = this.session.getLeafId();
+		let stats = this.stats;
+		if (!stats || stats.leaf !== leaf) {
+			const branch = this.session.getBranch();
+			const statsLength = stats?.entries.length ?? 0;
+			const extendsStats = branch.length >= statsLength
+				&& (statsLength === 0 || branch[statsLength - 1] === stats?.entries[statsLength - 1]);
+			if (stats && extendsStats) {
+				for (let index = stats.entries.length; index < branch.length; index++) {
+					const entry = branch[index]!;
+					if (entry.type !== "message") continue;
+					stats.persisted.add(entry.message);
+					countMessage(entry.message, stats);
+				}
+				stats.entries = branch.slice();
+				stats.leaf = leaf;
+			} else {
+				stats = {
+					leaf,
+					entries: branch.slice(),
+					persisted: new Set<AgentMessage>(),
+					userMessages: 0,
+					assistantMessages: 0,
+					totalTurns: 0,
+					awaitingAssistant: false,
+				};
+				for (const entry of branch) {
+					if (entry.type !== "message") continue;
+					stats.persisted.add(entry.message);
+					countMessage(entry.message, stats);
+				}
+				this.stats = stats;
+			}
+		}
+
+		const result = this.live && !stats.persisted.has(this.live) ? { ...stats } : stats;
+		if (result !== stats) countMessage(this.live!, result);
+		return {
+			userMessages: result.userMessages,
+			assistantMessages: result.assistantMessages,
+			totalTurns: result.totalTurns,
+		};
 	}
 
 	render(width: number): string[] {

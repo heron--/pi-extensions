@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Container, HStack, ScrollView, VStack, truncateToWidth, type Component, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { Container, HStack, ScrollView, VStack, truncateToWidth, visibleWidth, type Component, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { ConversationPane, type ConversationMessage } from "./messages.ts";
 
 export const MIN_SPLIT_COLUMNS = 36;
@@ -120,7 +120,14 @@ export class TreePaneLayout {
 		const title: Component = {
 			render: (width) => {
 				const w = Math.max(1, width);
-				return [w < 3 ? " ".repeat(w) : ` ${truncateToWidth(this.theme.fg("muted", this.theme.bold("Conversation")), w - 2, "", true)} `];
+				if (w < 3) return [" ".repeat(w)];
+				const row = (text: string) => ` ${truncateToWidth(text, w - 2, "", true)} `;
+				const stats = this.messages.getStats();
+				const summary = `${stats.userMessages} User Messages · ${stats.assistantMessages} Assistant Messages · ${stats.totalTurns} Total Turns`;
+				const heading = this.theme.fg("muted", this.theme.bold("Conversation"));
+				const detail = this.theme.fg("muted", summary);
+				const combined = `${heading}${this.theme.fg("muted", ` - ${summary}`)}`;
+				return visibleWidth(combined) <= w - 2 ? [row(combined)] : [row(heading), row(detail)];
 			},
 			invalidate: () => {},
 		};

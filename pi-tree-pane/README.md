@@ -12,7 +12,7 @@ pi --tui-mode fullscreen
 
 Enter `/tree-pane` to enable the split; enter it again to disable it. `/tree-pane on|off|status` is also available. The toggle starts off, so loading the extension does not change the layout until you enable it.
 
-The right pane shows user and assistant text from the active session branch, updates as assistant text streams, and represents image attachments as `[image]`. It omits thinking text, tool details and results, and extension messages; brief counts show thinking blocks and tool calls between messages. It follows the latest message until you scroll. Scroll over either pane with the mouse or drag the right scrollbar. Use **Alt+K** to page up, **Alt+J** to page down, and **Alt+G** to return to the latest message. Pi's normal transcript keys still scroll the left pane.
+The right pane shows user and assistant text from the active session branch, updates as assistant text streams, and represents image attachments as `[image]`. Its heading counts user messages, assistant messages, and completed turns; a turn ends when a non-tool-use assistant response returns control for more user input. It omits thinking text, tool details and results, and extension messages; brief counts show thinking blocks and tool calls between messages. It follows the latest message until you scroll. Scroll over either pane with the mouse or drag the right scrollbar. Use **Alt+K** to page up, **Alt+J** to page down, and **Alt+G** to return to the latest message. Pi's normal transcript keys still scroll the left pane.
 
 Below 36 terminal columns, the right pane is hidden; it reappears on resize. Switching away from fullscreen mode via `/settings` detaches the split; toggle it on again after returning to fullscreen.
 
