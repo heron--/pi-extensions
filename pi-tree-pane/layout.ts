@@ -120,7 +120,7 @@ export class TreePaneLayout {
 		const title: Component = {
 			render: (width) => {
 				const w = Math.max(1, width);
-				return [w < 3 ? " ".repeat(w) : ` ${truncateToWidth(this.theme.fg("muted", this.theme.bold("Conversation")), w - 2, "", true)} `];
+				return [w < 3 ? " ".repeat(w) : ` ${truncateToWidth(this.theme.fg("muted", this.theme.bold("Transcript")), w - 2, "", true)} `];
 			},
 			invalidate: () => {},
 		};
@@ -130,14 +130,20 @@ export class TreePaneLayout {
 				if (w < 3) return [" ".repeat(w)];
 				const innerWidth = w - 2;
 				const stats = this.messages.getStats();
-				const user = `${stats.userMessages} User Messages`;
-				const assistant = `${stats.assistantMessages} Assistant Messages`;
-				const turns = `${stats.totalTurns} Total Turns`;
-				const messages = `${user} · ${assistant}`;
-				const summary = `${messages} · ${turns}`;
-				const rows = visibleWidth(summary) <= innerWidth
-					? [summary]
-					: visibleWidth(messages) <= innerWidth ? [messages, turns] : [user, assistant, turns];
+				const parts = [
+					`${stats.userMessages} User Messages`,
+					`${stats.agentMessages} Agent Messages`,
+					`${stats.toolCalls} Tool Calls`,
+					`${stats.thinkingBlocks} Thinking Blocks`,
+				];
+				const rows: string[] = [];
+				for (const part of parts) {
+					const previous = rows.at(-1);
+					const combined = previous ? `${previous} · ${part}` : part;
+					if (previous && visibleWidth(combined) > innerWidth) rows.push(part);
+					else if (previous) rows[rows.length - 1] = combined;
+					else rows.push(part);
+				}
 				return rows.map((text) => {
 					const clipped = truncateToWidth(this.theme.fg("muted", text), innerWidth, "", true);
 					return ` ${" ".repeat(Math.max(0, innerWidth - visibleWidth(clipped)))}${clipped} `;

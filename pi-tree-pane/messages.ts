@@ -22,15 +22,15 @@ export type ConversationItem = ConversationMessageItem | ConversationActivityIte
 
 export interface ConversationStats {
 	userMessages: number;
-	assistantMessages: number;
-	totalTurns: number;
+	agentMessages: number;
+	toolCalls: number;
+	thinkingBlocks: number;
 }
 
 interface ConversationStatsState extends ConversationStats {
 	leaf: string | null;
 	entries: SessionEntry[];
 	persisted: Set<AgentMessage>;
-	awaitingAssistant: boolean;
 }
 
 function safeText(text: string): string {
@@ -147,21 +147,14 @@ export function conversationItems(entries: readonly SessionEntry[], live?: Conve
 	return items;
 }
 
-function assistantReturnsControl(message: Extract<AgentMessage, { role: "assistant" }>): boolean {
-	return message.stopReason !== "pending"
-		&& message.stopReason !== "deferred"
-		&& !message.content.some((block) => block.type === "toolCall");
-}
-
 function countMessage(message: AgentMessage, stats: ConversationStatsState): void {
 	if (message.role === "user") {
 		stats.userMessages++;
-		stats.awaitingAssistant = true;
 	} else if (message.role === "assistant") {
-		stats.assistantMessages++;
-		if (stats.awaitingAssistant && assistantReturnsControl(message)) {
-			stats.totalTurns++;
-			stats.awaitingAssistant = false;
+		stats.agentMessages++;
+		for (const block of message.content) {
+			if (block.type === "toolCall") stats.toolCalls++;
+			else if (block.type === "thinking") stats.thinkingBlocks++;
 		}
 	}
 }
@@ -183,9 +176,10 @@ function paneRow(text: string, width: number): string {
 	return width < 3 ? " ".repeat(width) : ` ${truncateToWidth(text, width - 2, "", true)} `;
 }
 
-function renderItems(messages: readonly ConversationItem[], width: number, theme: Theme): string[] {
+function renderItems(messages: readonly ConversationItem[], width: number, theme: Theme, hasPriorMessage = false): string[] {
 	const lines: string[] = [];
 	const contentWidth = Math.max(1, width - 2);
+	let hasMessage = hasPriorMessage;
 	for (const message of messages) {
 		if (message.role === "activity") {
 			const toolCalls = `${message.toolCalls} tool call${message.toolCalls === 1 ? "" : "s"}`;
@@ -198,7 +192,9 @@ function renderItems(messages: readonly ConversationItem[], width: number, theme
 		}
 
 		lines.push(paneRow("", width));
-		const label = message.role === "user" ? "User" : "Assistant";
+		if (hasMessage) lines.push(paneRow("", width));
+		hasMessage = true;
+		const label = message.role === "user" ? "User" : "Agent";
 		const color = message.role === "user" ? "syntaxType" : "success";
 		const timestamp = messageTimestamp(message.timestamp);
 		const model = message.role === "assistant" && message.model ? ` ${theme.fg(color, `(${message.model})`)}` : "";
@@ -222,6 +218,7 @@ export class ConversationPane implements Component {
 		leaf: string | null;
 		entries: SessionEntry[];
 		lines: string[];
+		hasVisibleMessage: boolean;
 		persisted: Set<AgentMessage>;
 		pendingActivity: ActivityCounts;
 	};
@@ -269,9 +266,9 @@ export class ConversationPane implements Component {
 					entries: branch.slice(),
 					persisted: new Set<AgentMessage>(),
 					userMessages: 0,
-					assistantMessages: 0,
-					totalTurns: 0,
-					awaitingAssistant: false,
+					agentMessages: 0,
+					toolCalls: 0,
+					thinkingBlocks: 0,
 				};
 				for (const entry of branch) {
 					if (entry.type !== "message") continue;
@@ -286,8 +283,9 @@ export class ConversationPane implements Component {
 		if (result !== stats) countMessage(this.live!, result);
 		return {
 			userMessages: result.userMessages,
-			assistantMessages: result.assistantMessages,
-			totalTurns: result.totalTurns,
+			agentMessages: result.agentMessages,
+			toolCalls: result.toolCalls,
+			thinkingBlocks: result.thinkingBlocks,
 		};
 	}
 
@@ -315,7 +313,10 @@ export class ConversationPane implements Component {
 					history.persisted.add(entry.message);
 					appendConversationMessage(entry.message, appendedItems, history.pendingActivity);
 				}
-				if (appendedItems.length > 0) history.lines.push(...renderItems(appendedItems, w, this.theme));
+				if (appendedItems.length > 0) {
+					history.lines.push(...renderItems(appendedItems, w, this.theme, history.hasVisibleMessage));
+					if (appendedItems.some((item) => item.role !== "activity")) history.hasVisibleMessage = true;
+				}
 				history.entries = branch.slice();
 				history.leaf = leaf;
 			} else {
@@ -325,6 +326,7 @@ export class ConversationPane implements Component {
 					leaf,
 					entries: branch.slice(),
 					lines: renderItems(items, w, this.theme),
+					hasVisibleMessage: items.some((item) => item.role !== "activity"),
 					persisted,
 					pendingActivity,
 				};
@@ -339,7 +341,7 @@ export class ConversationPane implements Component {
 		}
 		appendActivity(tailItems, pendingActivity);
 		const lines = history.lines.slice();
-		if (tailItems.length > 0) lines.push(...renderItems(tailItems, w, this.theme));
+		if (tailItems.length > 0) lines.push(...renderItems(tailItems, w, this.theme, history.hasVisibleMessage));
 		if (lines.length === 0) lines.push(paneRow(this.theme.fg("dim", "No messages yet"), w));
 		this.cached = { width: w, leaf, revision: this.revision, lines };
 		return lines;

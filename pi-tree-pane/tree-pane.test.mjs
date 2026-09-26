@@ -38,7 +38,7 @@ test("the slash command is /tree-pane and its usage matches", async () => {
 	assert.deepEqual(notices, [{ message: "Usage: /tree-pane [on|off|status]", level: "warning" }]);
 });
 
-test("conversation shows user and assistant text with summaries for hidden activity", () => {
+test("conversation shows user and agent text with summaries for hidden activity", () => {
 	const withImage = {
 		role: "user",
 		content: [{ type: "text", text: "look\x1b[2J\tat" }, { type: "image", data: "...", mimeType: "image/png" }],
@@ -67,7 +67,7 @@ test("conversation shows user and assistant text with summaries for hidden activ
 	assert.equal(conversationItems(entries, streamed).length, 3, "the persisted live message appears once");
 });
 
-test("assistant labels show stored models before timestamps in the assistant color", () => {
+test("agent labels show stored models before timestamps in the agent color", () => {
 	const firstTimestamp = new Date(2026, 0, 2, 9, 5).getTime();
 	const secondTimestamp = new Date(2026, 0, 3, 10, 15).getTime();
 	const first = { ...assistant([{ type: "text", text: "first" }]), timestamp: firstTimestamp, model: "request-alias", responseModel: "served-model-a" };
@@ -79,11 +79,11 @@ test("assistant labels show stored models before timestamps in the assistant col
 	});
 
 	const pane = new ConversationPane(session(entries), theme);
-	const labels = (width) => pane.render(width).map(stripTerminalSequences).map((line) => line.trim()).filter((line) => line.startsWith("Assistant"));
+	const labels = (width) => pane.render(width).map(stripTerminalSequences).map((line) => line.trim()).filter((line) => line.startsWith("Agent"));
 	assert.deepEqual(labels(80), [
-		"Assistant (served-model-a) 2026-01-02 09:05",
-		"Assistant (model-b) 2026-01-03 10:15",
-		"Assistant",
+		"Agent (served-model-a) 2026-01-02 09:05",
+		"Agent (model-b) 2026-01-03 10:15",
+		"Agent",
 	]);
 	assert(!labels(80).some((line) => line.includes("request-alias")), "the recorded response model takes precedence");
 	for (const width of [18, 24, 32]) {
@@ -92,31 +92,34 @@ test("assistant labels show stored models before timestamps in the assistant col
 		assert(lines.map(stripTerminalSequences).join("").replace(/\s/g, "").includes("served-model-a"));
 	}
 	const firstHeader = pane.render(80).find((line) => stripTerminalSequences(line).includes("(served-model-a)"));
-	assert(firstHeader?.includes("\x1b[32m(served-model-a)\x1b[0m"), "model ids use the assistant label color");
+	assert(firstHeader?.includes("\x1b[32m(served-model-a)\x1b[0m"), "model ids use the agent label color");
 	assert(firstHeader?.includes("\x1b[90m2026-01-02 09:05\x1b[0m"), "timestamps remain dim");
 
 	const livePane = new ConversationPane(session(), theme);
 	livePane.setLive({ ...assistant([{ type: "text", text: "streaming" }]), timestamp: undefined, model: "live-model" });
-	assert(livePane.render(80).map(stripTerminalSequences).map((line) => line.trim()).includes("Assistant (live-model)"));
+	assert(livePane.render(80).map(stripTerminalSequences).map((line) => line.trim()).includes("Agent (live-model)"));
 });
 
-test("conversation stats count messages and completed user-assistant turns", () => {
+test("conversation stats count user and agent messages, tool calls, and thinking blocks", () => {
 	const firstUser = user("question");
-	const toolUse = { ...assistant([{ type: "toolCall", id: "t", name: "bash", arguments: {} }]), stopReason: "toolUse" };
-	const finalReply = { ...assistant([{ type: "text", text: "answer" }]), stopReason: "stop" };
+	const toolUse = assistant([
+		{ type: "thinking", thinking: "reasoning" },
+		{ type: "toolCall", id: "t", name: "bash", arguments: {} },
+	]);
+	const finalReply = assistant([{ type: "text", text: "answer" }]);
 	const secondUser = user("follow-up");
 	const entries = [entry("1", firstUser), entry("2", toolUse), entry("3", finalReply), entry("4", secondUser)];
 	const pane = new ConversationPane(session(entries), theme);
-	assert.deepEqual(pane.getStats(), { userMessages: 2, assistantMessages: 2, totalTurns: 1 });
+	assert.deepEqual(pane.getStats(), { userMessages: 2, agentMessages: 2, toolCalls: 1, thinkingBlocks: 1 });
 
-	const live = { ...assistant([{ type: "text", text: "partial" }]), stopReason: "pending" };
+	const live = assistant([{ type: "text", text: "partial" }]);
 	pane.setLive(live);
-	assert.deepEqual(pane.getStats(), { userMessages: 2, assistantMessages: 3, totalTurns: 1 });
-	live.stopReason = "stop";
+	assert.deepEqual(pane.getStats(), { userMessages: 2, agentMessages: 3, toolCalls: 1, thinkingBlocks: 1 });
+	live.content.push({ type: "thinking", thinking: "more" }, { type: "toolCall", id: "t2", name: "read", arguments: {} });
 	pane.setLive(live);
-	assert.deepEqual(pane.getStats(), { userMessages: 2, assistantMessages: 3, totalTurns: 2 });
+	assert.deepEqual(pane.getStats(), { userMessages: 2, agentMessages: 3, toolCalls: 2, thinkingBlocks: 2 });
 	entries.push(entry("5", live));
-	assert.deepEqual(pane.getStats(), { userMessages: 2, assistantMessages: 3, totalTurns: 2 }, "persisting live replies does not double count them");
+	assert.deepEqual(pane.getStats(), { userMessages: 2, agentMessages: 3, toolCalls: 2, thinkingBlocks: 2 }, "persisting live replies does not double count them");
 });
 
 test("activity summaries count thinking blocks and tool calls between visible messages", () => {
@@ -164,8 +167,20 @@ test("live activity summaries update as thinking blocks and tool calls arrive", 
 	const plain = lines.map(stripTerminalSequences).map((line) => line.trim());
 	const activityIndex = plain.indexOf("1 tool call, 1 thinking block");
 	assert(activityIndex > plain.indexOf("question"));
-	assert(activityIndex < plain.findIndex((line) => line.startsWith("Assistant")), "the live summary stays between visible messages");
+	assert(activityIndex < plain.findIndex((line) => line.startsWith("Agent")), "the live summary stays between visible messages");
 	assert(lines.every((line) => visibleWidth(line) === 64));
+});
+
+test("message blocks have an extra blank row between them", () => {
+	const pane = new ConversationPane(session([
+		entry("1", user("one")),
+		entry("2", assistant([{ type: "text", text: "two" }])),
+		entry("3", assistant([{ type: "text", text: "three" }])),
+	]), theme);
+	const lines = pane.render(40).map(stripTerminalSequences).map((line) => line.trim());
+	const labels = lines.flatMap((line, index) => line.startsWith("User ") || line.startsWith("Agent ") ? [index] : []);
+	assert.equal(labels.length, 3);
+	for (const index of labels.slice(1)) assert.deepEqual(lines.slice(index - 2, index), ["", ""]);
 });
 
 test("persisted live activity is not counted twice", () => {
@@ -291,7 +306,7 @@ test("append-only branches render incrementally while branch changes rebuild his
 
 	branch.push(entry("2", assistant([{ type: "text", text: "reply" }])));
 	assert(pane.render(40).some((line) => line.includes("reply")));
-	assert.equal(userLabelRenders, 1, "an appended assistant does not re-render the first user");
+	assert.equal(userLabelRenders, 1, "an appended agent message does not re-render the first user");
 	branch.push(entry("3", user("second")));
 	assert(pane.render(40).some((line) => line.includes("second")));
 	assert.equal(userLabelRenders, 2, "only the appended user label renders");
@@ -323,14 +338,14 @@ test("labels show the message's local date and time across days and streaming up
 	const pane = new ConversationPane(session([entry("1", first), entry("2", reply)]), theme);
 	const labels = () => pane.render(32).map(stripTerminalSequences).map((line) => line.trim());
 	assert(labels().includes("User 2025-12-31 23:05"));
-	assert(labels().includes("Assistant 2026-01-01 14:32"));
+	assert(labels().includes("Agent 2026-01-01 14:32"));
 	assert(pane.render(32).some((line) => line.includes("\x1b[90m2025-12-31 23:05")), "timestamps are dimmed independently of the label");
 
 	const live = { ...reply, content: [{ type: "text", text: "partial" }], timestamp: new Date(2026, 0, 2, 0, 7).getTime() };
 	pane.setLive(live);
-	assert(labels().includes("Assistant 2026-01-02 00:07"));
+	assert(labels().includes("Agent 2026-01-02 00:07"));
 	pane.setLive({ ...live, content: [{ type: "text", text: "completed" }] });
-	assert(labels().includes("Assistant 2026-01-02 00:07"), "stream updates keep the original message timestamp");
+	assert(labels().includes("Agent 2026-01-02 00:07"), "stream updates keep the original message timestamp");
 });
 
 test("narrow panes wrap labels and timestamps without dropping the date or time", () => {
@@ -341,7 +356,7 @@ test("narrow panes wrap labels and timestamps without dropping the date or time"
 		const lines = pane.render(width);
 		assert(lines.every((line) => visibleWidth(line) === width));
 		assert.equal(lines.map(stripTerminalSequences).map((line) => line.trim()).filter(Boolean).join(" "),
-			"Assistant 2026-01-02 09:05 answer");
+			"Agent 2026-01-02 09:05 answer");
 	}
 });
 
@@ -352,7 +367,7 @@ test("missing or invalid timestamps leave plain role labels", () => {
 			entry("2", { ...assistant([{ type: "text", text: "answer" }]), timestamp }),
 		]), theme);
 		const lines = pane.render(24).map(stripTerminalSequences).map((line) => line.trim());
-		assert.deepEqual(lines, ["", "User", "hello", "", "Assistant", "answer"]);
+		assert.deepEqual(lines, ["", "User", "hello", "", "", "Agent", "answer"]);
 	}
 });
 
@@ -364,7 +379,7 @@ test("pane wraps long words, lines and wide graphemes within its width", () => {
 	assert(lines.length > 9);
 	assert(lines.every((line) => visibleWidth(line) === 18));
 	assert(lines.some((line) => line.includes("\x1b[34m") && line.includes("User")));
-	assert(lines.some((line) => line.includes("\x1b[32m") && line.includes("Assistant")));
+	assert(lines.some((line) => line.includes("\x1b[32m") && line.includes("Agent")));
 	assert(lines.some((line) => line.includes("new line")));
 	assert.equal(pane.render(18), lines, "an unchanged branch reuses wrapped output");
 	pane.invalidate();
@@ -403,13 +418,13 @@ test("layout keeps Pi's transcript and dock, splits evenly and restores the orig
 	const right = split.children[2];
 	assert(right instanceof VStack);
 	const title = right.children[0];
-	assert.deepEqual(title.render(40).map(stripTerminalSequences).map((line) => line.trim()), ["Conversation"]);
+	assert.deepEqual(title.render(40).map(stripTerminalSequences).map((line) => line.trim()), ["Transcript"]);
 	const footer = right.children[2];
 	assert.equal(footer.render(100).map(stripTerminalSequences).map((line) => line.trim()).join(" "),
-		"1 User Messages · 0 Assistant Messages · 0 Total Turns");
+		"1 User Messages · 0 Agent Messages · 0 Tool Calls · 0 Thinking Blocks");
 	assert.deepEqual(footer.render(40).map(stripTerminalSequences).map((line) => line.trim()), [
-		"1 User Messages · 0 Assistant Messages",
-		"0 Total Turns",
+		"1 User Messages · 0 Agent Messages",
+		"0 Tool Calls · 0 Thinking Blocks",
 	]);
 	const side = right.children[1];
 	assert(side instanceof ScrollView);
@@ -419,7 +434,7 @@ test("layout keeps Pi's transcript and dock, splits evenly and restores the orig
 	tui.terminal.columns = 40;
 	layout.reconcile();
 	assert.equal(stripTerminalSequences(split.render(40)[0])[19], "│", "resize keeps a 50/50 split");
-	assert(stripTerminalSequences(split.render(40)[0]).includes("Conversation"));
+	assert(stripTerminalSequences(split.render(40)[0]).includes("Transcript"));
 	assert.equal(visibleWidth(split.render(MIN_SPLIT_COLUMNS - 1)[0]), MIN_SPLIT_COLUMNS - 1);
 	tui.terminal.columns = 81;
 	layout.reconcile();
