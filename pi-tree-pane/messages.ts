@@ -96,29 +96,40 @@ function appendAssistantMessage(
 	appendText();
 }
 
-export function conversationItems(entries: readonly SessionEntry[], live?: ConversationMessage): ConversationItem[] {
+type ActivityCounts = Omit<ConversationActivityItem, "role">;
+
+function appendConversationMessage(message: AgentMessage, items: ConversationItem[], pendingActivity: ActivityCounts): void {
+	if (message.role === "assistant") {
+		appendAssistantMessage(message, items, pendingActivity);
+		return;
+	}
+	const item = conversationItem(message);
+	if (!item) return;
+	appendActivity(items, pendingActivity);
+	items.push(item);
+}
+
+function buildConversation(entries: readonly SessionEntry[]): {
+	items: ConversationItem[];
+	persisted: Set<AgentMessage>;
+	pendingActivity: ActivityCounts;
+} {
 	const items: ConversationItem[] = [];
 	const persisted = new Set<AgentMessage>();
 	const pendingActivity = { toolCalls: 0, thinkingBlocks: 0 };
-	const appendMessage = (message: AgentMessage) => {
-		if (message.role === "assistant") {
-			appendAssistantMessage(message, items, pendingActivity);
-			return;
-		}
-		const item = conversationItem(message);
-		if (!item) return;
-		appendActivity(items, pendingActivity);
-		items.push(item);
-	};
-
 	for (const entry of entries) {
 		if (entry.type !== "message") continue;
 		persisted.add(entry.message);
-		appendMessage(entry.message);
+		appendConversationMessage(entry.message, items, pendingActivity);
 	}
+	return { items, persisted, pendingActivity };
+}
+
+export function conversationItems(entries: readonly SessionEntry[], live?: ConversationMessage): ConversationItem[] {
+	const { items, persisted, pendingActivity } = buildConversation(entries);
 	// Pi emits message_end before appending the message to SessionManager. The
 	// finalized message is the same object it appends, so identity avoids duplicates.
-	if (live && !persisted.has(live)) appendMessage(live);
+	if (live && !persisted.has(live)) appendConversationMessage(live, items, pendingActivity);
 	appendActivity(items, pendingActivity);
 	return items;
 }
@@ -177,9 +188,10 @@ export class ConversationPane implements Component {
 	private history?: {
 		width: number;
 		leaf: string | null;
+		entries: SessionEntry[];
 		lines: string[];
 		persisted: Set<AgentMessage>;
-		pendingActivity?: ConversationActivityItem;
+		pendingActivity: ActivityCounts;
 	};
 	private cached?: { width: number; leaf: string | null; revision: number; lines: string[] };
 	private readonly session: SessionSource;
@@ -210,40 +222,45 @@ export class ConversationPane implements Component {
 		let history = this.history;
 		if (!history || history.width !== w || history.leaf !== leaf) {
 			const branch = this.session.getBranch();
-			const persisted = new Set<AgentMessage>();
-			for (const entry of branch) {
-				if (entry.type === "message") persisted.add(entry.message);
+			const historyLength = history?.entries.length ?? 0;
+			// Session entries have one immutable parent, so the same entry at the
+			// previous leaf depth proves the complete path prefix is unchanged.
+			const extendsHistory = history?.width === w
+				&& branch.length >= historyLength
+				&& (historyLength === 0 || branch[historyLength - 1] === history.entries[historyLength - 1]);
+			if (history && extendsHistory) {
+				const appendedItems: ConversationItem[] = [];
+				for (let index = history.entries.length; index < branch.length; index++) {
+					const entry = branch[index]!;
+					if (entry.type !== "message") continue;
+					history.persisted.add(entry.message);
+					appendConversationMessage(entry.message, appendedItems, history.pendingActivity);
+				}
+				if (appendedItems.length > 0) history.lines.push(...renderItems(appendedItems, w, this.theme));
+				history.entries = branch.slice();
+				history.leaf = leaf;
+			} else {
+				const { items, persisted, pendingActivity } = buildConversation(branch);
+				history = {
+					width: w,
+					leaf,
+					entries: branch.slice(),
+					lines: renderItems(items, w, this.theme),
+					persisted,
+					pendingActivity,
+				};
+				this.history = history;
 			}
-			const items = conversationItems(branch);
-			const last = items.at(-1);
-			let pendingActivity: ConversationActivityItem | undefined;
-			if (last?.role === "activity") {
-				pendingActivity = last;
-				items.pop();
-			}
-			history = { width: w, leaf, lines: renderItems(items, w, this.theme), persisted, pendingActivity };
-			this.history = history;
 		}
 
-		const live = this.live && !history.persisted.has(this.live) ? this.live : undefined;
-		const liveItems = live ? conversationItems([], live) : [];
-		const activity = {
-			role: "activity" as const,
-			toolCalls: history.pendingActivity?.toolCalls ?? 0,
-			thinkingBlocks: history.pendingActivity?.thinkingBlocks ?? 0,
-		};
-		while (true) {
-			const leading = liveItems[0];
-			if (!leading || leading.role !== "activity") break;
-			liveItems.shift();
-			activity.toolCalls += leading.toolCalls;
-			activity.thinkingBlocks += leading.thinkingBlocks;
+		const tailItems: ConversationItem[] = [];
+		const pendingActivity = { ...history.pendingActivity };
+		if (this.live && !history.persisted.has(this.live)) {
+			appendConversationMessage(this.live, tailItems, pendingActivity);
 		}
+		appendActivity(tailItems, pendingActivity);
 		const lines = history.lines.slice();
-		if (activity.toolCalls > 0 || activity.thinkingBlocks > 0) {
-			lines.push(...renderItems([activity], w, this.theme));
-		}
-		if (liveItems.length > 0) lines.push(...renderItems(liveItems, w, this.theme));
+		if (tailItems.length > 0) lines.push(...renderItems(tailItems, w, this.theme));
 		if (lines.length === 0) lines.push(paneRow(this.theme.fg("dim", "No messages yet"), w));
 		this.cached = { width: w, leaf, revision: this.revision, lines };
 		return lines;

@@ -238,18 +238,50 @@ test("streaming reuses rendered history until the branch, width, or theme change
 
 	entries.push(entry("2", live));
 	const finalized = pane.render(32);
-	assert.equal(branchReads, 2, "a new leaf refreshes the history");
-	assert.equal(historyLabelRenders, 2);
+	assert.equal(branchReads, 2, "a new leaf reads the appended branch entries");
+	assert.equal(historyLabelRenders, 1, "appending a leaf does not re-render existing history");
 	assert.equal(finalized.filter((line) => line.includes("chunk 11")).length, 1, "persisted live messages appear once");
 	pane.setLive(undefined);
 	assert.equal(pane.render(32).filter((line) => line.includes("chunk 11")).length, 1);
 	pane.render(18);
 	assert.equal(branchReads, 3, "a new width rewraps history");
-	assert.equal(historyLabelRenders, 3);
+	assert.equal(historyLabelRenders, 2);
 	pane.invalidate();
 	pane.render(18);
 	assert.equal(branchReads, 4, "theme/session invalidation rebuilds history");
-	assert.equal(historyLabelRenders, 4);
+	assert.equal(historyLabelRenders, 3);
+});
+
+test("append-only branches render incrementally while branch changes rebuild history", () => {
+	const first = entry("1", user("first"));
+	let branch = [first];
+	let userLabelRenders = 0;
+	const countingTheme = {
+		...theme,
+		fg(color, text) {
+			if (color === "syntaxType" && text.includes("User")) userLabelRenders++;
+			return theme.fg(color, text);
+		},
+	};
+	const pane = new ConversationPane({
+		getLeafId: () => branch.at(-1)?.id ?? null,
+		getBranch: () => branch,
+	}, countingTheme);
+	pane.render(40);
+	assert.equal(userLabelRenders, 1);
+
+	branch.push(entry("2", assistant([{ type: "text", text: "reply" }])));
+	assert(pane.render(40).some((line) => line.includes("reply")));
+	assert.equal(userLabelRenders, 1, "an appended assistant does not re-render the first user");
+	branch.push(entry("3", user("second")));
+	assert(pane.render(40).some((line) => line.includes("second")));
+	assert.equal(userLabelRenders, 2, "only the appended user label renders");
+
+	branch = [first, entry("4", assistant([{ type: "text", text: "alternate" }]))];
+	const alternate = pane.render(40);
+	assert(alternate.some((line) => line.includes("alternate")));
+	assert(!alternate.some((line) => line.includes("second")));
+	assert.equal(userLabelRenders, 3, "moving to a different branch rebuilds its history");
 });
 
 test("live text replaces the empty-state hint without rebuilding an empty branch", () => {

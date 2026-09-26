@@ -297,6 +297,64 @@ typecheck against APIs that are not the ones executing the code.
 `tsconfig.paths.json` is generated and gitignored; re-run `npm run typecheck`
 after upgrading pi to re-point at the new install.
 
+## Profiling `pi-tree-pane`
+
+Use the checked-in synthetic profiler instead of a personal session file. It
+exercises the real `ConversationPane`, split layout, fullscreen renderer, ANSI
+wrapping, and scroll path without exposing transcript contents.
+
+The append scenario measures the work triggered when the active branch gains a
+message. Its cost should stay approximately flat as `initialMessages` grows;
+a linear slope means old conversation rows are being normalized or wrapped
+again:
+
+```bash
+npm run profile:tree-pane -- append 2000 200 59
+# arguments: initialMessages appendedMessages paneWidth
+```
+
+The scroll scenario measures complete fullscreen frames. Always compare the
+split with the fullscreen baseline at identical dimensions. This separates the
+cost of Pi's fullscreen renderer from the split, compositing, and right
+scrollbar:
+
+```bash
+npm run profile:tree-pane -- scroll baseline 2000 500 120 40
+npm run profile:tree-pane -- scroll split    2000 500 120 40
+# arguments: variant messageCount frames columns rows
+```
+
+Each command warms the component caches before timing and prints one JSON
+record. Run several times and compare medians; terminal dimensions and Node/Pi
+versions are part of the result even though they are not embedded in the JSON.
+The test loader requires a Node release that exports
+`node:module.registerHooks`, just like the extension test suite.
+
+For a CPU profile, run the harness directly after syncing the live Pi paths:
+
+```bash
+npm run sync-types
+rm -rf /tmp/pi-tree-pane-profile
+mkdir -p /tmp/pi-tree-pane-profile
+node --cpu-prof \
+  --cpu-prof-dir=/tmp/pi-tree-pane-profile \
+  --cpu-prof-name=append.cpuprofile \
+  --no-warnings --experimental-strip-types \
+  --import ./scripts/pi-test-loader.mjs \
+  pi-tree-pane/profile.mjs append 2000 200 59
+```
+
+Load the resulting `.cpuprofile` with the **Load profile** action in Chromium
+DevTools' Performance panel. Self time in ANSI wrapping during `append` points
+to lost history reuse. Self time in `compositeTuiLine`, `sliceWithWidth`, or
+scrollbar painting during `scroll` is fullscreen frame composition rather than
+conversation normalization. `PI_TUI_WRITE_LOG` is complementary when the
+question is excess terminal output rather than CPU time.
+
+The synthetic harness is the repeatable regression check, not the final UI
+check. After profiling changes, run `npm run test:tree-pane`, typecheck, and use
+the pty-plus-pyte live fullscreen check described below.
+
 ## Before claiming something works
 
 Everything above was found by actually running pi in a pty and reading the
