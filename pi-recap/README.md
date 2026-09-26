@@ -7,6 +7,8 @@ have accumulated beyond the manifest cursor, a cheap model summarizes that
 unsummarized range, writes a recap log, advances the cursor, and adds the recap
 to the transcript. Both values are persistent settings.
 
+![Recap extension displaying a generated summary and next step in a framed transcript entry](../docs/images/recap-frame-example.png)
+
 ```text
 ╭  Recap ─────────────────────────────────────────────────────────────────────────╮
 │                                                                                 │

@@ -3,6 +3,10 @@
 A [pi](https://github.com/earendil-works/pi-coding-agent) extension that
 labels thinking blocks in the transcript:
 
+![Reasoning-effort levels shown with the shared thinking color scheme](../docs/images/thinking-level.gif)
+
+![Thinking max highlighted in the shared level colors](../docs/images/thinking-labels-max.png)
+
 ```text
 Thinking: first, restate the constraint…
 ```

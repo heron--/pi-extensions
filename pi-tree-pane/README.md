@@ -2,6 +2,8 @@
 
 An experimental [pi](https://github.com/earendil-works/pi-coding-agent) extension for the **fullscreen TUI**. `/tree-pane` toggles a two-column transcript: Pi's existing feed (including tool calls, output, and its normal scrolling) on the left, and a separately scrollable conversation on the right. The editor, status, widgets, and footer remain full-width.
 
+![Fullscreen tree-pane split showing Pi's activity feed on the left and the conversation on the right](../docs/images/tree-pane-fullscreen.png)
+
 ## Try it
 
 From a stable repository checkout, `node scripts/link-extensions.mjs` creates both the project-local and global links. Then launch Pi from any directory:
