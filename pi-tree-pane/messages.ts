@@ -5,11 +5,20 @@ import { stripTerminalSequences, truncateToWidth, wrapTextWithAnsi, type Compone
 export type ConversationMessage = Extract<AgentMessage, { role: "user" | "assistant" }>;
 type SessionSource = Pick<ExtensionContext["sessionManager"], "getBranch" | "getLeafId">;
 
-export interface ConversationItem {
+export interface ConversationMessageItem {
 	role: "user" | "assistant";
 	text: string;
 	timestamp?: number;
+	model?: string;
 }
+
+export interface ConversationActivityItem {
+	role: "activity";
+	toolCalls: number;
+	thinkingBlocks: number;
+}
+
+export type ConversationItem = ConversationMessageItem | ConversationActivityItem;
 
 function safeText(text: string): string {
 	return stripTerminalSequences(text)
@@ -18,7 +27,17 @@ function safeText(text: string): string {
 		.replace(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/g, "");
 }
 
-export function conversationItem(message: AgentMessage): ConversationItem | undefined {
+function storedModelId(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const model = safeText(value).replace(/\s+/g, " ").trim();
+	return model || undefined;
+}
+
+function assistantModelId(message: Extract<AgentMessage, { role: "assistant" }>): string | undefined {
+	return storedModelId(message.responseModel) ?? storedModelId(message.model);
+}
+
+export function conversationItem(message: AgentMessage): ConversationMessageItem | undefined {
 	if (message.role === "user") {
 		const content = typeof message.content === "string"
 			? [{ type: "text" as const, text: message.content }]
@@ -32,24 +51,75 @@ export function conversationItem(message: AgentMessage): ConversationItem | unde
 			.map((block) => block.text)
 			.join("\n"));
 		// A tool-only or thinking-only assistant turn has no message to list.
-		return text.trim() ? { role: "assistant", text, timestamp: message.timestamp } : undefined;
+		const model = assistantModelId(message);
+		return text.trim()
+			? { role: "assistant", text, timestamp: message.timestamp, ...(model ? { model } : {}) }
+			: undefined;
 	}
 	return undefined;
 }
 
+function appendActivity(items: ConversationItem[], activity: Omit<ConversationActivityItem, "role">): void {
+	if (activity.toolCalls === 0 && activity.thinkingBlocks === 0) return;
+	items.push({ role: "activity", toolCalls: activity.toolCalls, thinkingBlocks: activity.thinkingBlocks });
+	activity.toolCalls = 0;
+	activity.thinkingBlocks = 0;
+}
+
+function appendAssistantMessage(
+	message: Extract<AgentMessage, { role: "assistant" }>,
+	items: ConversationItem[],
+	pendingActivity: Omit<ConversationActivityItem, "role">,
+): void {
+	let textBlocks: string[] = [];
+	const model = assistantModelId(message);
+	const appendText = () => {
+		if (textBlocks.length === 0) return;
+		const text = safeText(textBlocks.join("\n"));
+		textBlocks = [];
+		if (!text.trim()) return;
+		appendActivity(items, pendingActivity);
+		items.push({ role: "assistant", text, timestamp: message.timestamp, ...(model ? { model } : {}) });
+	};
+
+	for (const block of message.content) {
+		if (block.type === "text") {
+			textBlocks.push(block.text);
+		} else if (block.type === "thinking") {
+			appendText();
+			pendingActivity.thinkingBlocks++;
+		} else if (block.type === "toolCall") {
+			appendText();
+			pendingActivity.toolCalls++;
+		}
+	}
+	appendText();
+}
+
 export function conversationItems(entries: readonly SessionEntry[], live?: ConversationMessage): ConversationItem[] {
 	const items: ConversationItem[] = [];
+	const persisted = new Set<AgentMessage>();
+	const pendingActivity = { toolCalls: 0, thinkingBlocks: 0 };
+	const appendMessage = (message: AgentMessage) => {
+		if (message.role === "assistant") {
+			appendAssistantMessage(message, items, pendingActivity);
+			return;
+		}
+		const item = conversationItem(message);
+		if (!item) return;
+		appendActivity(items, pendingActivity);
+		items.push(item);
+	};
+
 	for (const entry of entries) {
 		if (entry.type !== "message") continue;
-		const item = conversationItem(entry.message);
-		if (item) items.push(item);
+		persisted.add(entry.message);
+		appendMessage(entry.message);
 	}
 	// Pi emits message_end before appending the message to SessionManager. The
 	// finalized message is the same object it appends, so identity avoids duplicates.
-	if (live && !entries.some((entry) => entry.type === "message" && entry.message === live)) {
-		const item = conversationItem(live);
-		if (item) items.push(item);
-	}
+	if (live && !persisted.has(live)) appendMessage(live);
+	appendActivity(items, pendingActivity);
 	return items;
 }
 
@@ -74,12 +144,23 @@ function renderItems(messages: readonly ConversationItem[], width: number, theme
 	const lines: string[] = [];
 	const contentWidth = Math.max(1, width - 2);
 	for (const message of messages) {
+		if (message.role === "activity") {
+			const toolCalls = `${message.toolCalls} tool call${message.toolCalls === 1 ? "" : "s"}`;
+			const thinkingBlocks = `${message.thinkingBlocks} thinking block${message.thinkingBlocks === 1 ? "" : "s"}`;
+			const summary = theme.fg("dim", theme.italic(`${toolCalls}, ${thinkingBlocks}`));
+			for (const wrapped of wrapTextWithAnsi(summary, contentWidth)) {
+				lines.push(paneRow(wrapped, width));
+			}
+			continue;
+		}
+
 		lines.push(paneRow("", width));
 		const label = message.role === "user" ? "User" : "Assistant";
-		const color = message.role === "user" ? "accent" : "success";
+		const color = message.role === "user" ? "syntaxType" : "success";
 		const timestamp = messageTimestamp(message.timestamp);
+		const model = message.role === "assistant" && message.model ? ` ${theme.fg(color, `(${message.model})`)}` : "";
 		const stamp = timestamp ? ` ${theme.fg("dim", timestamp)}` : "";
-		for (const wrapped of wrapTextWithAnsi(theme.fg(color, theme.bold(label)) + stamp, contentWidth)) {
+		for (const wrapped of wrapTextWithAnsi(theme.fg(color, theme.bold(label)) + model + stamp, contentWidth)) {
 			lines.push(paneRow(wrapped, width));
 		}
 		for (const wrapped of wrapTextWithAnsi(message.text, contentWidth)) {
@@ -93,7 +174,13 @@ function renderItems(messages: readonly ConversationItem[], width: number, theme
 export class ConversationPane implements Component {
 	private live?: ConversationMessage;
 	private revision = 0;
-	private history?: { width: number; leaf: string | null; lines: string[]; persisted: Set<AgentMessage> };
+	private history?: {
+		width: number;
+		leaf: string | null;
+		lines: string[];
+		persisted: Set<AgentMessage>;
+		pendingActivity?: ConversationActivityItem;
+	};
 	private cached?: { width: number; leaf: string | null; revision: number; lines: string[] };
 	private readonly session: SessionSource;
 	private readonly theme: Theme;
@@ -127,14 +214,37 @@ export class ConversationPane implements Component {
 			for (const entry of branch) {
 				if (entry.type === "message") persisted.add(entry.message);
 			}
-			history = { width: w, leaf, lines: renderItems(conversationItems(branch), w, this.theme), persisted };
+			const items = conversationItems(branch);
+			const last = items.at(-1);
+			let pendingActivity: ConversationActivityItem | undefined;
+			if (last?.role === "activity") {
+				pendingActivity = last;
+				items.pop();
+			}
+			history = { width: w, leaf, lines: renderItems(items, w, this.theme), persisted, pendingActivity };
 			this.history = history;
 		}
 
-		const live = this.live && !history.persisted.has(this.live) ? conversationItem(this.live) : undefined;
-		const lines = live
-			? history.lines.concat(renderItems([live], w, this.theme))
-			: history.lines.length > 0 ? history.lines : [paneRow(this.theme.fg("dim", "No messages yet"), w)];
+		const live = this.live && !history.persisted.has(this.live) ? this.live : undefined;
+		const liveItems = live ? conversationItems([], live) : [];
+		const activity = {
+			role: "activity" as const,
+			toolCalls: history.pendingActivity?.toolCalls ?? 0,
+			thinkingBlocks: history.pendingActivity?.thinkingBlocks ?? 0,
+		};
+		while (true) {
+			const leading = liveItems[0];
+			if (!leading || leading.role !== "activity") break;
+			liveItems.shift();
+			activity.toolCalls += leading.toolCalls;
+			activity.thinkingBlocks += leading.thinkingBlocks;
+		}
+		const lines = history.lines.slice();
+		if (activity.toolCalls > 0 || activity.thinkingBlocks > 0) {
+			lines.push(...renderItems([activity], w, this.theme));
+		}
+		if (liveItems.length > 0) lines.push(...renderItems(liveItems, w, this.theme));
+		if (lines.length === 0) lines.push(paneRow(this.theme.fg("dim", "No messages yet"), w));
 		this.cached = { width: w, leaf, revision: this.revision, lines };
 		return lines;
 	}
