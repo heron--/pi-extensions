@@ -402,6 +402,9 @@ test("elapsed times follow each agent turn and precede the user's reply", () => 
 		{ role: "elapsed", turn: "user", ms: 30_000 },
 		{ role: "user", text: "thanks", timestamp: T0 + 100_000 },
 	]);
+	const pane = new ConversationPane(session(entries), theme);
+	const rows = pane.render(60).map((line) => stripTerminalSequences(line).trim()).filter((line) => line.includes("turn"));
+	assert.deepEqual(rows, ["Agent turn 1m 10s · User turn 30s"], "a handoff's two turns share one line");
 });
 
 test("steering keeps one agent turn and queued follow-ups have no user turn", () => {
@@ -431,7 +434,7 @@ test("elapsed times are appended incrementally and skip sub-second spans", () =>
 	const rows = () => pane.render(40).map((line) => stripTerminalSequences(line).trim()).filter((line) => line.includes("turn"));
 	assert.deepEqual(rows(), []);
 	entries.push(timed("3", user("more"), T0 + 125_000), timed("4", reply("sure"), T0 + 3_725_000));
-	assert.deepEqual(rows(), ["User turn 2m 04s", "Agent turn 1h 00m"]);
+	assert.deepEqual(rows(), ["User turn 2m 04s", "Agent turn 1h 00m"], "a missing agent turn leaves the user turn alone");
 });
 
 test("elapsed durations are compact at every scale", () => {

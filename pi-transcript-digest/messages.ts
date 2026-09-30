@@ -266,7 +266,8 @@ function renderItems(messages: readonly ConversationItem[], width: number, theme
 	const lines: string[] = [];
 	const contentWidth = Math.max(1, width - 2);
 	let hasMessage = hasPriorMessage;
-	for (const message of messages) {
+	for (let index = 0; index < messages.length; index++) {
+		const message = messages[index]!;
 		if (message.role === "activity") {
 			const toolCalls = `${message.toolCalls} tool call${message.toolCalls === 1 ? "" : "s"}`;
 			const thinkingBlocks = `${message.thinkingBlocks} thinking block${message.thinkingBlocks === 1 ? "" : "s"}`;
@@ -277,8 +278,13 @@ function renderItems(messages: readonly ConversationItem[], width: number, theme
 			continue;
 		}
 		if (message.role === "elapsed") {
-			const label = message.turn === "agent" ? "Agent turn" : "User turn";
-			const summary = theme.fg("dim", theme.italic(`${label} ${formatElapsed(message.ms)}`));
+			// A handoff's agent and user turns share one line.
+			const parts = [message];
+			while (messages[index + 1]?.role === "elapsed") parts.push(messages[++index] as ConversationElapsedItem);
+			const text = parts
+				.map((part) => `${part.turn === "agent" ? "Agent turn" : "User turn"} ${formatElapsed(part.ms)}`)
+				.join(" · ");
+			const summary = theme.fg("dim", theme.italic(text));
 			for (const wrapped of wrapTextWithAnsi(summary, contentWidth)) {
 				lines.push(paneRow(wrapped, width));
 			}
