@@ -1,6 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { Container, ScrollView, Text, TuiAltScreen, VStack } from "@earendil-works/pi-tui";
-import { TreePaneLayout } from "./layout.ts";
+import { TranscriptDigestLayout } from "./layout.ts";
 import { ConversationPane } from "./messages.ts";
 
 const theme = {
@@ -108,7 +108,7 @@ function profileScroll(args) {
 	tui.addChild({ render: () => [], invalidate() {} });
 	tui.addChild(editorContainer);
 	tui.setLayoutRoot(originalRoot);
-	const layout = new TreePaneLayout(tui, theme, new ConversationPane(createSession(entries), theme));
+	const layout = new TranscriptDigestLayout(tui, theme, new ConversationPane(createSession(entries), theme));
 	if (variant === "split" && layout.enable() !== "enabled") throw new Error("could not enable split layout");
 	tui.start();
 	try {

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Container, HStack, ScrollView, TuiAltScreen, VStack, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import treePaneExtension from "./index.ts";
-import { TreePaneLayout, MIN_SPLIT_COLUMNS } from "./layout.ts";
+import transcriptDigestExtension from "./index.ts";
+import { TranscriptDigestLayout, MIN_SPLIT_COLUMNS } from "./layout.ts";
 import { ConversationPane, conversationItem, conversationItems } from "./messages.ts";
 
 const theme = {
@@ -30,17 +30,17 @@ function session(entries = []) {
 	};
 }
 
-test("the slash command is /tree-pane and its usage matches", async () => {
+test("the slash command is /transcript-digest and its usage matches", async () => {
 	const commands = new Map();
-	treePaneExtension({
+	transcriptDigestExtension({
 		on() {},
 		registerCommand(name, command) { commands.set(name, command); },
 	});
-	assert.deepEqual([...commands.keys()], ["tree-pane"]);
+	assert.deepEqual([...commands.keys()], ["transcript-digest"]);
 	const notices = [];
 	const ctx = { ui: { notify(message, level) { notices.push({ message, level }); } } };
-	await commands.get("tree-pane").handler("invalid", ctx);
-	assert.deepEqual(notices, [{ message: "Usage: /tree-pane [on|off|status]", level: "warning" }]);
+	await commands.get("transcript-digest").handler("invalid", ctx);
+	assert.deepEqual(notices, [{ message: "Usage: /transcript-digest [on|off|status]", level: "warning" }]);
 });
 
 test("conversation shows user and agent text with summaries for hidden activity", () => {
@@ -413,7 +413,7 @@ test("layout keeps Pi's transcript and dock, splits evenly and restores the orig
 		getFocusedComponent() { return editor; },
 	};
 	const pane = new ConversationPane(session([entry("1", user("hello"))]), theme);
-	const layout = new TreePaneLayout(tui, theme, pane);
+	const layout = new TranscriptDigestLayout(tui, theme, pane);
 	assert.equal(layout.enable(), "enabled");
 	assert.equal(layout.isEnabled, true);
 	assert.equal(layout.isEditorFocused, true);
@@ -484,7 +484,7 @@ test("fullscreen mouse press and drag scroll the right scrollbar independently",
 		{ component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
 	]));
 	const messages = Array.from({ length: 40 }, (_, index) => entry(String(index + 1), user(`Message ${index + 1}`)));
-	const layout = new TreePaneLayout(tui, theme, new ConversationPane(session(messages), theme));
+	const layout = new TranscriptDigestLayout(tui, theme, new ConversationPane(session(messages), theme));
 	assert.equal(layout.enable(), "enabled");
 	tui.start();
 	try {
@@ -514,7 +514,7 @@ test("incompatible or regular layouts remain untouched", () => {
 		mode: "regular", layoutRoot: undefined, children: [], terminal: { columns: 80, rows: 20 },
 		setLayoutRoot(root) { this.layoutRoot = root; }, requestRender() {},
 	};
-	const layout = new TreePaneLayout(renderer, theme, new ConversationPane(session(), theme));
+	const layout = new TranscriptDigestLayout(renderer, theme, new ConversationPane(session(), theme));
 	assert.equal(layout.enable(), "fullscreen-required");
 	renderer.mode = "fullscreen";
 	renderer.layoutRoot = new Container();

@@ -52,7 +52,7 @@ class HalfWidthStack extends HStack {
 }
 
 /** Keeps Pi's original transcript ScrollView and input dock intact. */
-export class TreePaneLayout {
+export class TranscriptDigestLayout {
 	private originalRoot?: Component;
 	private splitRoot?: Component;
 	private split?: HalfWidthStack;

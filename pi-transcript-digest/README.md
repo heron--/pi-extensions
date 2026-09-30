@@ -1,8 +1,8 @@
-# pi-tree-pane
+# pi-transcript-digest
 
-An experimental [pi](https://github.com/earendil-works/pi-coding-agent) extension for the **fullscreen TUI**. `/tree-pane` toggles a two-column transcript: Pi's existing feed (including tool calls, output, and its normal scrolling) on the left, and a separately scrollable conversation on the right. The editor, status, widgets, and footer remain full-width.
+An experimental [pi](https://github.com/earendil-works/pi-coding-agent) extension for the **fullscreen TUI**. `/transcript-digest` toggles a two-column transcript: Pi's existing feed (including tool calls, output, and its normal scrolling) on the left, and a separately scrollable conversation on the right. The editor, status, widgets, and footer remain full-width.
 
-![Fullscreen tree-pane split showing Pi's activity feed on the left and the conversation on the right](../docs/images/tree-pane-fullscreen.png)
+![Fullscreen transcript digest split showing Pi's activity feed on the left and the conversation on the right](../docs/images/transcript-digest-fullscreen.png)
 
 ## Try it
 
@@ -12,7 +12,7 @@ From a stable repository checkout, `node scripts/link-extensions.mjs` creates bo
 pi --tui-mode fullscreen
 ```
 
-Enter `/tree-pane` to enable the split; enter it again to disable it. `/tree-pane on|off|status` is also available. The toggle starts off, so loading the extension does not change the layout until you enable it.
+Enter `/transcript-digest` to enable the split; enter it again to disable it. `/transcript-digest on|off|status` is also available. The toggle starts off, so loading the extension does not change the layout until you enable it.
 
 The right pane shows user and agent text from the active session branch, updates as agent text streams, and represents image attachments as `[image]`. Its bottom-right footer counts user messages, agent messages, tool calls, and thinking blocks. It omits thinking text, tool details and results, and extension messages; brief counts show thinking blocks and tool calls between messages. It follows the latest message until you scroll. Scroll over either pane with the mouse or drag the right scrollbar. Use **Alt+K** to page up, **Alt+J** to page down, and **Alt+G** to return to the latest message. Pi's normal transcript keys still scroll the left pane.
 

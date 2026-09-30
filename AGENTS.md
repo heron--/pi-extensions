@@ -34,6 +34,7 @@ pi-extensions/
 │   └── README.md
 ├── pi-thinking-labels/       # extension: safe, colored thinking-block labels
 ├── pi-tool-output/           # extension: house-box built-in/custom tool output
+├── pi-transcript-digest/     # extension: /transcript-digest split conversation pane
 ├── pi-typewriter/            # extension: /typewriter
 │   ├── index.ts
 │   ├── package.json
@@ -105,7 +106,7 @@ next launch (this happened during the `pi-throttle-stream` → `pi-typewriter`
 rename).
 
 Standard setup links both locations for `pi-recap`, `pi-context-footer`, `pi-model-picker`,
-`pi-thinking-labels`, `pi-tool-output`, `pi-tree-pane`, `pi-typewriter`, `pi-user-message`, `pi-write-lock`, and `lib`.
+`pi-thinking-labels`, `pi-tool-output`, `pi-transcript-digest`, `pi-typewriter`, `pi-user-message`, `pi-write-lock`, and `lib`.
 
 ## The `lib` symlink rule
 
@@ -297,7 +298,7 @@ typecheck against APIs that are not the ones executing the code.
 `tsconfig.paths.json` is generated and gitignored; re-run `npm run typecheck`
 after upgrading pi to re-point at the new install.
 
-## Profiling `pi-tree-pane`
+## Profiling `pi-transcript-digest`
 
 Use the checked-in synthetic profiler instead of a personal session file. It
 exercises the real `ConversationPane`, split layout, fullscreen renderer, ANSI
@@ -309,7 +310,7 @@ a linear slope means old conversation rows are being normalized or wrapped
 again:
 
 ```bash
-npm run profile:tree-pane -- append 2000 200 59
+npm run profile:transcript-digest -- append 2000 200 59
 # arguments: initialMessages appendedMessages paneWidth
 ```
 
@@ -319,8 +320,8 @@ cost of Pi's fullscreen renderer from the split, compositing, and right
 scrollbar:
 
 ```bash
-npm run profile:tree-pane -- scroll baseline 2000 500 120 40
-npm run profile:tree-pane -- scroll split    2000 500 120 40
+npm run profile:transcript-digest -- scroll baseline 2000 500 120 40
+npm run profile:transcript-digest -- scroll split    2000 500 120 40
 # arguments: variant messageCount frames columns rows
 ```
 
@@ -334,14 +335,14 @@ For a CPU profile, run the harness directly after syncing the live Pi paths:
 
 ```bash
 npm run sync-types
-rm -rf /tmp/pi-tree-pane-profile
-mkdir -p /tmp/pi-tree-pane-profile
+rm -rf /tmp/pi-transcript-digest-profile
+mkdir -p /tmp/pi-transcript-digest-profile
 node --cpu-prof \
-  --cpu-prof-dir=/tmp/pi-tree-pane-profile \
+  --cpu-prof-dir=/tmp/pi-transcript-digest-profile \
   --cpu-prof-name=append.cpuprofile \
   --no-warnings --experimental-strip-types \
   --import ./scripts/pi-test-loader.mjs \
-  pi-tree-pane/profile.mjs append 2000 200 59
+  pi-transcript-digest/profile.mjs append 2000 200 59
 ```
 
 Load the resulting `.cpuprofile` with the **Load profile** action in Chromium
@@ -352,7 +353,7 @@ conversation normalization. `PI_TUI_WRITE_LOG` is complementary when the
 question is excess terminal output rather than CPU time.
 
 The synthetic harness is the repeatable regression check, not the final UI
-check. After profiling changes, run `npm run test:tree-pane`, typecheck, and use
+check. After profiling changes, run `npm run test:transcript-digest`, typecheck, and use
 the pty-plus-pyte live fullscreen check described below.
 
 ## Before claiming something works
