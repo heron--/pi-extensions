@@ -104,6 +104,10 @@ first, in both locations, before renaming or deleting the target directory —
 otherwise a rename can leave a symlink pointing at nothing, and pi errors on
 next launch (this happened during the `pi-throttle-stream` → `pi-typewriter`
 rename).
+That covers this machine; for every *other* checkout, which only sees the
+rename on pull, add the old → new name to `RENAMED_EXTENSIONS` in
+`scripts/link-extensions.mjs`. The post-merge run then removes the old
+links, but only ones that are dangling and pointed into this repo.
 
 Standard setup links both locations for `pi-recap`, `pi-context-footer`, `pi-model-picker`,
 `pi-thinking-labels`, `pi-tool-output`, `pi-transcript-digest`, `pi-typewriter`, `pi-user-message`, `pi-write-lock`, and `lib`.

@@ -33,7 +33,9 @@
  * NEVER overwrites a real (non-symlink) file or directory in the way; that
  * is reported and skipped, not deleted. Links whose target is gone are
  * likewise left alone — removing an extension still means deleting its
- * symlinks by hand first (see AGENTS.md).
+ * symlinks by hand first (see AGENTS.md). The one exception is RENAMED_EXTENSIONS:
+ * a dangling link under a renamed extension's old name that pointed into this
+ * repo is removed, so the post-merge hook migrates a rename on pull.
  *
  * Meant to be called once from a dotfiles install script, same as that
  * script's tmux/nvim config-linking steps — see heron--dotfiles/install.sh
@@ -66,7 +68,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { createInterface } from "node:readline";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), ".."));
@@ -248,6 +250,44 @@ for (const name of linkNames) {
 	if (globalAction) plan.push(globalAction);
 }
 
+/* -------------------------------------------------------------------------- */
+/* Renamed extensions                                                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Old name → new name. A pull that renames an extension would otherwise leave
+ * its old discovery links dangling, and pi fails to launch on a dangling
+ * extension link. Only links that are dangling AND pointed at this repo's old
+ * directory are removed; anything else under the old name is left alone.
+ */
+const RENAMED_EXTENSIONS = {
+	"pi-tree-pane": "pi-transcript-digest",
+};
+
+function pointsIntoRepo(linkPath, oldName) {
+	const target = resolve(dirname(linkPath), readlinkSync(linkPath));
+	if (basename(target) !== oldName) return false;
+	try {
+		return realpathSync(dirname(target)) === REPO_ROOT;
+	} catch {
+		return false;
+	}
+}
+
+function planRenamedLinkAction(linkPath, oldName, newName, describeLinkPath) {
+	if (!isDanglingSymlink(linkPath) || existsSync(linkPath)) return null;
+	if (!pointsIntoRepo(linkPath, oldName)) return null;
+	return { kind: "remove-link", linkPath, describe: `remove  ${describeLinkPath} (renamed to ${newName})` };
+}
+
+for (const [oldName, newName] of Object.entries(RENAMED_EXTENSIONS)) {
+	if (existsSync(join(REPO_ROOT, oldName))) continue;
+	for (const [dir, label] of [[PROJECT_EXT_DIR, ".pi/extensions"], [GLOBAL_EXT_DIR, "~/.pi/agent/extensions"]]) {
+		const action = planRenamedLinkAction(join(dir, oldName), oldName, newName, `${label}/${oldName}`);
+		if (action) plan.push(action);
+	}
+}
+
 const trustAction = planTrustAction();
 if (trustAction) plan.push(trustAction);
 
@@ -351,6 +391,8 @@ for (const action of plan) {
 			rmSync(action.linkPath, { force: true });
 		}
 		symlinkSync(action.targetPath, action.linkPath);
+	} else if (action.kind === "remove-link") {
+		rmSync(action.linkPath, { force: true });
 	} else if (action.kind === "trust") {
 		mkdirSync(dirname(TRUST_PATH), { recursive: true });
 		const data = readTrust();
