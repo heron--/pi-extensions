@@ -16,6 +16,8 @@ import {
 
 test("known tool names map to readable house-box labels", () => {
 	assert.equal(displayToolName("read"), "Read File");
+	assert.equal(displayToolName("codemode"), "Code Mode");
+	assert.equal(isKnownToolName("codemode"), true);
 	assert.equal(displayToolName("multi_tool_use.parallel"), "Parallel Tools");
 	assert.equal(displayToolName("mcp__atlassian"), "Atlassian");
 	assert.equal(displayToolName("custom_report_tool"), "Custom Report Tool");

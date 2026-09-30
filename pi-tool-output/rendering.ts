@@ -21,6 +21,7 @@ const TOOL_DISPLAY_NAMES: Readonly<Record<string, string>> = {
 	write: "Write File",
 	mcp: "MCP Gateway",
 	mcpScript: "MCP Script",
+	codemode: "Code Mode",
 	subagent: "Subagent",
 	subagent_supervisor: "Subagent Supervisor",
 	ask_user_question: "Ask User",

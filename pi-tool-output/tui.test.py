@@ -25,7 +25,7 @@ import pyte
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def seed(cwd, name, args):
+def seed(cwd, name, args, result=None):
     entries = [{"type": "session", "version": 3, "id": str(uuid.uuid4()),
                 "timestamp": "2026-01-01T00:00:00Z", "cwd": str(cwd)}]
     parent = None
@@ -46,11 +46,11 @@ def seed(cwd, name, args):
           "cacheRead": 0, "cacheWrite": 0, "total": 0}}})
     push({"role": "toolResult", "toolCallId": "fixture", "toolName": name,
           "content": [{"type": "text", "text": "RESULT_VISIBLE"}],
-          "isError": False, "timestamp": 0})
+          "isError": False, "timestamp": 0, **(result or {})})
     return "\n".join(json.dumps(entry) for entry in entries) + "\n"
 
 
-def run_case(name, args, summary, width, output_dir):
+def run_case(name, args, summary, width, output_dir, result=None):
     with tempfile.TemporaryDirectory(prefix="pi-call-tui-") as scratch:
         cwd = Path(scratch)
         agent = cwd / "agent"
@@ -77,14 +77,15 @@ export default function(pi) {
 }
 ''')
         session = cwd / "session.jsonl"
-        session.write_text(seed(cwd, name, args))
+        session.write_text(seed(cwd, name, args, result))
         pid, fd = pty.fork()
         if pid == 0:
             os.chdir(cwd)
             os.environ.update({"PI_CODING_AGENT_DIR": str(agent), "TERM": "xterm-256color",
                                "COLORTERM": "truecolor"})
             os.execvp("pi", ["pi", "--no-extensions", "-e", str(ROOT / "pi-tool-output/index.ts"),
-                            "-e", str(fixtures), "--no-skills", "--no-prompt-templates", "--no-themes",
+                            "-e", str(fixtures), "-e", "builtin:codemode", "--offline",
+                            "--no-skills", "--no-prompt-templates", "--no-themes",
                             "--provider", "openai", "--model", "gpt-4o",
                             "--session", str(session)])
         fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, width, 0, 0))
@@ -126,6 +127,13 @@ export default function(pi) {
                         return screen.buffer[row][col].fg
                 raise AssertionError(needle)
             assert color_at(summary) != color_at("RESULT_VISIBLE")
+            if name == "codemode":
+                assert "✓ Run Command" in collapsed, collapsed
+                assert "✗ Read File" in collapsed, collapsed
+                assert "NESTED_FAILURE" in collapsed, collapsed
+                assert color_at("NESTED_FAILURE") != color_at("RESULT_VISIBLE")
+                assert "Promise.allSettled" not in collapsed, collapsed
+                assert "Wall time" not in collapsed, collapsed
             os.write(fd, b"\x0f")  # app.tools.expand: Ctrl+O
             expanded = receive_until(lambda text: "BODY_MARKER" in text and "arguments capped" in text)
             save("expanded", expanded)
@@ -159,3 +167,14 @@ if __name__ == "__main__":
         run_case("subagent", {"workflowScript": body, "async": True}, "Scripted workflow", columns, output)
         run_case("mcp", {"server": "linear", "args": {"query": body}}, "server: linear", columns, output)
         run_case("unknown_fixture", {"prompt": body}, "prompt:", columns, output)
+        run_case("codemode", {"code": 'const r = await Promise.allSettled([tools.bash({command:"git status --short"}), tools.read({path:"missing.ts"})]); text(r);\n' + "// BODY_MARKER\n" * 1000},
+                 "JavaScript", columns, output, {
+                     "content": [{"type": "text", "text": "Script completed\nWall time 0.2 seconds\nOutput:\n"},
+                                 {"type": "text", "text": "RESULT_VISIBLE"}],
+                     "details": {"calls": [
+                         {"id": "fixture/1", "name": "bash", "args": json.dumps({"command": "git status --short"}),
+                          "status": "ok", "durationMs": 15},
+                         {"id": "fixture/2", "name": "read", "args": json.dumps({"path": "missing.ts"}),
+                          "status": "error", "durationMs": 3, "error": "NESTED_FAILURE"},
+                     ]},
+                 })

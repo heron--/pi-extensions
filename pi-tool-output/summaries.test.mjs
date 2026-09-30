@@ -6,6 +6,7 @@ import {
 	summarizeAskUserQuestion,
 	summarizeBackgroundTask,
 	summarizeCommand,
+	summarizeCodemode,
 	summarizeFileWrite,
 	summarizeLs,
 	summarizeMcp,
@@ -110,6 +111,17 @@ test("summarizeMcp prefers the targeted tool, then gateway fields in priority or
 	assert.equal(summarizeMcp({ server: "s" }).text, "server: s");
 	assert.deepEqual(summarizeMcp({ list: true }), { text: "List available tools", fields: ["list"] });
 	assert.equal(summarizeMcp({}), undefined);
+});
+
+test("summarizeCodemode labels source without treating syntax as executed calls", () => {
+	for (const code of ["return 42", "await tools.read({path: file})", "// tools.bash({command: fake})\nreturn 1"]) {
+		const summary = summarizeToolCall("codemode", { code });
+		assert.equal(summary.text, "JavaScript");
+		assert.deepEqual(summary.fields, ["code"]);
+		assert.equal(summary.hidden, true);
+		assert.doesNotMatch(compactArguments({ code }, summary.fields).text, /return|tools\./);
+	}
+	for (const args of [{}, { code: null }, { code: 42 }]) assert.equal(summarizeCodemode(args), undefined);
 });
 
 test("summarizeParallelTools counts calls and names the first few", () => {

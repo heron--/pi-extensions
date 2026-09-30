@@ -91,6 +91,18 @@ export const TOOL_OUTPUT_COLORS = {
 		expandHint: "dim",
 	},
 
+	/** Executed calls reported by codemode, distinct from the script's output. */
+	nestedCall: {
+		name: "success",
+		arguments: ["emphasisText", "accent"],
+		running: "warning",
+		ok: "success",
+		error: "error",
+		cancelled: "muted",
+		unknown: "muted",
+		meta: "muted",
+	},
+
 	/** The result rows attached beneath a call. */
 	result: {
 		/** Ordinary tool output. */

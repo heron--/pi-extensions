@@ -48,13 +48,22 @@ function candidates() {
 	// 0. Explicit override always wins.
 	if (process.env.PI_PACKAGE_ROOT) found.push(process.env.PI_PACKAGE_ROOT);
 
-	// 1. Follow `pi` on PATH to its real target (handles volta/npm/brew shims).
+	// 1. Resolve Volta's selected package before npm's PATH prepends its Node image.
+	if (process.env.VOLTA_HOME) {
+		try {
+			const target = execFileSync("volta", ["which", "pi"], { encoding: "utf8" }).trim();
+			const root = packageRootFrom(target);
+			if (root) found.push(root);
+		} catch {
+			// No Volta-managed pi; follow PATH below.
+		}
+	}
+
+	// 2. Follow `pi` on PATH to its real target (handles npm/brew shims).
 	try {
 		const which = execFileSync("sh", ["-c", "command -v pi"], { encoding: "utf8" }).trim();
-		if (which) {
-			const root = packageRootFrom(which);
-			if (root) found.push(root);
-		}
+		const root = which ? packageRootFrom(which) : null;
+		if (root) found.push(root);
 	} catch {
 		// pi not on PATH; fall through to the static candidates
 	}

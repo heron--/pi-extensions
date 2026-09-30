@@ -47,6 +47,7 @@ import {
 } from "./rendering.ts";
 import { toolCallBox, toolResultBox } from "./tool-box.ts";
 import { callArgumentsComponent } from "./call-rendering.ts";
+import { codemodeCallsComponent, codemodeFullOutputNotice, codemodeOutput } from "./codemode.ts";
 
 type ResultLike = AgentToolResult<unknown>;
 type DecoratedProperty = "renderCall" | "renderResult" | "renderShell";
@@ -231,6 +232,27 @@ function renderError(
 	return preview instanceof Text ? preview : textResult(paint(theme, error, fallback));
 }
 
+function renderModeContent(
+	result: ResultLike,
+	options: ToolRenderResultOptions,
+	theme: Theme,
+	context: ToolRenderContextLike,
+	config: ToolOutputConfig,
+	mode: OutputMode,
+	summary: (lines: string[]) => string,
+	footer?: string,
+): Text | Container {
+	if (isErrorResult(result, context)) return renderError(result, options, config, theme, "Tool failed", footer);
+	if (options.isPartial || mode === "hidden") return emptyResult();
+	const lines = outputLines(extractTextOutput(result), options.expanded);
+	if (mode === "summary" && !options.expanded) {
+		const color = TOOL_OUTPUT_COLORS.result.summary;
+		const notice = footer ? `\n${paint(theme, TOOL_OUTPUT_COLORS.result.notice, footer)}` : "";
+		return textResult(`${paint(theme, color, summary(lines))} ${paint(theme, color, `· ${keyHint("app.tools.expand", "to expand")}`)}${notice}`);
+	}
+	return renderPreview(lines, previewLimit(lines, options, config.previewLines, config), options, config, theme, undefined, footer);
+}
+
 function renderModeResult(
 	result: ResultLike,
 	options: ToolRenderResultOptions,
@@ -240,18 +262,27 @@ function renderModeResult(
 	mode: OutputMode,
 	summary: (lines: string[]) => string,
 ): ReturnType<typeof toolResultBox> {
-	let content: Text | Container;
-	if (isErrorResult(result, context)) {
-		content = renderError(result, options, config, theme, "Tool failed");
-	} else if (options.isPartial || mode === "hidden") {
-		content = emptyResult();
-	} else {
-		const lines = outputLines(extractTextOutput(result), options.expanded);
-		const summaryColor = TOOL_OUTPUT_COLORS.result.summary;
-		content = mode === "summary" && !options.expanded
-			? textResult(`${paint(theme, summaryColor, summary(lines))} ${paint(theme, summaryColor, `· ${keyHint("app.tools.expand", "to expand")}`)}`)
-			: renderPreview(lines, previewLimit(lines, options, config.previewLines, config), options, config, theme);
+	return toolResultBox(renderModeContent(result, options, theme, context, config, mode, summary), theme, context);
+}
+
+function adapterResult(
+	tool: RuntimeToolDefinition,
+	result: ResultLike,
+	options: ToolRenderResultOptions,
+	theme: Theme,
+	context: ToolRenderContextLike,
+	config: ToolOutputConfig,
+	mode: OutputMode,
+): ReturnType<typeof toolResultBox> {
+	const summary = (lines: string[]) => `↳ ${countNonEmptyLines(lines)} ${pluralize(countNonEmptyLines(lines), "line")} returned`;
+	if (tool.name !== "codemode") return renderModeResult(result, options, theme, context, config, mode, summary);
+	const content = new Container();
+	if (mode !== "hidden" || isErrorResult(result, context)) {
+		content.addChild(codemodeCallsComponent(result.details, options.expanded, theme, config.previewLines));
 	}
+	content.addChild(renderModeContent(
+		codemodeOutput(result), options, theme, context, config, mode, summary, codemodeFullOutputNotice(result.details),
+	));
 	return toolResultBox(content, theme, context);
 }
 
@@ -338,6 +369,8 @@ function adapterCall(
 
 function isMcpTool(tool: RuntimeToolDefinition): boolean {
 	const name = stringField(tool, "name") ?? "";
+	// Codemode can call MCP tools, but its own rendering is not an MCP output mode.
+	if (name === "codemode") return false;
 	const label = stringField(tool, "label") ?? "";
 	const description = stringField(tool, "description") ?? "";
 	return name === "mcp" || /^mcp[_:-]/i.test(name) || /^MCP\b/.test(label) || /\bMCP\b/.test(description);
@@ -361,7 +394,7 @@ function installDecorationApi(getConfig: () => ToolOutputConfig): () => void {
 			if (custom?.enabled === false) return tool;
 
 			const kind = custom?.kind ?? adapter.kind ?? (isMcpTool(runtimeTool) ? "mcp" : "generic");
-			const mode = custom?.outputMode ?? adapter.outputMode ?? (kind === "mcp" ? config.mcpOutputMode : "summary");
+			const mode = custom?.outputMode ?? adapter.outputMode ?? (kind === "mcp" ? config.mcpOutputMode : runtimeTool.name === "codemode" ? "preview" : "summary");
 			const overrideExisting = custom?.enabled === true || adapter.overrideExistingRenderers === true;
 			const hasExistingRenderer =
 				typeof runtimeTool.renderCall === "function" || typeof runtimeTool.renderResult === "function";
@@ -376,15 +409,7 @@ function installDecorationApi(getConfig: () => ToolOutputConfig): () => void {
 				theme: Theme,
 				context: ToolRenderContextLike,
 			) =>
-				renderModeResult(
-					result,
-					options,
-					theme,
-					context,
-					getConfig(),
-					mode,
-					(lines) => `↳ ${countNonEmptyLines(lines)} ${pluralize(countNonEmptyLines(lines), "line")} returned`,
-				);
+				adapterResult(decorated, result, options, theme, context, getConfig(), mode);
 			decorated.renderShell = "self";
 			return decorated as T;
 		},
@@ -496,18 +521,7 @@ function patchToolExecutionRendering(getConfig: () => ToolOutputConfig): void {
 		const target = resolveRuntimeRenderingTarget(this, getConfig());
 		if (!target) return originalResult.call(this);
 		return (result, options, theme, context) =>
-			renderModeResult(
-				result,
-				options,
-				theme,
-				context,
-				getConfig(),
-				target.mode,
-				(lines) => {
-					const count = countNonEmptyLines(lines);
-					return `↳ ${count} ${pluralize(count, "line")} returned`;
-				},
-			);
+			adapterResult(target.tool, result, options, theme, context, getConfig(), target.mode);
 	};
 	installedRenderShellWrapper = function (this: ToolExecutionInstanceLike): "default" | "self" {
 		if (!patchState.active) return originalShell.call(this);

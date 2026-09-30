@@ -276,6 +276,75 @@ void (async () => {
 	};
 	const options = { expanded: false, isPartial: false };
 
+	// Use Pi's real definition and sandbox: variable-driven calls cannot be
+	// reconstructed from the source, and partial results contain only metadata.
+	const nativeCodemode = await jiti.import(path.join(piRoot, "dist/extensions/codemode/tool.js"));
+	const codemodeDefinition = nativeCodemode.createCodemodeToolDefinition();
+	const originalCodemodeExecute = codemodeDefinition.execute;
+	const codemodeInstance = { toolName: "codemode", toolDefinition: codemodeDefinition };
+	const runtimeCodemodeResult = toolExecutionPrototype.getResultRenderer.call(codemodeInstance);
+	assert.notEqual(toolExecutionPrototype.getCallRenderer.call(codemodeInstance), codemodeDefinition.renderCall);
+	assert.notEqual(runtimeCodemodeResult, codemodeDefinition.renderResult);
+	assert.equal(toolExecutionPrototype.getRenderShell.call(codemodeInstance), "self");
+	const codemodeArgs = { code: 'const files = ["one.ts", "missing.ts"]; const results = await Promise.allSettled(files.map(path => tools.read({ path }))); text(results.map(r => r.status));' };
+	const codemodeComponent = new codingAgent.ToolExecutionComponent(
+		"codemode", "code-call", codemodeArgs, { showImages: false }, codemodeDefinition,
+		{ requestRender() {} }, process.cwd(),
+	);
+	codemodeComponent.setArgsComplete();
+	codemodeComponent.markExecutionStarted();
+	const updates = [];
+	let nestedId = 0;
+	const codemodeResult = await codemodeDefinition.execute(
+		"code-call", codemodeArgs, AbortSignal.timeout(10_000),
+		(update) => {
+			updates.push(update);
+			codemodeComponent.updateResult({ ...update, isError: false }, true);
+		},
+		{
+			tools: [{ name: "read", description: "Fixture reader", parameters: tools.get("read").parameters }],
+			sessionManager: { getBranch: () => [] },
+			async executeTool(name, args) {
+				return {
+					toolCall: { id: `code-call/${++nestedId}`, name, arguments: args },
+					isError: args.path === "missing.ts",
+					result: { content: [{ type: "text", text: args.path === "missing.ts" ? "NESTED_FAILURE" : "fixture text" }] },
+				};
+			},
+		},
+	);
+	assert.equal(codemodeDefinition.execute, originalCodemodeExecute);
+	assert.ok(updates.some((update) => update.details.calls.some((call) => call.status === "running")));
+	assert.equal(codemodeResult.isError, undefined); // allSettled handles the failed nested call.
+	const savedCodemodeResult = structuredClone(codemodeResult);
+	for (const update of updates) {
+		const partial = runtimeCodemodeResult(update, { ...options, isPartial: true }, theme, { ...context, state: {} }).render(100).join("\n");
+		assert.match(partial, /Read File/);
+	}
+	codemodeComponent.updateResult({ ...codemodeResult, isError: false });
+	let codemodeScreen = piTui.stripTerminalSequences(codemodeComponent.render(100).join("\n"));
+	assert.match(codemodeScreen, /Code Mode/);
+	assert.match(codemodeScreen, /✓ Read File · path: one.ts/);
+	assert.match(codemodeScreen, /✗ Read File · path: missing.ts/);
+	assert.match(codemodeScreen, /NESTED_FAILURE/);
+	assert.match(codemodeScreen, /Script completed ·/);
+	assert.doesNotMatch(codemodeScreen, /files.map|Wall time|Output:/);
+	codemodeComponent.setExpanded(true);
+	codemodeScreen = piTui.stripTerminalSequences(codemodeComponent.render(100).join("\n"));
+	assert.match(codemodeScreen, /files.map/);
+	assert.match(codemodeScreen, /NESTED_FAILURE/);
+	codemodeComponent.setExpanded(false);
+	assert.doesNotMatch(piTui.stripTerminalSequences(codemodeComponent.render(100).join("\n")), /files.map/);
+	assert.deepEqual(codemodeResult, savedCodemodeResult);
+	for (const expanded of [false, true]) {
+		const truncated = runtimeCodemodeResult(
+			{ content: [{ type: "text", text: "one\ntwo\nthree\nScript error: late failure" }],
+				details: { calls: [], fullOutputPath: "/tmp/codemode-full-output" }, isError: true },
+			{ expanded, isPartial: false }, theme, { ...context, state: {}, isError: true },
+		).render(100).join("\n");
+		assert.match(truncated, /full output: \/tmp\/codemode-full-output/);
+	}
+
 	// Every owned call route gets the same physical-row limits and expansion state.
 	const largeScript = "console.log('ARGUMENT_BODY_MARKER');\n".repeat(1000);
 	const argumentFixtures = [
@@ -285,6 +354,7 @@ void (async () => {
 		["find", { pattern: "*".repeat(1000) }],
 		["ls", { path: "dir/".repeat(1000) }],
 		["subagent", { workflowScript: largeScript, async: true }],
+		["codemode", { code: largeScript }],
 		["mcp", { tool: "search", args: { nested: Array(1000).fill({ data: largeScript }) } }],
 		["late_generic", { text: largeScript, items: Array(10_000).fill("value") }],
 		["web_search", { query: "界🙂".repeat(1000) }],
@@ -398,6 +468,18 @@ void (async () => {
 		});
 		assert.equal(imageReadComponent.imageComponents.length, 1);
 		assert.match(imageReadComponent.render(100).join("\n"), /1337;File=/);
+		const imageCodemodeComponent = new codingAgent.ToolExecutionComponent(
+			"codemode", "image-code", { code: "image(pixel)" }, { showImages: true }, codemodeDefinition,
+			{ requestRender() {} }, process.cwd(),
+		);
+		imageCodemodeComponent.setArgsComplete();
+		imageCodemodeComponent.markExecutionStarted();
+		imageCodemodeComponent.updateResult({
+			content: [{ type: "text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" }, ...imageReadComponent.result.content],
+			details: { calls: [] }, isError: false,
+		});
+		assert.equal(imageCodemodeComponent.imageComponents.length, 1);
+		assert.match(imageCodemodeComponent.render(100).join("\n"), /1337;File=/);
 	} finally {
 		piTui.setCapabilities(originalCapabilities);
 	}
@@ -523,6 +605,11 @@ void (async () => {
 	const apiKey = Symbol.for("pi-tool-output.api.v1");
 	const api = globalThis[apiKey];
 	assert.equal(api.version, 1);
+	const decoratedCodemode = api.decorateTool(codemodeDefinition, { overrideExistingRenderers: true });
+	assert.equal(decoratedCodemode.execute, originalCodemodeExecute);
+	assert.equal(decoratedCodemode.prepareLoadout, codemodeDefinition.prepareLoadout);
+	assert.equal(decoratedCodemode.parameters, codemodeDefinition.parameters);
+	assert.match(decoratedCodemode.renderResult(codemodeResult, options, theme, { ...context, state: {} }).render(100).join("\n"), /NESTED_FAILURE/);
 	const unknownTool = api.decorateTool({ name: "unknown_tool" });
 	const unknownArgs = { prompt: largeScript, data: { payload: largeScript } };
 	const compactUnknown = unknownTool.renderCall(unknownArgs, theme, { ...context, state: {} }).render(100).join("\n");
@@ -615,6 +702,7 @@ void (async () => {
 			edit: true,
 			write: true,
 		},
+		customToolOverrides: { codemode: { enabled: false, kind: "generic", outputMode: "preview" } },
 	};
 	assert.equal(configModule.saveToolOutputConfig(optInConfig).success, true);
 	const optInTools = new Map();
@@ -637,6 +725,9 @@ void (async () => {
 		);
 	}
 	assert.notEqual(toolExecutionPrototype.getCallRenderer, composedGetCallRenderer);
+	assert.equal(toolExecutionPrototype.getCallRenderer.call(codemodeInstance), codemodeDefinition.renderCall);
+	assert.equal(toolExecutionPrototype.getResultRenderer.call(codemodeInstance), codemodeDefinition.renderResult);
+	assert.equal(toolExecutionPrototype.getRenderShell.call(codemodeInstance), "default");
 	assert.deepEqual([...optInTools.keys()].sort(), ["bash", "edit", "find", "grep", "ls", "read", "write"]);
 	assert.equal(typeof optInTools.get("edit").renderCall, "function");
 	assert.equal(typeof optInTools.get("edit").renderResult, "function");
@@ -650,6 +741,32 @@ void (async () => {
 	assert.equal(toolExecutionPrototype.getCallRenderer.call(lateMcpInstance), adapterCallRenderer);
 	assert.equal(toolExecutionPrototype.getResultRenderer, originalGetResultRenderer);
 	assert.equal(toolExecutionPrototype.getRenderShell, originalGetRenderShell);
+	// Codemode is not governed by MCP output settings, but exact custom modes
+	// apply to its own output. Error output survives an explicit hidden mode.
+	for (const mode of [undefined, "summary", "hidden"]) {
+		configModule.saveToolOutputConfig({
+			...configModule.DEFAULT_TOOL_OUTPUT_CONFIG,
+			mcpOutputMode: "hidden",
+			customToolOverrides: mode ? { codemode: { enabled: true, kind: "generic", outputMode: mode } } : {},
+		});
+		const modeHandlers = new Map();
+		factory({
+			registerTool() {}, registerCommand() {},
+			on(name, handler) { modeHandlers.set(name, handler); },
+		});
+		await modeHandlers.get("session_start")({ type: "session_start" }, { mode: "tui", ui: { theme, notify() {} } });
+		const renderer = toolExecutionPrototype.getResultRenderer.call(codemodeInstance);
+		const output = renderer(codemodeResult, options, theme, { ...context, state: {} }).render(100).join("\n");
+		if (mode === "hidden") {
+			assert.doesNotMatch(output, /Read File|Script completed|fulfilled/);
+			const failed = renderer({ content: [{ type: "text", text: "Script failed" }] }, options, theme, { ...context, state: {}, isError: true }).render(100).join("\n");
+			assert.match(failed, /Script failed/);
+		} else {
+			assert.match(output, /Read File/);
+			assert.match(output, mode === "summary" ? /lines returned/ : /fulfilled/);
+		}
+		await modeHandlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, {});
+	}
 	toolExecutionPrototype.getCallRenderer = originalGetCallRenderer;
 	console.log("tool-output integration fixture passed");
 })()
