@@ -190,6 +190,11 @@ export class TranscriptDigestLayout {
 		if (this.isEnabled) this.tui.requestRender();
 	}
 
+	setAgentRunning(running: boolean): void {
+		this.messages.setAgentRunning(running);
+		if (this.isEnabled) this.tui.requestRender();
+	}
+
 	refresh(): void {
 		this.messages.invalidate();
 		if (this.isEnabled) this.tui.requestRender();

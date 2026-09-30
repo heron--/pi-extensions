@@ -3,7 +3,7 @@ import test from "node:test";
 import { Container, HStack, ScrollView, TuiAltScreen, VStack, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import transcriptDigestExtension from "./index.ts";
 import { TranscriptDigestLayout, MIN_SPLIT_COLUMNS } from "./layout.ts";
-import { ConversationPane, conversationItem, conversationItems } from "./messages.ts";
+import { ConversationPane, conversationItem, conversationItems, formatElapsed } from "./messages.ts";
 
 const theme = {
 	fg(color, text) {
@@ -376,6 +376,70 @@ test("missing or invalid timestamps leave plain role labels", () => {
 		const lines = pane.render(24).map(stripTerminalSequences).map((line) => line.trim());
 		assert.deepEqual(lines, ["", "User", "hello", "", "", "Agent", "answer"]);
 	}
+});
+
+const T0 = Date.UTC(2026, 0, 2, 9, 0, 0);
+function timed(id, message, at, sentAt = at) {
+	return { ...entry(id, { ...message, timestamp: sentAt }), timestamp: new Date(at).toISOString() };
+}
+function reply(text, stopReason = "stop") { return { ...assistant([{ type: "text", text }]), stopReason }; }
+function toolUse() { return { ...assistant([{ type: "toolCall", id: "t", name: "read", arguments: {} }]), stopReason: "toolUse" }; }
+function toolResult() { return { role: "toolResult", toolCallId: "t", toolName: "read", content: [], isError: false, timestamp: 0 }; }
+
+test("elapsed times follow each agent turn and precede the user's reply", () => {
+	const entries = [
+		timed("1", user("question"), T0),
+		timed("2", toolUse(), T0 + 5_000),
+		timed("3", toolResult(), T0 + 8_000),
+		timed("4", reply("answer"), T0 + 70_000),
+		timed("5", user("thanks"), T0 + 100_000),
+	];
+	assert.deepEqual(conversationItems(entries), [
+		{ role: "user", text: "question", timestamp: T0 },
+		{ role: "activity", toolCalls: 1, thinkingBlocks: 0 },
+		{ role: "assistant", text: "answer", timestamp: T0 + 70_000 },
+		{ role: "elapsed", turn: "agent", ms: 70_000 },
+		{ role: "elapsed", turn: "user", ms: 30_000 },
+		{ role: "user", text: "thanks", timestamp: T0 + 100_000 },
+	]);
+});
+
+test("steering keeps one agent turn and queued follow-ups have no user turn", () => {
+	const entries = [
+		timed("1", user("start"), T0),
+		timed("2", toolUse(), T0 + 5_000),
+		timed("3", user("also this"), T0 + 7_000, T0 + 6_000),
+		timed("4", toolResult(), T0 + 8_000),
+		timed("5", reply("done"), T0 + 20_000),
+		// Typed while the agent worked, picked up once it finished.
+		timed("6", user("next"), T0 + 21_000, T0 + 15_000),
+		timed("7", reply("ok"), T0 + 31_000),
+	];
+	const elapsed = conversationItems(entries).filter((item) => item.role === "elapsed");
+	assert.deepEqual(elapsed, [{ role: "elapsed", turn: "agent", ms: 20_000 }]);
+
+	const pane = new ConversationPane(session(entries), theme);
+	const rows = () => pane.render(40).map((line) => stripTerminalSequences(line).trim()).filter((line) => line.includes("turn"));
+	assert.deepEqual(rows(), ["Agent turn 20s", "Agent turn 10s"], "an idle agent's latest turn is closed");
+	pane.setAgentRunning(true);
+	assert.deepEqual(rows(), ["Agent turn 20s"], "a running agent's turn is still open");
+});
+
+test("elapsed times are appended incrementally and skip sub-second spans", () => {
+	const entries = [timed("1", user("hi"), T0), timed("2", reply("hello"), T0 + 500)];
+	const pane = new ConversationPane(session(entries), theme);
+	const rows = () => pane.render(40).map((line) => stripTerminalSequences(line).trim()).filter((line) => line.includes("turn"));
+	assert.deepEqual(rows(), []);
+	entries.push(timed("3", user("more"), T0 + 125_000), timed("4", reply("sure"), T0 + 3_725_000));
+	assert.deepEqual(rows(), ["User turn 2m 04s", "Agent turn 1h 00m"]);
+});
+
+test("elapsed durations are compact at every scale", () => {
+	assert.equal(formatElapsed(1_999), "1s");
+	assert.equal(formatElapsed(59_000), "59s");
+	assert.equal(formatElapsed(61_000), "1m 01s");
+	assert.equal(formatElapsed(3_600_000), "1h 00m");
+	assert.equal(formatElapsed(90_000_000), "1d 01h");
 });
 
 test("pane wraps long words, lines and wide graphemes within its width", () => {

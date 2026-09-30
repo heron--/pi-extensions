@@ -16,6 +16,7 @@ export default function transcriptDigestExtension(pi: ExtensionAPI): void {
 		// footer, or header. Pi already reserves one row above the editor here.
 		ctx.ui.setWidget(WIDGET_KEY, (tui, theme) => {
 			const messages = new ConversationPane(ctx.sessionManager, theme);
+			messages.setAgentRunning(!ctx.isIdle());
 			const instance = new TranscriptDigestLayout(tui, theme, messages);
 			pane = instance;
 			return {
@@ -50,7 +51,11 @@ export default function transcriptDigestExtension(pi: ExtensionAPI): void {
 	pi.on("message_end", ({ message }) => {
 		if (message.role === "user" || message.role === "assistant") pane?.setLive(message);
 	});
-	pi.on("agent_end", () => pane?.setLive(undefined));
+	pi.on("agent_start", () => pane?.setAgentRunning(true));
+	pi.on("agent_end", () => {
+		pane?.setLive(undefined);
+		pane?.setAgentRunning(false);
+	});
 	pi.on("session_tree", () => {
 		pane?.setLive(undefined);
 		pane?.refresh();
