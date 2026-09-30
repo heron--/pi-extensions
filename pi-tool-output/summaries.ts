@@ -347,6 +347,11 @@ export function summarizeMcp(args: Args): CallSummary | undefined {
 	return args.list === true ? summary("List available tools", "list") : undefined;
 }
 
+/** `codemode` — label the source; executed calls come from result.details.calls. */
+export function summarizeCodemode(args: Args): CallSummary | undefined {
+	return typeof args.code === "string" ? { ...summary("JavaScript", "code"), hidden: true } : undefined;
+}
+
 /** `multi_tool_use.parallel` — how many calls, and the first few recipients. */
 export function summarizeParallelTools(args: Args): CallSummary | undefined {
 	if (!Array.isArray(args.tool_uses)) return undefined;
@@ -399,6 +404,7 @@ function summarize(name: string, args: Args): CallSummary | undefined {
 	if (name === "subagent") return summarizeSubagent(args);
 	if (name === "mcp" || name === "datadog" || name.startsWith("mcp__")) return summarizeMcp(args);
 	if (name === "mcpScript") return typeof args.code === "string" ? summary("MCP script", "code") : undefined;
+	if (name === "codemode") return summarizeCodemode(args);
 	if (name === "multi_tool_use.parallel") return summarizeParallelTools(args);
 	if (name.startsWith("fusion_") || name === "bg_delegate" || name === "bg_run_pi_attested") {
 		return summarizeNamedTask(args);
@@ -432,7 +438,7 @@ export function summarizeToolCall(name: string, args: unknown): CallSummary | un
 			...result,
 			fields: consumedFields(result, input),
 			text: shortArgument(result.text, SUMMARY_MAX_CHARS),
-			hidden: result.text.length > SUMMARY_MAX_CHARS,
+			hidden: result.hidden === true || result.text.length > SUMMARY_MAX_CHARS,
 		};
 	} catch {
 		return undefined;

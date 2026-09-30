@@ -31,7 +31,7 @@ All calls owned by this extension use the same bounded argument renderer:
 - Small arrays/objects stay inline; larger or deeply nested structures become
   item/field counts. The compact view considers at most eight argument fields.
 - A field a summary stands in for — a sketched `command`, a labeled
-  `workflowScript`, `mcpScript`'s `code` — never returns to the compact preview
+  `workflowScript`, `mcpScript`/`codemode`'s `code` — never returns to the compact preview
   as its original value. When it is long or multi-line it still surfaces as a
   size descriptor; Ctrl+O reveals the original in full.
 - The call body has at most one summary row, three wrapped argument rows, and
@@ -72,6 +72,7 @@ is dropped from the preview below it, so nothing is stated twice.
 | `subagent` | `action`, `id` | `status · run-1` |
 | `mcp` | `server`, `tool` | `linear · search_issues` |
 | `mcpScript` | `code` | `MCP script` |
+| `codemode` | `code` | `JavaScript`; executed calls appear below from Pi's live metadata |
 | `multi_tool_use.parallel` | `tool_uses` | `2 parallel tools · functions.read, functions.grep` |
 | `fusion_*`, `bg_delegate` | `objective` or `name` | `Inspect bug` |
 | `bg_result`, `bg_status`, `bg_logs`, `bg_kill` | `taskId` | `task: task-1` |
@@ -125,6 +126,52 @@ beside its sketch in the compact preview. Bounds: 4,096 characters read,
 80 tokens, 3 pipeline segments, 10 tokens per segment, 240 characters out.
 An unterminated quote is marked `…` rather than throwing.
 
+#### Codemode
+
+`codemode` uses a **Code Mode** house box. The collapsed call labels the source
+`JavaScript` instead of showing orchestration syntax. Ctrl+O reveals the source,
+including short one-line scripts, within the normal argument display caps.
+
+Pi streams `details.calls` as the script runs and saves those records with the
+result. The result renderer uses them directly rather than guessing execution
+from JavaScript syntax:
+
+```text
+✓ Run Command · git status --short · 25ms
+✓ Read File · path: lib/box.ts:10-29 · 4ms
+✗ Read File · path: missing.ts · 2ms
+  File not found
+Script completed · 0.2s
+(script output)
+```
+
+- Names and complete JSON argument previews reuse the existing command, path,
+  range, search, and MCP summaries. Loops and dynamically constructed arguments
+  work because the records describe actual calls, not static call sites.
+- Running (`…`), successful (`✓`), failed (`✗`), and cancelled (`⊘`) calls remain
+  distinct. Nested failures stay red even when `Promise.allSettled` lets the
+  script succeed. Durations and reported classifier costs remain visible.
+- The compact view shows the latest `previewLines` calls (eight by default),
+  with one clipped row per call and a separate error row where present. Ctrl+O
+  shows recorded arguments and errors, bounded to 256 calls and 120 wrapped
+  metadata rows. These limits are separate from the script output's preview
+  and `expandedPreviewMaxLines` settings.
+- Pi caps each recorded argument preview at 200 characters. Incomplete JSON is
+  labeled in the compact view, never evaluated or reconstructed; expansion
+  shows the recorded fragment. The source remains available separately.
+- The native completion/failure header becomes one row. Script output is not
+  interpreted as nested results, and a full-output file notice stays visible
+  when Pi truncates it. Images remain owned by Pi's image renderer.
+
+Before any calls are recorded, or in sessions without `details.calls`, the box
+still shows the compact source label and ordinary script output. This changes
+presentation only: it does not execute source, replace codemode's definition,
+change tool exposure, or alter saved calls and model context.
+
+Codemode defaults to preview mode independently of `mcpOutputMode`. An exact
+`customToolOverrides.codemode` entry can change its output mode; setting that
+entry to `false` preserves Pi's own renderers.
+
 #### Adding a summarizer
 
 Each tool family has one exported function in `summaries.ts` — `summarizeRead`,
@@ -142,8 +189,9 @@ an unexpected type stays visible. Every summarizer is unit-tested directly in
 
 `colors.ts` holds every color this extension paints; no other module names a
 theme color. `TOOL_OUTPUT_COLORS` groups them by the region they paint — `box`
-(frame and label), `call` (summary and argument rows), and `result` (output,
-errors, notices, metadata) — so retuning one region leaves the others alone.
+(frame and label), `call` (summary and argument rows), `nestedCall` (codemode's
+executed calls), and `result` (output, errors, notices, metadata) — so retuning
+one region leaves the others alone.
 
 Values are theme color names rather than hex codes, so the active theme resolves
 them and the palette follows theme switches. A color the stock themes do not
@@ -341,10 +389,12 @@ PATH and Python's `pyte` installed:
 python3 pi-tool-output/tui.test.py
 ```
 
-The PTY check uses scratch settings, inert tool definitions, and synthetic
-sessions (no model calls), presses Ctrl+O, and checks decoded screens at 100,
-40, and 26 columns. It saves
-collapsed/expanded/re-collapsed screens and ANSI captures to a printed temp path.
+The PTY check uses scratch settings, inert tool definitions, Pi's built-in
+codemode definition, and synthetic sessions (no model calls), presses Ctrl+O,
+and checks decoded screens at 100, 40, and 26 columns. The integration fixture
+also executes Pi's real codemode sandbox against inert nested tools to verify
+live updates and handled failures. The PTY check saves collapsed/expanded/
+re-collapsed screens and ANSI captures to a printed temp path.
 
 For a live, synthetic transcript that loads only this checkout's extensions and
 shows a long enough tool result to exercise Ctrl+O:
