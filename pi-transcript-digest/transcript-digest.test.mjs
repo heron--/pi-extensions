@@ -115,16 +115,21 @@ test("conversation stats count user and agent messages, tool calls, and thinking
 	const secondUser = user("follow-up");
 	const entries = [entry("1", firstUser), entry("2", toolUse), entry("3", finalReply), entry("4", secondUser)];
 	const pane = new ConversationPane(session(entries), theme);
-	assert.deepEqual(pane.getStats(), { userMessages: 2, agentMessages: 2, toolCalls: 1, thinkingBlocks: 1 });
+	assert.deepEqual(pane.getStats(), { userMessages: 2, agentMessages: 1, toolCalls: 1, thinkingBlocks: 1 }, "tool-only replies are not agent messages");
 
 	const live = assistant([{ type: "text", text: "partial" }]);
 	pane.setLive(live);
-	assert.deepEqual(pane.getStats(), { userMessages: 2, agentMessages: 3, toolCalls: 1, thinkingBlocks: 1 });
+	assert.deepEqual(pane.getStats(), { userMessages: 2, agentMessages: 2, toolCalls: 1, thinkingBlocks: 1 });
 	live.content.push({ type: "thinking", thinking: "more" }, { type: "toolCall", id: "t2", name: "read", arguments: {} });
 	pane.setLive(live);
-	assert.deepEqual(pane.getStats(), { userMessages: 2, agentMessages: 3, toolCalls: 2, thinkingBlocks: 2 });
+	assert.deepEqual(pane.getStats(), { userMessages: 2, agentMessages: 2, toolCalls: 2, thinkingBlocks: 2 });
+	live.content.push({ type: "text", text: "done" });
+	pane.setLive(live);
+	assert.deepEqual(pane.getStats(), { userMessages: 2, agentMessages: 3, toolCalls: 2, thinkingBlocks: 2 }, "text split by a tool call is two entries");
 	entries.push(entry("5", live));
 	assert.deepEqual(pane.getStats(), { userMessages: 2, agentMessages: 3, toolCalls: 2, thinkingBlocks: 2 }, "persisting live replies does not double count them");
+	const listed = conversationItems(entries).filter((item) => item.role === "assistant").length;
+	assert.equal(pane.getStats().agentMessages, listed, "the count matches the agent entries the digest lists");
 });
 
 test("activity summaries count thinking blocks and tool calls between visible messages", () => {

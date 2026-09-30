@@ -219,11 +219,27 @@ function appendedBranchEntries(
 	return entry?.id === lastEntry.id ? reversed.reverse() : undefined;
 }
 
+/** Agent entries the digest lists for one assistant message; must mirror appendAssistantMessage. */
+function visibleAgentMessages(message: Extract<AgentMessage, { role: "assistant" }>): number {
+	let count = 0;
+	let textBlocks: string[] = [];
+	const flush = () => {
+		if (textBlocks.length > 0 && safeText(textBlocks.join("\n")).trim()) count++;
+		textBlocks = [];
+	};
+	for (const block of message.content) {
+		if (block.type === "text") textBlocks.push(block.text);
+		else if (block.type === "thinking" || block.type === "toolCall") flush();
+	}
+	flush();
+	return count;
+}
+
 function countMessage(message: AgentMessage, stats: ConversationStatsState): void {
 	if (message.role === "user") {
 		stats.userMessages++;
 	} else if (message.role === "assistant") {
-		stats.agentMessages++;
+		stats.agentMessages += visibleAgentMessages(message);
 		for (const block of message.content) {
 			if (block.type === "toolCall") stats.toolCalls++;
 			else if (block.type === "thinking") stats.thinkingBlocks++;
