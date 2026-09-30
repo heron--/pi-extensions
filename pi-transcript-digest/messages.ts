@@ -87,34 +87,47 @@ function appendActivity(items: ConversationItem[], activity: Omit<ConversationAc
 	activity.thinkingBlocks = 0;
 }
 
+/**
+ * Walks an assistant message the way the digest shows it: runs of text become
+ * one visible entry each, split by the thinking blocks and tool calls between.
+ * Rendering and the header counts both use this, so they cannot disagree.
+ */
+function forEachAssistantPart(
+	message: Extract<AgentMessage, { role: "assistant" }>,
+	onText: (text: string) => void,
+	onActivity: (type: "thinking" | "toolCall") => void,
+): void {
+	let textBlocks: string[] = [];
+	const flush = () => {
+		if (textBlocks.length === 0) return;
+		const text = safeText(textBlocks.join("\n"));
+		textBlocks = [];
+		if (text.trim()) onText(text);
+	};
+	for (const block of message.content) {
+		if (block.type === "text") {
+			textBlocks.push(block.text);
+		} else if (block.type === "thinking" || block.type === "toolCall") {
+			flush();
+			onActivity(block.type);
+		}
+	}
+	flush();
+}
+
 function appendAssistantMessage(
 	message: Extract<AgentMessage, { role: "assistant" }>,
 	items: ConversationItem[],
 	pendingActivity: Omit<ConversationActivityItem, "role">,
 ): void {
-	let textBlocks: string[] = [];
 	const model = assistantModelId(message);
-	const appendText = () => {
-		if (textBlocks.length === 0) return;
-		const text = safeText(textBlocks.join("\n"));
-		textBlocks = [];
-		if (!text.trim()) return;
+	forEachAssistantPart(message, (text) => {
 		appendActivity(items, pendingActivity);
 		items.push({ role: "assistant", text, timestamp: message.timestamp, ...(model ? { model } : {}) });
-	};
-
-	for (const block of message.content) {
-		if (block.type === "text") {
-			textBlocks.push(block.text);
-		} else if (block.type === "thinking") {
-			appendText();
-			pendingActivity.thinkingBlocks++;
-		} else if (block.type === "toolCall") {
-			appendText();
-			pendingActivity.toolCalls++;
-		}
-	}
-	appendText();
+	}, (type) => {
+		if (type === "thinking") pendingActivity.thinkingBlocks++;
+		else pendingActivity.toolCalls++;
+	});
 }
 
 interface PendingState extends Omit<ConversationActivityItem, "role"> {
@@ -219,31 +232,14 @@ function appendedBranchEntries(
 	return entry?.id === lastEntry.id ? reversed.reverse() : undefined;
 }
 
-/** Agent entries the digest lists for one assistant message; must mirror appendAssistantMessage. */
-function visibleAgentMessages(message: Extract<AgentMessage, { role: "assistant" }>): number {
-	let count = 0;
-	let textBlocks: string[] = [];
-	const flush = () => {
-		if (textBlocks.length > 0 && safeText(textBlocks.join("\n")).trim()) count++;
-		textBlocks = [];
-	};
-	for (const block of message.content) {
-		if (block.type === "text") textBlocks.push(block.text);
-		else if (block.type === "thinking" || block.type === "toolCall") flush();
-	}
-	flush();
-	return count;
-}
-
 function countMessage(message: AgentMessage, stats: ConversationStatsState): void {
 	if (message.role === "user") {
 		stats.userMessages++;
 	} else if (message.role === "assistant") {
-		stats.agentMessages += visibleAgentMessages(message);
-		for (const block of message.content) {
-			if (block.type === "toolCall") stats.toolCalls++;
-			else if (block.type === "thinking") stats.thinkingBlocks++;
-		}
+		forEachAssistantPart(message, () => stats.agentMessages++, (type) => {
+			if (type === "thinking") stats.thinkingBlocks++;
+			else stats.toolCalls++;
+		});
 	}
 }
 
