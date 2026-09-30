@@ -37,7 +37,7 @@ Certainly some extensions had more intellectual engagement from me than others.
   extension tools in the shared dark house box, with readable names, a semantic
   one-line summary of each call, dimmed expandable output, and preserved
   renderer ownership during migration from `pi-tool-display`.
-- **[pi-tree-pane](pi-tree-pane/README.md)** — **EXPERIMENTAL** I really struggled to keep up
+- **[pi-transcript-digest](pi-transcript-digest/README.md)** — **EXPERIMENTAL** I really struggled to keep up
   with an Astra conversation with all of it's tool calls. I wanted a more compact view where I
   could just see our conversation. This exists in pi with the `/tree` command.
   Requires fullscreen mode, which is itself experimental. I've been tuning the performance of
@@ -136,16 +136,16 @@ with no flags loads whatever is linked there, and `/reload` hot-reloads it:
 
 ```
 .pi/extensions/
-├── lib                -> ../../lib                 # REQUIRED, see below
-├── pi-context-footer  -> ../../pi-context-footer
-├── pi-model-picker    -> ../../pi-model-picker
-├── pi-recap           -> ../../pi-recap
-├── pi-thinking-labels -> ../../pi-thinking-labels
-├── pi-tool-output     -> ../../pi-tool-output
-├── pi-tree-pane       -> ../../pi-tree-pane
-├── pi-typewriter      -> ../../pi-typewriter
-├── pi-user-message    -> ../../pi-user-message
-└── pi-write-lock      -> ../../pi-write-lock
+├── lib                  -> ../../lib                 # REQUIRED, see below
+├── pi-context-footer    -> ../../pi-context-footer
+├── pi-model-picker      -> ../../pi-model-picker
+├── pi-recap             -> ../../pi-recap
+├── pi-thinking-labels   -> ../../pi-thinking-labels
+├── pi-tool-output       -> ../../pi-tool-output
+├── pi-transcript-digest -> ../../pi-transcript-digest
+├── pi-typewriter        -> ../../pi-typewriter
+├── pi-user-message      -> ../../pi-user-message
+└── pi-write-lock        -> ../../pi-write-lock
 ```
 
 Add or remove links freely — `.pi/` is gitignored, so it never shows up in

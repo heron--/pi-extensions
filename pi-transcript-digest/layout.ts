@@ -52,7 +52,7 @@ class HalfWidthStack extends HStack {
 }
 
 /** Keeps Pi's original transcript ScrollView and input dock intact. */
-export class TreePaneLayout {
+export class TranscriptDigestLayout {
 	private originalRoot?: Component;
 	private splitRoot?: Component;
 	private split?: HalfWidthStack;
@@ -117,18 +117,14 @@ export class TreePaneLayout {
 			render: () => Array.from({ length: Math.max(1, renderer.terminal.rows) }, () => this.theme.fg("border", "│")),
 			invalidate: () => {},
 		};
-		const title: Component = {
-			render: (width) => {
-				const w = Math.max(1, width);
-				return [w < 3 ? " ".repeat(w) : ` ${truncateToWidth(this.theme.fg("muted", this.theme.bold("Transcript")), w - 2, "", true)} `];
-			},
-			invalidate: () => {},
-		};
-		const footer: Component = {
+		// Title on the left, session counts right-aligned. Counts that do not fit
+		// beside the title wrap onto right-aligned rows below it.
+		const header: Component = {
 			render: (width) => {
 				const w = Math.max(1, width);
 				if (w < 3) return [" ".repeat(w)];
 				const innerWidth = w - 2;
+				const title = truncateToWidth(this.theme.fg("muted", this.theme.bold("Transcript Digest")), innerWidth, "");
 				const stats = this.messages.getStats();
 				const parts = [
 					`${stats.userMessages} User Messages`,
@@ -137,24 +133,31 @@ export class TreePaneLayout {
 					`${stats.thinkingBlocks} Thinking Blocks`,
 				];
 				const rows: string[] = [];
+				let rowWidth = innerWidth - visibleWidth(title) - 2;
+				let current = "";
 				for (const part of parts) {
-					const previous = rows.at(-1);
-					const combined = previous ? `${previous} · ${part}` : part;
-					if (previous && visibleWidth(combined) > innerWidth) rows.push(part);
-					else if (previous) rows[rows.length - 1] = combined;
-					else rows.push(part);
+					const combined = current ? `${current} · ${part}` : part;
+					if (visibleWidth(combined) <= rowWidth) {
+						current = combined;
+						continue;
+					}
+					rows.push(current);
+					rowWidth = innerWidth;
+					current = part;
 				}
-				return rows.map((text) => {
-					const clipped = truncateToWidth(this.theme.fg("muted", text), innerWidth, "", true);
-					return ` ${" ".repeat(Math.max(0, innerWidth - visibleWidth(clipped)))}${clipped} `;
+				rows.push(current);
+				return rows.map((text, index) => {
+					const left = index === 0 ? title : "";
+					const clipped = truncateToWidth(this.theme.fg("muted", text), innerWidth - visibleWidth(left), "");
+					const gap = Math.max(0, innerWidth - visibleWidth(left) - visibleWidth(clipped));
+					return ` ${left}${" ".repeat(gap)}${clipped} `;
 				});
 			},
 			invalidate: () => {},
 		};
 		const right = new RightPane([
-			{ component: title, basis: "auto", grow: 0, shrink: 0, minSize: 1 },
+			{ component: header, basis: "auto", grow: 0, shrink: 0, minSize: 1 },
 			{ component: side, basis: 0, grow: 1, shrink: 1, minSize: 1 },
-			{ component: footer, basis: "auto", grow: 0, shrink: 0, minSize: 1 },
 		], side);
 		const splitVisible = ({ width }: { width: number }) => width >= MIN_SPLIT_COLUMNS;
 		const split = new HalfWidthStack([
@@ -187,6 +190,11 @@ export class TreePaneLayout {
 
 	setLive(message?: ConversationMessage): void {
 		this.messages.setLive(message);
+		if (this.isEnabled) this.tui.requestRender();
+	}
+
+	setAgentRunning(running: boolean): void {
+		this.messages.setAgentRunning(running);
 		if (this.isEnabled) this.tui.requestRender();
 	}
 

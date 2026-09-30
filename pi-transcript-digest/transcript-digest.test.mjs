@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Container, HStack, ScrollView, TuiAltScreen, VStack, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import treePaneExtension from "./index.ts";
-import { TreePaneLayout, MIN_SPLIT_COLUMNS } from "./layout.ts";
-import { ConversationPane, conversationItem, conversationItems } from "./messages.ts";
+import transcriptDigestExtension from "./index.ts";
+import { TranscriptDigestLayout, MIN_SPLIT_COLUMNS } from "./layout.ts";
+import { ConversationPane, conversationItem, conversationItems, formatElapsed } from "./messages.ts";
 
 const theme = {
 	fg(color, text) {
@@ -30,17 +30,17 @@ function session(entries = []) {
 	};
 }
 
-test("the slash command is /tree-pane and its usage matches", async () => {
+test("the slash command is /transcript-digest and its usage matches", async () => {
 	const commands = new Map();
-	treePaneExtension({
+	transcriptDigestExtension({
 		on() {},
 		registerCommand(name, command) { commands.set(name, command); },
 	});
-	assert.deepEqual([...commands.keys()], ["tree-pane"]);
+	assert.deepEqual([...commands.keys()], ["transcript-digest"]);
 	const notices = [];
 	const ctx = { ui: { notify(message, level) { notices.push({ message, level }); } } };
-	await commands.get("tree-pane").handler("invalid", ctx);
-	assert.deepEqual(notices, [{ message: "Usage: /tree-pane [on|off|status]", level: "warning" }]);
+	await commands.get("transcript-digest").handler("invalid", ctx);
+	assert.deepEqual(notices, [{ message: "Usage: /transcript-digest [on|off|status]", level: "warning" }]);
 });
 
 test("conversation shows user and agent text with summaries for hidden activity", () => {
@@ -378,6 +378,73 @@ test("missing or invalid timestamps leave plain role labels", () => {
 	}
 });
 
+const T0 = Date.UTC(2026, 0, 2, 9, 0, 0);
+function timed(id, message, at, sentAt = at) {
+	return { ...entry(id, { ...message, timestamp: sentAt }), timestamp: new Date(at).toISOString() };
+}
+function reply(text, stopReason = "stop") { return { ...assistant([{ type: "text", text }]), stopReason }; }
+function toolUse() { return { ...assistant([{ type: "toolCall", id: "t", name: "read", arguments: {} }]), stopReason: "toolUse" }; }
+function toolResult() { return { role: "toolResult", toolCallId: "t", toolName: "read", content: [], isError: false, timestamp: 0 }; }
+
+test("elapsed times follow each agent turn and precede the user's reply", () => {
+	const entries = [
+		timed("1", user("question"), T0),
+		timed("2", toolUse(), T0 + 5_000),
+		timed("3", toolResult(), T0 + 8_000),
+		timed("4", reply("answer"), T0 + 70_000),
+		timed("5", user("thanks"), T0 + 100_000),
+	];
+	assert.deepEqual(conversationItems(entries), [
+		{ role: "user", text: "question", timestamp: T0 },
+		{ role: "activity", toolCalls: 1, thinkingBlocks: 0 },
+		{ role: "assistant", text: "answer", timestamp: T0 + 70_000 },
+		{ role: "elapsed", turn: "agent", ms: 70_000 },
+		{ role: "elapsed", turn: "user", ms: 30_000 },
+		{ role: "user", text: "thanks", timestamp: T0 + 100_000 },
+	]);
+	const pane = new ConversationPane(session(entries), theme);
+	const rows = pane.render(60).map((line) => stripTerminalSequences(line).trim()).filter((line) => line.includes("turn"));
+	assert.deepEqual(rows, ["Agent turn 1m 10s · User turn 30s"], "a handoff's two turns share one line");
+});
+
+test("steering keeps one agent turn and queued follow-ups have no user turn", () => {
+	const entries = [
+		timed("1", user("start"), T0),
+		timed("2", toolUse(), T0 + 5_000),
+		timed("3", user("also this"), T0 + 7_000, T0 + 6_000),
+		timed("4", toolResult(), T0 + 8_000),
+		timed("5", reply("done"), T0 + 20_000),
+		// Typed while the agent worked, picked up once it finished.
+		timed("6", user("next"), T0 + 21_000, T0 + 15_000),
+		timed("7", reply("ok"), T0 + 31_000),
+	];
+	const elapsed = conversationItems(entries).filter((item) => item.role === "elapsed");
+	assert.deepEqual(elapsed, [{ role: "elapsed", turn: "agent", ms: 20_000 }]);
+
+	const pane = new ConversationPane(session(entries), theme);
+	const rows = () => pane.render(40).map((line) => stripTerminalSequences(line).trim()).filter((line) => line.includes("turn"));
+	assert.deepEqual(rows(), ["Agent turn 20s", "Agent turn 10s"], "an idle agent's latest turn is closed");
+	pane.setAgentRunning(true);
+	assert.deepEqual(rows(), ["Agent turn 20s"], "a running agent's turn is still open");
+});
+
+test("elapsed times are appended incrementally and skip sub-second spans", () => {
+	const entries = [timed("1", user("hi"), T0), timed("2", reply("hello"), T0 + 500)];
+	const pane = new ConversationPane(session(entries), theme);
+	const rows = () => pane.render(40).map((line) => stripTerminalSequences(line).trim()).filter((line) => line.includes("turn"));
+	assert.deepEqual(rows(), []);
+	entries.push(timed("3", user("more"), T0 + 125_000), timed("4", reply("sure"), T0 + 3_725_000));
+	assert.deepEqual(rows(), ["User turn 2m 04s", "Agent turn 1h 00m"], "a missing agent turn leaves the user turn alone");
+});
+
+test("elapsed durations are compact at every scale", () => {
+	assert.equal(formatElapsed(1_999), "1s");
+	assert.equal(formatElapsed(59_000), "59s");
+	assert.equal(formatElapsed(61_000), "1m 01s");
+	assert.equal(formatElapsed(3_600_000), "1h 00m");
+	assert.equal(formatElapsed(90_000_000), "1d 01h");
+});
+
 test("pane wraps long words, lines and wide graphemes within its width", () => {
 	const entries = [entry("1", user("one long examplewithnobreaksinthemiddlebutplentyofletters 中文🙂\nnew line")),
 		entry("2", assistant([{ type: "text", text: "reply" }]))];
@@ -413,7 +480,7 @@ test("layout keeps Pi's transcript and dock, splits evenly and restores the orig
 		getFocusedComponent() { return editor; },
 	};
 	const pane = new ConversationPane(session([entry("1", user("hello"))]), theme);
-	const layout = new TreePaneLayout(tui, theme, pane);
+	const layout = new TranscriptDigestLayout(tui, theme, pane);
 	assert.equal(layout.enable(), "enabled");
 	assert.equal(layout.isEnabled, true);
 	assert.equal(layout.isEditorFocused, true);
@@ -424,15 +491,20 @@ test("layout keeps Pi's transcript and dock, splits evenly and restores the orig
 	assert.equal(tui.layoutRoot.children[1], dock, "the input dock is unchanged");
 	const right = split.children[2];
 	assert(right instanceof VStack);
-	const title = right.children[0];
-	assert.deepEqual(title.render(40).map(stripTerminalSequences).map((line) => line.trim()), ["Transcript"]);
-	const footer = right.children[2];
-	assert.equal(footer.render(100).map(stripTerminalSequences).map((line) => line.trim()).join(" "),
-		"1 User Messages · 0 Agent Messages · 0 Tool Calls · 0 Thinking Blocks");
-	assert.deepEqual(footer.render(40).map(stripTerminalSequences).map((line) => line.trim()), [
-		"1 User Messages · 0 Agent Messages",
-		"0 Tool Calls · 0 Thinking Blocks",
-	]);
+	const header = right.children[0];
+	const headerRows = (width) => header.render(width).map(stripTerminalSequences);
+	assert.deepEqual(headerRows(91), [
+		" Transcript Digest   1 User Messages · 0 Agent Messages · 0 Tool Calls · 0 Thinking Blocks ",
+	], "counts share the title row, right-aligned");
+	assert.deepEqual(headerRows(60).map((line) => line.trimEnd()), [
+		" Transcript Digest       1 User Messages · 0 Agent Messages",
+		"                           0 Tool Calls · 0 Thinking Blocks",
+	], "counts that do not fit beside the title wrap right-aligned");
+	assert(headerRows(60).every((line) => visibleWidth(line) === 60));
+	assert.deepEqual(headerRows(20).map((line) => line.trim()), [
+		"Transcript Digest", "1 User Messages", "0 Agent Messages", "0 Tool Calls", "0 Thinking Blocks",
+	], "a narrow pane gives the title its own row");
+	assert.equal(right.children.length, 2, "no footer below the conversation");
 	const side = right.children[1];
 	assert(side instanceof ScrollView);
 	assert.equal(side.scrollbar, "always");
@@ -441,7 +513,7 @@ test("layout keeps Pi's transcript and dock, splits evenly and restores the orig
 	tui.terminal.columns = 40;
 	layout.reconcile();
 	assert.equal(stripTerminalSequences(split.render(40)[0])[19], "│", "resize keeps a 50/50 split");
-	assert(stripTerminalSequences(split.render(40)[0]).includes("Transcript"));
+	assert(stripTerminalSequences(split.render(40)[0]).includes("Transcript Digest"));
 	assert.equal(visibleWidth(split.render(MIN_SPLIT_COLUMNS - 1)[0]), MIN_SPLIT_COLUMNS - 1);
 	tui.terminal.columns = 81;
 	layout.reconcile();
@@ -452,13 +524,13 @@ test("layout keeps Pi's transcript and dock, splits evenly and restores the orig
 	assert.equal(side.scrollTop, 42);
 	assert.equal(right.handleMouse({ type: "wheel", wheelDelta: -3 }).handled, true);
 	assert.equal(side.scrollTop, 39);
-	const click = { type: "click", button: "left", x: 2, y: 2, screenX: 43, screenY: 2, width: 40, height: 23 };
+	const click = { type: "click", button: "left", x: 2, y: 5, screenX: 43, screenY: 5, width: 40, height: 23 };
 	assert.equal(right.handleMouse(click), undefined, "unhandled clicks remain available to Pi's selection");
 	const forwarded = [];
 	pane.handleMouse = (event) => { forwarded.push(event); return { handled: true }; };
 	if (typeof VStack.prototype.handleMouse === "function") {
 		assert.equal(right.handleMouse(click)?.target.component, pane, "nested controls receive non-wheel events");
-		assert.equal(forwarded[0].y, 1, "the title row is excluded from child coordinates");
+		assert.equal(forwarded[0].y, click.y - header.render(click.width).length, "header rows are excluded from child coordinates");
 	} else {
 		assert.equal(right.handleMouse(click), undefined, "older renderers leave clicks to Pi");
 	}
@@ -484,7 +556,7 @@ test("fullscreen mouse press and drag scroll the right scrollbar independently",
 		{ component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
 	]));
 	const messages = Array.from({ length: 40 }, (_, index) => entry(String(index + 1), user(`Message ${index + 1}`)));
-	const layout = new TreePaneLayout(tui, theme, new ConversationPane(session(messages), theme));
+	const layout = new TranscriptDigestLayout(tui, theme, new ConversationPane(session(messages), theme));
 	assert.equal(layout.enable(), "enabled");
 	tui.start();
 	try {
@@ -514,7 +586,7 @@ test("incompatible or regular layouts remain untouched", () => {
 		mode: "regular", layoutRoot: undefined, children: [], terminal: { columns: 80, rows: 20 },
 		setLayoutRoot(root) { this.layoutRoot = root; }, requestRender() {},
 	};
-	const layout = new TreePaneLayout(renderer, theme, new ConversationPane(session(), theme));
+	const layout = new TranscriptDigestLayout(renderer, theme, new ConversationPane(session(), theme));
 	assert.equal(layout.enable(), "fullscreen-required");
 	renderer.mode = "fullscreen";
 	renderer.layoutRoot = new Container();
