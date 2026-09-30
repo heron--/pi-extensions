@@ -491,15 +491,20 @@ test("layout keeps Pi's transcript and dock, splits evenly and restores the orig
 	assert.equal(tui.layoutRoot.children[1], dock, "the input dock is unchanged");
 	const right = split.children[2];
 	assert(right instanceof VStack);
-	const title = right.children[0];
-	assert.deepEqual(title.render(40).map(stripTerminalSequences).map((line) => line.trim()), ["Transcript"]);
-	const footer = right.children[2];
-	assert.equal(footer.render(100).map(stripTerminalSequences).map((line) => line.trim()).join(" "),
-		"1 User Messages · 0 Agent Messages · 0 Tool Calls · 0 Thinking Blocks");
-	assert.deepEqual(footer.render(40).map(stripTerminalSequences).map((line) => line.trim()), [
-		"1 User Messages · 0 Agent Messages",
-		"0 Tool Calls · 0 Thinking Blocks",
-	]);
+	const header = right.children[0];
+	const headerRows = (width) => header.render(width).map(stripTerminalSequences);
+	assert.deepEqual(headerRows(91), [
+		" Transcript Digest   1 User Messages · 0 Agent Messages · 0 Tool Calls · 0 Thinking Blocks ",
+	], "counts share the title row, right-aligned");
+	assert.deepEqual(headerRows(60).map((line) => line.trimEnd()), [
+		" Transcript Digest       1 User Messages · 0 Agent Messages",
+		"                           0 Tool Calls · 0 Thinking Blocks",
+	], "counts that do not fit beside the title wrap right-aligned");
+	assert(headerRows(60).every((line) => visibleWidth(line) === 60));
+	assert.deepEqual(headerRows(20).map((line) => line.trim()), [
+		"Transcript Digest", "1 User Messages", "0 Agent Messages", "0 Tool Calls", "0 Thinking Blocks",
+	], "a narrow pane gives the title its own row");
+	assert.equal(right.children.length, 2, "no footer below the conversation");
 	const side = right.children[1];
 	assert(side instanceof ScrollView);
 	assert.equal(side.scrollbar, "always");
@@ -508,7 +513,7 @@ test("layout keeps Pi's transcript and dock, splits evenly and restores the orig
 	tui.terminal.columns = 40;
 	layout.reconcile();
 	assert.equal(stripTerminalSequences(split.render(40)[0])[19], "│", "resize keeps a 50/50 split");
-	assert(stripTerminalSequences(split.render(40)[0]).includes("Transcript"));
+	assert(stripTerminalSequences(split.render(40)[0]).includes("Transcript Digest"));
 	assert.equal(visibleWidth(split.render(MIN_SPLIT_COLUMNS - 1)[0]), MIN_SPLIT_COLUMNS - 1);
 	tui.terminal.columns = 81;
 	layout.reconcile();
@@ -519,13 +524,13 @@ test("layout keeps Pi's transcript and dock, splits evenly and restores the orig
 	assert.equal(side.scrollTop, 42);
 	assert.equal(right.handleMouse({ type: "wheel", wheelDelta: -3 }).handled, true);
 	assert.equal(side.scrollTop, 39);
-	const click = { type: "click", button: "left", x: 2, y: 2, screenX: 43, screenY: 2, width: 40, height: 23 };
+	const click = { type: "click", button: "left", x: 2, y: 5, screenX: 43, screenY: 5, width: 40, height: 23 };
 	assert.equal(right.handleMouse(click), undefined, "unhandled clicks remain available to Pi's selection");
 	const forwarded = [];
 	pane.handleMouse = (event) => { forwarded.push(event); return { handled: true }; };
 	if (typeof VStack.prototype.handleMouse === "function") {
 		assert.equal(right.handleMouse(click)?.target.component, pane, "nested controls receive non-wheel events");
-		assert.equal(forwarded[0].y, 1, "the title row is excluded from child coordinates");
+		assert.equal(forwarded[0].y, click.y - header.render(click.width).length, "header rows are excluded from child coordinates");
 	} else {
 		assert.equal(right.handleMouse(click), undefined, "older renderers leave clicks to Pi");
 	}
