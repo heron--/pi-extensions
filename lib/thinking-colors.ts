@@ -23,7 +23,7 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 /**
@@ -326,11 +326,35 @@ export function loadThinkingAnimatePreference(): boolean {
 
 /** Persist the preference; returns false when the config file is not writable. */
 export function saveThinkingAnimatePreference(value: boolean): boolean {
+	return updateContextFooterConfig((config) => {
+		config.animate = value;
+	});
+}
+
+/** The shared `pi-context-footer` config file (see animateConfigFile). */
+export function contextFooterConfigFile(): string {
+	return animateConfigFile();
+}
+
+/**
+ * Rewrite the shared config file through `mutate`, keeping every key it does
+ * not touch — the file holds the animate preference and pi-context-footer's
+ * other settings (the hostname segment) side by side. A file that exists but
+ * does not parse is a hand edit in progress: it is reported as unwritable
+ * (false) rather than overwritten.
+ */
+export function updateContextFooterConfig(mutate: (config: Record<string, unknown>) => void): boolean {
 	try {
 		const file = animateConfigFile();
+		let config: Record<string, unknown> = {};
+		if (existsSync(file)) {
+			const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+			config = parsed as Record<string, unknown>;
+		}
+		mutate(config);
 		mkdirSync(dirname(file), { recursive: true });
-		const body: StoredAnimateConfig = { animate: value };
-		writeFileSync(file, `${JSON.stringify(body, null, 2)}\n`, "utf8");
+		writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 		return true;
 	} catch {
 		return false;

@@ -41,8 +41,8 @@ label no longer interrupts the rule, it sits beneath it.
 
 The **top run** carries identity and context health: model, thinking level,
 working directory, context gauge and window, and the session name
-(right-anchored, when one is set). The **bottom run** carries the remaining
-session items: git branch, its pull request, session cost, cache-inclusive
+(right-anchored, when one is set). The **bottom run** carries the hostname
+(left-anchored, when enabled) and the remaining session items: git branch, its pull request, session cost, cache-inclusive
 input/output token totals, and background-task state when active.
 
 ### Pull request
@@ -60,9 +60,52 @@ unauthenticated, or slow, the segment is simply absent.
 When a session has a display name (set with `pi --name <name>` or the RPC
 `set_session_name`), it is anchored at the top-right corner of the frame,
 marked with the Nerd Font `nf-md-tag` glyph and painted with the theme's
-`emphasisText` color (claude pink in the frontier-funds theme). A session
+`emphasisText` color (claude pink in the frontier-funds theme; the accent
+color in themes without it). A session
 without a name shows no segment at all — the top run stays left-aligned as
 before.
+
+### Hostname
+
+The machine's hostname can be anchored at the bottom-left corner, the mirror
+of the session name: marked with the Nerd Font `nf-fa-server` glyph and
+painted in the same color, so the two identity labels read as a pair at
+opposite corners. It is off by default and configured under the `hostname` key
+of `<agent dir>/pi-context-footer/config.json` (the same file as the animation
+preference):
+
+```json
+{
+  "hostname": {
+    "show": true,
+    "match": "^(devbox|build)-",
+    "nicknames": {
+      "devbox-17.corp.example": "devbox",
+      "my-laptop.local": "laptop"
+    }
+  }
+}
+```
+
+- **`show`** — the simple switch. `/context-footer host on|off` writes it.
+- **`match`** — a regex tested against the real hostname, case-insensitively.
+  When set, it decides on its own and `show` is ignored: the segment appears
+  exactly when the pattern matches. One dotfiles-managed config can therefore
+  show the name on remote machines and hide it on the laptop.
+- **`nicknames`** — hostname → label to display instead. Keys match
+  case-insensitively, by the full name first and then by its first label, so
+  `devbox-17` also covers `devbox-17.corp.example`. `match` always tests the
+  real hostname, not the nickname.
+
+The file is read at session start; `/context-footer host` re-reads it and
+reports what is shown and why, so edits to the regex or nicknames apply
+without a restart. A malformed entry is reported once as a warning; an invalid
+regex falls back to `show`. Like the session name, the hostname is kept
+when the bottom run is too wide and the run's other items are cut first.
+
+The identity color is the theme's `emphasisText`. Themes that do not define
+it, including pi's default themes, fall back to the accent color rather than
+crashing the render.
 
 Items are separated by short rule segments, so the border reads as continuous
 line broken by labels rather than as a line with a separate status bar attached.
@@ -70,7 +113,8 @@ The top run is left-aligned and the bottom run right-aligned, so the long
 unbroken stretch of each rule falls on the opposite corner from the other's —
 which gives the input more apparent room than packing both runs left. When a
 session name is set it is anchored at the top-right corner, behind the
-left-aligned run. When a run is wider than the terminal, its content is
+left-aligned run; a shown hostname is the mirror, anchored at the bottom-left
+corner ahead of the right-aligned run. When a run is wider than the terminal, its content is
 truncated with `…` and the frame still closes.
 
 ### Cases the frame absorbs
@@ -182,10 +226,14 @@ discovery directory.
 /context-footer off        disable it
 /context-footer pad none   set the padding (see above)
 /context-footer animate [on|off]   report or toggle the traveling gloss
+/context-footer host [on|off]      report the hostname state, or set its switch
 ```
 
-The animation preference is a machine setting rather than a session choice,
-so it persists across sessions in `<agent dir>/pi-context-footer/config.json`.
+The animation preference and the hostname settings are machine settings
+rather than session choices, so they persist across sessions in
+`<agent dir>/pi-context-footer/config.json`. Each command rewrites only its own
+key, and refuses to overwrite a file that does not parse, so a hand edit in
+progress is never lost.
 With animation off the gloss is not removed — it stays pinned at the head of
 the label, the static form of the same effect, and the repaint loop stays
 down.
