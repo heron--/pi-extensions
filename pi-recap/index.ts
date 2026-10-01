@@ -176,8 +176,9 @@ const ROTATION_PATTERNS: RegExp[] = [
 	/deepseek/i,
 	/glm-5[.-]3-flash/i,
 	/gemini-3\.8-flash/i,
-	/gpt-5\.6-luna/i,
+	/gpt-6-luna/i,
 	/claude-haiku/i,
+	/claude-sonnet-5[.-]5/i,
 ];
 
 const RECAP_SYSTEM_PROMPT = [

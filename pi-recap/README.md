@@ -166,16 +166,17 @@ checks are stopped.
 
 Each recap uses the next authenticated model resolved from this order:
 
-1. DeepSeek V4 Flash
+1. DeepSeek V4.1 Flash
 2. GLM 5.3 Flash
 3. Gemini 3.8 Flash
-4. GPT-5.6 Luna
+4. GPT-6 Luna
 5. Claude Haiku 4.5
+6. Claude Sonnet 5.5
 
 Models are matched by id pattern rather than a fixed provider/id pair, so the
 same model can resolve through different configured hosts. Missing or
 unauthenticated entries drop out of the rotation. The rotation position is
-persisted in `config.json` and advances for each attempted generation.
+persisted in `rotation.json` and advances for each attempted generation.
 
 Calls use `ctx.modelRegistry.complete()` with a 2,000-token response budget and
 a 30-second timeout. Provider authentication and headers are resolved by pi.
