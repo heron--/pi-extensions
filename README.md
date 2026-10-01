@@ -362,6 +362,19 @@ Three details worth not re-discovering:
   painted text on the same row must re-establish its own attributes — both
   callers already do this.
 
+## Extension settings files
+
+Extensions that persist settings keep them in
+`<agent dir>/<extension>/config.json` — never under `<agent dir>/extensions/`,
+which resolves into this checkout through the install symlinks. Any of these
+files can itself be a symlink, for example into a dotfiles checkout that shares
+one copy between machines. Every writer updates the link's target rather than
+replacing the link: plain writes follow the symlink, and the writers that
+replace a file atomically (`pi-recap`, `pi-tool-output`) resolve it first and
+rename into the target's directory. State that changes on its own, such as
+`pi-recap`'s model rotation position, is kept out of `config.json` so a shared
+copy changes only when a setting does.
+
 ## Adding an extension
 
 1. `mkdir pi-my-thing` with an `index.ts` and a `package.json` carrying a `pi`

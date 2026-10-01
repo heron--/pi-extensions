@@ -1,5 +1,5 @@
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export const OUTPUT_MODES = ["hidden", "summary", "preview"] as const;
@@ -178,13 +178,27 @@ export function loadToolOutputConfig(path = getToolOutputConfigPath()): ConfigLo
 	}
 }
 
+/**
+ * The file a save to `path` should replace: the symlink's target when `path`
+ * is a symlink, so the atomic rename updates the linked file rather than
+ * replacing the link with a regular file.
+ */
+function writeTarget(path: string): string {
+	try {
+		return realpathSync(path);
+	} catch {
+		return path;
+	}
+}
+
 export function saveToolOutputConfig(config: ToolOutputConfig, path = getToolOutputConfigPath()): ConfigSaveResult {
 	const normalized = normalizeToolOutputConfig(config);
-	const temporaryPath = `${path}.tmp-${process.pid}`;
+	const target = writeTarget(path);
+	const temporaryPath = `${target}.tmp-${process.pid}`;
 	try {
 		mkdirSync(dirname(path), { recursive: true });
 		writeFileSync(temporaryPath, `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
-		renameSync(temporaryPath, path);
+		renameSync(temporaryPath, target);
 		return { success: true };
 	} catch (error) {
 		try {

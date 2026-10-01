@@ -90,6 +90,15 @@ function configFile(): string {
 	return join(agentDirectory(), "pi-recap", "config.json");
 }
 
+/**
+ * The model rotation position, kept apart from config.json: it advances on
+ * every recap, while config.json holds settings that can be shared between
+ * machines, including through a symlink into a dotfiles checkout.
+ */
+function rotationFile(): string {
+	return join(agentDirectory(), "pi-recap", "rotation.json");
+}
+
 function recapDataDirectory(): string {
 	return join(agentDirectory(), "pi-recap");
 }
@@ -99,7 +108,6 @@ function applyStoredConfig(stored: StoredRecapConfig, reset: boolean): void {
 		config.markers.recap = DEFAULT_MARKER_RECAP;
 		config.markers.next = DEFAULT_MARKER_NEXT;
 		config.style = "frame";
-		config.rotationIndex = 0;
 	}
 
 	const recap = stored.markers?.recap;
@@ -107,16 +115,25 @@ function applyStoredConfig(stored: StoredRecapConfig, reset: boolean): void {
 	if (typeof recap === "string" && recap) config.markers.recap = recap;
 	if (typeof next === "string" && next) config.markers.next = next;
 	if (typeof stored.style === "string" && STYLES.has(stored.style as Style)) config.style = stored.style as Style;
-	if (typeof stored.rotationIndex === "number" && Number.isInteger(stored.rotationIndex) && stored.rotationIndex >= 0) {
-		config.rotationIndex = stored.rotationIndex;
-	}
 	const settings = normalizeRecapSettings(stored);
 	config.intervalMinutes = settings.intervalMinutes;
 	config.minimumCompletedInteractions = settings.minimumCompletedInteractions;
 }
 
+function storedRotationIndex(stored: StoredRecapConfig): number | undefined {
+	const index = stored.rotationIndex;
+	return typeof index === "number" && Number.isInteger(index) && index >= 0 ? index : undefined;
+}
+
+/**
+ * Settings come from config.json; the rotation position from rotation.json,
+ * falling back to a `rotationIndex` that an older config.json still holds.
+ */
 function loadConfig(): void {
-	applyStoredConfig(readRecapConfig(configFile()), true);
+	const stored = readRecapConfig(configFile());
+	applyStoredConfig(stored, true);
+	config.rotationIndex =
+		storedRotationIndex(readRecapConfig(rotationFile())) ?? storedRotationIndex(stored) ?? 0;
 }
 
 function saveConfig(patch: RecapConfigPatch): boolean {
@@ -364,15 +381,11 @@ function freshnessTime(manifest: RecapManifest): number {
 function takeRotationIndex(length: number): number {
 	let selected = config.rotationIndex % length;
 	try {
-		const stored = updateRecapConfig(configFile(), (current) => {
-			const currentIndex =
-				typeof current.rotationIndex === "number" && Number.isInteger(current.rotationIndex) && current.rotationIndex >= 0
-					? current.rotationIndex
-					: config.rotationIndex;
-			selected = currentIndex % length;
+		const stored = updateRecapConfig(rotationFile(), (current) => {
+			selected = (storedRotationIndex(current) ?? config.rotationIndex) % length;
 			return { rotationIndex: (selected + 1) % length };
 		});
-		applyStoredConfig(stored, false);
+		config.rotationIndex = storedRotationIndex(stored) ?? (selected + 1) % length;
 	} catch {
 		config.rotationIndex = (selected + 1) % length;
 	}

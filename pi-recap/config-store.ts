@@ -5,6 +5,7 @@ import {
 	mkdirSync,
 	openSync,
 	readFileSync,
+	realpathSync,
 	renameSync,
 	statSync,
 	unlinkSync,
@@ -47,12 +48,26 @@ export function readRecapConfig(path: string): StoredRecapConfig {
 	}
 }
 
+/**
+ * The file a write to `path` should replace: the symlink's target when `path`
+ * is a symlink, so an atomic rename updates the linked file rather than
+ * replacing the link with a regular file.
+ */
+function writeTarget(path: string): string {
+	try {
+		return realpathSync(path);
+	} catch {
+		return path;
+	}
+}
+
 function writeJsonAtomic(path: string, value: unknown): void {
 	mkdirSync(dirname(path), { recursive: true });
-	const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+	const target = writeTarget(path);
+	const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
 	try {
 		writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-		renameSync(temporary, path);
+		renameSync(temporary, target);
 	} finally {
 		if (existsSync(temporary)) unlinkSync(temporary);
 	}

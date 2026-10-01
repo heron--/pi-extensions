@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -100,6 +100,23 @@ test("updateRecapConfig atomically merges changed fields with the latest config"
 		assert.equal(updated.minimumCompletedInteractions, 8);
 		assert.equal(updated.rotationIndex, 3);
 		assert.equal(updated.futureSetting, true);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("updateRecapConfig writes through a symlinked config file", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-recap-config-link-test-"));
+	try {
+		const shared = join(root, "dotfiles", "config.json");
+		const link = join(root, "agent", "config.json");
+		mkdirSync(join(root, "dotfiles"));
+		mkdirSync(join(root, "agent"));
+		writeFileSync(shared, `${JSON.stringify({ style: "frame" })}\n`);
+		symlinkSync(shared, link);
+		updateRecapConfig(link, { style: "clean" });
+		assert.equal(lstatSync(link).isSymbolicLink(), true);
+		assert.equal(readRecapConfig(shared).style, "clean");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

@@ -346,7 +346,8 @@ function renderGauge(theme: Theme, percent: number | null): string {
  *
  *   "hostname": {
  *     "show": true,
- *     "match": "^(devbox|build)-",
+ *     "match": "^devbox-(.+)$",
+ *     "nickname": "box $1",
  *     "nicknames": { "devbox-17.corp.example": "devbox" }
  *   }
  *
@@ -354,10 +355,15 @@ function renderGauge(theme: Theme, percent: number | null): string {
  * pattern matches the machine's real hostname, whatever `show` says. That is
  * what lets one dotfiles-managed config show the name on remote boxes and hide
  * it on the laptop. Without it, `show` is the switch (default off).
+ *
+ * `nickname` is a label template expanded from `match`'s captures, which
+ * covers machines whose names are not known in advance. An exact `nicknames`
+ * entry wins over it.
  */
 interface HostnameSettings {
 	show: boolean;
 	match: RegExp | null;
+	nickname: string | null;
 	nicknames: Map<string, string>;
 }
 
@@ -367,7 +373,7 @@ interface HostnameConfigLoad {
 	problem: string | null;
 }
 
-const DEFAULT_HOSTNAME_SETTINGS: HostnameSettings = { show: false, match: null, nicknames: new Map() };
+const DEFAULT_HOSTNAME_SETTINGS: HostnameSettings = { show: false, match: null, nickname: null, nicknames: new Map() };
 
 function loadHostnameSettings(): HostnameConfigLoad {
 	let raw: string;
@@ -389,9 +395,14 @@ function loadHostnameSettings(): HostnameConfigLoad {
 		return { settings: DEFAULT_HOSTNAME_SETTINGS, problem: "\"hostname\" must be an object" };
 	}
 
-	const { show, match, nicknames } = stored as { show?: unknown; match?: unknown; nicknames?: unknown };
+	const { show, match, nickname, nicknames } = stored as {
+		show?: unknown;
+		match?: unknown;
+		nickname?: unknown;
+		nicknames?: unknown;
+	};
 	const problems: string[] = [];
-	const settings: HostnameSettings = { show: show === true, match: null, nicknames: new Map() };
+	const settings: HostnameSettings = { show: show === true, match: null, nickname: null, nicknames: new Map() };
 	if (show !== undefined && typeof show !== "boolean") problems.push("\"hostname.show\" must be true or false");
 
 	if (typeof match === "string" && match.length > 0) {
@@ -403,6 +414,13 @@ function loadHostnameSettings(): HostnameConfigLoad {
 		}
 	} else if (match !== undefined && match !== null && match !== "") {
 		problems.push("\"hostname.match\" must be a string");
+	}
+
+	if (typeof nickname === "string" && nickname.trim()) {
+		settings.nickname = nickname.trim();
+		if (!settings.match) problems.push("\"hostname.nickname\" needs \"hostname.match\" to expand");
+	} else if (nickname !== undefined && nickname !== null) {
+		problems.push("\"hostname.nickname\" must be a non-empty string");
 	}
 
 	if (nicknames && typeof nicknames === "object" && !Array.isArray(nicknames)) {
@@ -431,15 +449,42 @@ function hostnameShown(settings: HostnameSettings, host: string): boolean {
 }
 
 /**
- * The label for `host`: its nickname when the map has one, looked up by the
- * full name and then by its first label (`devbox-17` for
- * `devbox-17.corp.example`), case-insensitively; otherwise the hostname
- * itself.
+ * Expand a `nickname` template against a match of `hostname.match`, with
+ * String.prototype.replace's reference syntax: `$1`…`$99` for numbered
+ * groups, `$<name>` for named groups, `$&` for the whole match, and `$$` for a
+ * literal dollar sign. A reference to a group that did not participate
+ * expands to nothing; anything else after `$` is kept as written.
+ */
+function expandNickname(template: string, match: RegExpMatchArray): string {
+	return template.replace(/\$(\$|&|<([^>]*)>|(\d{1,2}))/g, (whole, token: string, name?: string, index?: string) => {
+		if (token === "$") return "$";
+		if (token === "&") return match[0];
+		if (name !== undefined) return match.groups && name in match.groups ? (match.groups[name] ?? "") : whole;
+		const group = Number(index);
+		return group > 0 && group < match.length ? (match[group] ?? "") : whole;
+	});
+}
+
+/**
+ * The label for `host`, first of:
+ *
+ * - its entry in `nicknames`, looked up by the full name and then by its
+ *   first label (`devbox-17` for `devbox-17.corp.example`), case-insensitively;
+ * - the `nickname` template expanded from `match`'s captures, when the pattern
+ *   matches and the expansion is not blank;
+ * - the hostname itself.
  */
 function hostnameLabel(settings: HostnameSettings, host: string): string {
 	const full = host.toLowerCase();
 	const short = full.split(".")[0] ?? full;
-	return settings.nicknames.get(full) ?? settings.nicknames.get(short) ?? host;
+	const exact = settings.nicknames.get(full) ?? settings.nicknames.get(short);
+	if (exact) return exact;
+	if (settings.nickname && settings.match) {
+		const match = host.match(settings.match);
+		const label = match ? expandNickname(settings.nickname, match).trim() : "";
+		if (label) return label;
+	}
+	return host;
 }
 
 /**
@@ -455,10 +500,10 @@ function hostnameSegment(theme: Theme): string | null {
 /**
  * The identity labels' paint — the session name and the hostname, at opposite
  * corners of the frame. `emphasisText` is a theme color pi's ThemeColor union
- * does not know about; it resolves to claude pink in the frontier-funds
- * theme. Themes that do not define it (pi's own defaults among them) make
- * `theme.fg` throw "Unknown theme color", which from a render path tears the
- * whole TUI down, so those fall back to the accent color.
+ * does not know about, defined by the frontier-funds theme. Themes that do
+ * not define it (pi's own defaults among them) make `theme.fg` throw
+ * "Unknown theme color", which from a render path tears the whole TUI down,
+ * so those fall back to the accent color.
  */
 function paintIdentity(theme: Theme, text: string): string {
 	try {

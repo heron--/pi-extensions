@@ -60,7 +60,7 @@ unauthenticated, or slow, the segment is simply absent.
 When a session has a display name (set with `pi --name <name>` or the RPC
 `set_session_name`), it is anchored at the top-right corner of the frame,
 marked with the Nerd Font `nf-md-tag` glyph and painted with the theme's
-`emphasisText` color (claude pink in the frontier-funds theme; the accent
+`emphasisText` color (defined by the frontier-funds theme; the accent
 color in themes without it). A session
 without a name shows no segment at all — the top run stays left-aligned as
 before.
@@ -78,7 +78,8 @@ preference):
 {
   "hostname": {
     "show": true,
-    "match": "^(devbox|build)-",
+    "match": "^devbox-(.+)$",
+    "nickname": "box $1",
     "nicknames": {
       "devbox-17.corp.example": "devbox",
       "my-laptop.local": "laptop"
@@ -92,10 +93,16 @@ preference):
   When set, it decides on its own and `show` is ignored: the segment appears
   exactly when the pattern matches. One dotfiles-managed config can therefore
   show the name on remote machines and hide it on the laptop.
+- **`nickname`** — a label template expanded from `match`'s captures, for
+  machines whose names are not known in advance. It uses the reference syntax
+  of JavaScript's `String.prototype.replace`: `$1` for a numbered group,
+  `$<name>` for a named one, `$&` for the whole match, `$$` for a dollar sign.
+  With the example above, `devbox-42` is shown as `box 42`. A template that
+  expands to nothing shows the real hostname.
 - **`nicknames`** — hostname → label to display instead. Keys match
   case-insensitively, by the full name first and then by its first label, so
-  `devbox-17` also covers `devbox-17.corp.example`. `match` always tests the
-  real hostname, not the nickname.
+  `devbox-17` also covers `devbox-17.corp.example`. An entry here wins over
+  `nickname`. `match` always tests the real hostname, not the nickname.
 
 The file is read at session start; `/context-footer host` re-reads it and
 reports what is shown and why, so edits to the regex or nicknames apply
