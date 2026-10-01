@@ -67,7 +67,7 @@ const ENTRY_TYPE = "recap";
 const ENTRY_ERROR = "recap-error";
 /**
  * A later failure in a streak. It has no renderer, so it draws nothing itself;
- * the streak's `recap-error` box reads it and grows by one row.
+ * the streak's `recap-error` box reads the latest one for its streak.
  */
 const ENTRY_ERROR_UPDATE = "recap-error-update";
 const LABEL_FAILED = "Recap failed";
@@ -199,14 +199,14 @@ const RECAP_SYSTEM_PROMPT = [
 	"sign-off, bullet points, markdown, or unsupported details.",
 ].join("\n");
 
+/**
+ * Data for both failure entry types. `failures` is the manifest's whole streak
+ * at the time of the entry, so the latest entry for a streak is complete even
+ * when an earlier failure never reached the transcript.
+ */
 interface RecapErrorEntry {
 	streakId: string;
 	failures: RecapError[];
-}
-
-interface RecapErrorUpdateEntry {
-	streakId: string;
-	failure: RecapError;
 }
 
 interface RecapResult {
@@ -543,13 +543,9 @@ export default function recapExtension(pi: ExtensionAPI): void {
 		failureStreaks.clear();
 		for (const entry of ctx.sessionManager.getEntries()) {
 			if (entry.type !== "custom") continue;
-			if (entry.customType === ENTRY_ERROR) {
-				const data = entry.data as RecapErrorEntry | undefined;
-				if (data?.streakId && Array.isArray(data.failures)) failureStreaks.set(data.streakId, [...data.failures]);
-			} else if (entry.customType === ENTRY_ERROR_UPDATE) {
-				const data = entry.data as RecapErrorUpdateEntry | undefined;
-				if (data?.failure) failureStreaks.get(data.streakId)?.push(data.failure);
-			}
+			if (entry.customType !== ENTRY_ERROR && entry.customType !== ENTRY_ERROR_UPDATE) continue;
+			const data = entry.data as RecapErrorEntry | undefined;
+			if (data?.streakId && Array.isArray(data.failures)) failureStreaks.set(data.streakId, [...data.failures]);
 		}
 	}
 
@@ -563,18 +559,16 @@ export default function recapExtension(pi: ExtensionAPI): void {
 
 	/**
 	 * A streak's first failure appends its box. Later failures append a
-	 * renderer-less entry, which persists the failure and makes pi redraw the
+	 * renderer-less entry, which persists the streak and makes pi redraw the
 	 * existing box from `failureStreaks`.
 	 */
 	function showFailure(ctx: ExtensionContext, streak: { id: string; failures: RecapError[] }): void {
-		const failure = streak.failures[streak.failures.length - 1]!;
 		const shown = failureStreaks.has(streak.id) && streakShownOnBranch(ctx, streak.id);
 		failureStreaks.set(streak.id, [...streak.failures]);
-		if (shown) {
-			pi.appendEntry<RecapErrorUpdateEntry>(ENTRY_ERROR_UPDATE, { streakId: streak.id, failure });
-		} else {
-			pi.appendEntry<RecapErrorEntry>(ENTRY_ERROR, { streakId: streak.id, failures: streak.failures });
-		}
+		pi.appendEntry<RecapErrorEntry>(shown ? ENTRY_ERROR_UPDATE : ENTRY_ERROR, {
+			streakId: streak.id,
+			failures: streak.failures,
+		});
 	}
 
 	function intervalMs(): number {

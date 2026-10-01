@@ -144,8 +144,9 @@ model, and reason:
 ```
 
 Later failures are stored as `recap-error-update` session entries, which have no
-renderer of their own; the box reads them, so it stays complete after the
-session is reloaded.
+renderer of their own. Each one holds the manifest's whole streak, and the box
+shows the latest for its streak, so it stays complete after the session is
+reloaded even if an earlier failure never reached the transcript.
 
 After three consecutive failures, automatic checks stop and the box says so.
 `/recap now` still runs. If it fails while automatic checks are stopped, it
