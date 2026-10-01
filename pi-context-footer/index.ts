@@ -9,6 +9,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { hostname as osHostname } from "node:os";
 import { basename } from "node:path";
 import type { TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -29,10 +31,12 @@ import {
 /** The plain footer's segment separator; the framed runs use lib/box.ts. */
 const RULE_RUN = 2;
 import {
+	contextFooterConfigFile,
 	loadThinkingAnimatePreference,
 	paintThinkingLevel,
 	saveThinkingAnimatePreference,
 	THINKING_SHEEN_STEP_MS,
+	updateContextFooterConfig,
 } from "../lib/thinking-colors.ts";
 
 const ICON_MODEL = String.fromCodePoint(0xf068c);
@@ -42,6 +46,7 @@ const ICON_GAUGE = "\uf1c0";
 const ICON_LOCK = String.fromCodePoint(0xf033e); // nf-md-lock
 const ICON_LOCK_OPEN = String.fromCodePoint(0xf033f); // nf-md-lock_open
 const ICON_SESSION = String.fromCodePoint(0xf04f9); // nf-md-tag
+const ICON_HOST = "\uf233"; // nf-fa-server
 
 const GAUGE_WIDTH = 8;
 const GAUGE_FILLED = "█";
@@ -335,14 +340,139 @@ function renderGauge(theme: Theme, percent: number | null): string {
 		+ theme.fg("dim", GAUGE_EMPTY.repeat(GAUGE_WIDTH - filledCount));
 }
 
+/**
+ * The hostname segment's settings, from the `hostname` key of the shared
+ * config file (`<agent dir>/pi-context-footer/config.json`):
+ *
+ *   "hostname": {
+ *     "show": true,
+ *     "match": "^(devbox|build)-",
+ *     "nicknames": { "devbox-17.corp.example": "devbox" }
+ *   }
+ *
+ * `match`, when set, decides on its own: the segment shows exactly when the
+ * pattern matches the machine's real hostname, whatever `show` says. That is
+ * what lets one dotfiles-managed config show the name on remote boxes and hide
+ * it on the laptop. Without it, `show` is the switch (default off).
+ */
+interface HostnameSettings {
+	show: boolean;
+	match: RegExp | null;
+	nicknames: Map<string, string>;
+}
+
+interface HostnameConfigLoad {
+	settings: HostnameSettings;
+	/** What was wrong with the file, for a one-time warning; null when fine. */
+	problem: string | null;
+}
+
+const DEFAULT_HOSTNAME_SETTINGS: HostnameSettings = { show: false, match: null, nicknames: new Map() };
+
+function loadHostnameSettings(): HostnameConfigLoad {
+	let raw: string;
+	try {
+		raw = readFileSync(contextFooterConfigFile(), "utf8");
+	} catch {
+		// No config file: the defaults are not worth an error.
+		return { settings: DEFAULT_HOSTNAME_SETTINGS, problem: null };
+	}
+
+	let stored: unknown;
+	try {
+		stored = (JSON.parse(raw) as { hostname?: unknown } | null)?.hostname;
+	} catch {
+		return { settings: DEFAULT_HOSTNAME_SETTINGS, problem: "config.json is not valid JSON" };
+	}
+	if (stored === undefined) return { settings: DEFAULT_HOSTNAME_SETTINGS, problem: null };
+	if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
+		return { settings: DEFAULT_HOSTNAME_SETTINGS, problem: "\"hostname\" must be an object" };
+	}
+
+	const { show, match, nicknames } = stored as { show?: unknown; match?: unknown; nicknames?: unknown };
+	const problems: string[] = [];
+	const settings: HostnameSettings = { show: show === true, match: null, nicknames: new Map() };
+	if (show !== undefined && typeof show !== "boolean") problems.push("\"hostname.show\" must be true or false");
+
+	if (typeof match === "string" && match.length > 0) {
+		try {
+			// Hostnames are case-insensitive, so the pattern is too.
+			settings.match = new RegExp(match, "i");
+		} catch {
+			problems.push(`"hostname.match" is not a valid regex: ${match}`);
+		}
+	} else if (match !== undefined && match !== null && match !== "") {
+		problems.push("\"hostname.match\" must be a string");
+	}
+
+	if (nicknames && typeof nicknames === "object" && !Array.isArray(nicknames)) {
+		for (const [host, nickname] of Object.entries(nicknames)) {
+			if (typeof nickname === "string" && nickname.trim()) {
+				settings.nicknames.set(host.toLowerCase(), nickname.trim());
+			} else {
+				problems.push(`"hostname.nicknames.${host}" must be a non-empty string`);
+			}
+		}
+	} else if (nicknames !== undefined) {
+		problems.push("\"hostname.nicknames\" must be an object");
+	}
+
+	return { settings, problem: problems.length > 0 ? problems.join("; ") : null };
+}
+
+let hostnameSettings: HostnameSettings = DEFAULT_HOSTNAME_SETTINGS;
+/** The machine's hostname, read once per session start — it does not move under a running session. */
+let machineHostname = "";
+
+/** Whether the segment shows: the regex decides when there is one, else the switch. */
+function hostnameShown(settings: HostnameSettings, host: string): boolean {
+	if (!host) return false;
+	return settings.match ? settings.match.test(host) : settings.show;
+}
+
+/**
+ * The label for `host`: its nickname when the map has one, looked up by the
+ * full name and then by its first label (`devbox-17` for
+ * `devbox-17.corp.example`), case-insensitively; otherwise the hostname
+ * itself.
+ */
+function hostnameLabel(settings: HostnameSettings, host: string): string {
+	const full = host.toLowerCase();
+	const short = full.split(".")[0] ?? full;
+	return settings.nicknames.get(full) ?? settings.nicknames.get(short) ?? host;
+}
+
+/**
+ * The hostname as a left-anchored bottom segment, or null when hidden. Painted
+ * like the session name, so the two identity labels read as a pair at
+ * opposite corners of the frame.
+ */
+function hostnameSegment(theme: Theme): string | null {
+	if (!hostnameShown(hostnameSettings, machineHostname)) return null;
+	return paintIdentity(theme, `${ICON_HOST} ${hostnameLabel(hostnameSettings, machineHostname)}`);
+}
+
+/**
+ * The identity labels' paint — the session name and the hostname, at opposite
+ * corners of the frame. `emphasisText` is a theme color pi's ThemeColor union
+ * does not know about; it resolves to claude pink in the frontier-funds
+ * theme. Themes that do not define it (pi's own defaults among them) make
+ * `theme.fg` throw "Unknown theme color", which from a render path tears the
+ * whole TUI down, so those fall back to the accent color.
+ */
+function paintIdentity(theme: Theme, text: string): string {
+	try {
+		return theme.fg("emphasisText" as ThemeColor, text);
+	} catch {
+		return theme.fg("accent", text);
+	}
+}
+
 /** The session name as a right-anchored segment, or null when none is set. */
 function sessionNameSegment(ctx: ExtensionContext, theme: Theme): string | null {
 	const name = ctx.sessionManager.getSessionName();
 	if (!name) return null;
-	// `emphasisText` is a theme color pi's ThemeColor union does not know about
-	// yet (the schema is lenient at runtime, so the cast is safe); it resolves to
-	// claude pink in the frontier-funds theme.
-	return theme.fg("emphasisText" as ThemeColor, `${ICON_SESSION} ${name}`);
+	return paintIdentity(theme, `${ICON_SESSION} ${name}`);
 }
 
 /** The upper border carries identity and current context health. */
@@ -462,6 +592,7 @@ function frameEditor(
 	topSegments: string[],
 	bottomSegments: string[],
 	topTrail: string[],
+	bottomLead: string[],
 ): string[] {
 	const innerWidth = width - FRAME_WIDTH - GUTTER_X * 2;
 	const lines = baseRender(innerWidth);
@@ -506,7 +637,7 @@ function frameEditor(
 		frameRuleRow(width, paint, CORNER_BOTTOM_LEFT, CORNER_BOTTOM_RIGHT, "right", [
 			...(trailing.length === 0 && lowerNotice ? [lowerNotice] : []),
 			...bottomSegments,
-		]),
+		], [], bottomLead),
 	);
 	// The prompt box sits on the same dark ground as the recap and
 	// user-message boxes (userMessageBg), so all three read as one family.
@@ -539,7 +670,9 @@ function renderPlainFooter(ctx: ExtensionContext, theme: Theme, width: number): 
 	// No repaint ticker drives the plain rows, so the gloss never animates here.
 	const sessionName = sessionNameSegment(ctx, theme);
 	const top = sessionName ? [...buildTopSegments(ctx, theme, false), sessionName] : buildTopSegments(ctx, theme, false);
-	const rows = [top, buildBottomSegments(ctx, theme, footerData)];
+	const host = hostnameSegment(theme);
+	const bottom = buildBottomSegments(ctx, theme, footerData);
+	const rows = [top, host ? [host, ...bottom] : bottom];
 
 	return rows.map((segments) => {
 		const row = segments.filter((segment) => segment.trim().length > 0).join(separator);
@@ -648,6 +781,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 					buildTopSegments(ctx, theme, animated),
 					buildBottomSegments(ctx, theme, footerData),
 					[sessionNameSegment(ctx, theme)].filter((s): s is string => s !== null),
+					[hostnameSegment(theme)].filter((s): s is string => s !== null),
 				);
 			};
 
@@ -655,9 +789,28 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 		});
 	}
 
+	/** Re-read the hostname and its settings, warning once about a bad config. */
+	function reloadHostname(ctx: ExtensionContext): void {
+		machineHostname = osHostname();
+		const { settings, problem } = loadHostnameSettings();
+		hostnameSettings = settings;
+		if (problem) ctx.ui.notify(`context-footer hostname: ${problem}`, "warning");
+	}
+
+	function describeHostname(): string {
+		const label = hostnameLabel(hostnameSettings, machineHostname);
+		const named = label === machineHostname ? machineHostname : `${machineHostname} as "${label}"`;
+		const state = hostnameShown(hostnameSettings, machineHostname) ? "shown" : "hidden";
+		const reason = hostnameSettings.match
+			? `match /${hostnameSettings.match.source}/ ${hostnameSettings.match.test(machineHostname) ? "matches" : "does not match"}`
+			: `switch is ${hostnameSettings.show ? "on" : "off"}`;
+		return `Hostname ${named} is ${state} (${reason})`;
+	}
+
 	pi.on("session_start", async (_event, ctx) => {
 		refreshPricingOverridesForSession(ctx);
 		animate = loadThinkingAnimatePreference();
+		reloadHostname(ctx);
 		if (ctx.mode === "tui") install(ctx);
 	});
 
@@ -670,7 +823,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("context-footer", {
-		description: "Toggle the context-footer border, set its padding, or toggle the thinking shimmer",
+		description: "Toggle the context-footer border, set its padding, toggle the thinking shimmer, or show the hostname",
 		handler: async (args, ctx) => {
 			const [verb, value, ...extra] = (args ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
 
@@ -685,6 +838,39 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 				}
 				padding = value as Padding;
 				ctx.ui.notify(`Context footer padding set to ${padding}`, "info");
+				return;
+			}
+
+			if (verb === "host" || verb === "hostname") {
+				// Re-read first, so hand edits to the regex or nicknames apply
+				// without a restart and the report reflects the file.
+				reloadHostname(ctx);
+				if (value === undefined || value === "reload") {
+					ctx.ui.notify(describeHostname(), "info");
+					return;
+				}
+				if (extra.length > 0 || (value !== "on" && value !== "off")) {
+					ctx.ui.notify("Usage: /context-footer host [on|off|reload]", "warning");
+					return;
+				}
+				const show = value === "on";
+				const saved = updateContextFooterConfig((config) => {
+					const current = config.hostname;
+					const hostname = current && typeof current === "object" && !Array.isArray(current)
+						? (current as Record<string, unknown>)
+						: {};
+					config.hostname = { ...hostname, show };
+				});
+				hostnameSettings = { ...hostnameSettings, show };
+				const note = hostnameSettings.match
+					? ` — but "hostname.match" is set and decides on its own`
+					: "";
+				ctx.ui.notify(
+					saved
+						? `Context footer hostname switch ${show ? "on" : "off"}${note}`
+						: `Context footer hostname switch ${show ? "on" : "off"} for this session only (config file not writable)${note}`,
+					"info",
+				);
 				return;
 			}
 
@@ -714,7 +900,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 			}
 
 			if (value !== undefined || (verb !== undefined && verb !== "on" && verb !== "off")) {
-				ctx.ui.notify("Usage: /context-footer [on|off|pad full|pad none|animate on|animate off]", "warning");
+				ctx.ui.notify("Usage: /context-footer [on|off|pad full|pad none|animate on|animate off|host on|host off]", "warning");
 				return;
 			}
 

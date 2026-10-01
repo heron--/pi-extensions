@@ -12,7 +12,7 @@
  *   - **Prompt-frame rows** (`frameRuleRow`): status items are notches in a
  *     continuous rule, each item flanked by a fixed run of rule cells
  *     (`╭── item ── item ────╮`). The footer's runs carry segments on the
- *     rule itself, with an optional right-anchored trail.
+ *     rule itself, with an optional corner-anchored trail or lead.
  *   - **Transcript-box rows** (`labelRuleRow`): one label sits flush after a
  *     corner (`╭ label ────╮`, `╰──── label╯`). The user-message and recap
  *     boxes.
@@ -99,8 +99,14 @@ const FRAME_WIDTH = 2;
 /**
  * One horizontal run of the prompt-frame dialect: a continuous rule broken
  * only by the segments handed in, each flanked by a fixed rule run. The result
- * is always exactly `width` cells wide. `rightTrail` (the session name) is
- * anchored just before the right corner and implies a left-aligned body.
+ * is always exactly `width` cells wide.
+ *
+ * An anchored group sits against one corner while the body takes the other
+ * end: `rightTrail` (the session name) is anchored just before the right
+ * corner and implies a left-aligned body; `leftLead` (the hostname) is
+ * anchored just after the left corner and implies a right-aligned body. A row
+ * carries at most one of them — when both are given, the trail wins. The
+ * anchored group is protected: the body is truncated first.
  */
 export function frameRuleRow(
 	width: number,
@@ -110,44 +116,53 @@ export function frameRuleRow(
 	align: Align,
 	segments: string[],
 	rightTrail: string[] = [],
+	leftLead: string[] = [],
 ): string {
 	const present = segments.filter((segment) => segment.trim().length > 0);
 	const trailPresent = rightTrail.filter((segment) => segment.trim().length > 0);
-	if (present.length === 0 && trailPresent.length === 0) {
+	const leadPresent = leftLead.filter((segment) => segment.trim().length > 0);
+	const anchorSide: Align | null = trailPresent.length > 0 ? "right" : leadPresent.length > 0 ? "left" : null;
+	const anchorPresent = anchorSide === "right" ? trailPresent : leadPresent;
+	if (present.length === 0 && anchorSide === null) {
 		return paint(leftCorner + RULE.repeat(width - FRAME_WIDTH) + rightCorner);
 	}
 
+	const separator = paint(` ${RULE.repeat(RULE_RUN)} `);
 	const budget = width - LEAD_WIDTH - TRAIL_WIDTH;
-	let body = present.join(paint(` ${RULE.repeat(RULE_RUN)} `));
+	let body = present.join(separator);
 	if (visibleWidth(body) > budget) {
 		body = truncateToWidth(body, budget, "…") + LINK_CLOSE;
 	}
 
-	if (trailPresent.length > 0) {
-		let trailBody = trailPresent.join(paint(` ${RULE.repeat(RULE_RUN)} `));
+	if (anchorSide !== null) {
+		let anchor = anchorPresent.join(separator);
 		// Fixed overhead between the corner rules: corner + rule + space on each
-		// side of the fill run (10 cells) once a trail is present.
+		// side of the fill run (10 cells) once an anchor is present.
 		const contentBudget = width - LEAD_WIDTH - TRAIL_WIDTH - (RULE_RUN + 2);
-		let bodyBudget = contentBudget - visibleWidth(trailBody);
+		const bodyBudget = contentBudget - visibleWidth(anchor);
 		if (bodyBudget < 0) {
-			// The trail alone is too wide; truncate it and give the body nothing.
+			// The anchor alone is too wide; truncate it and give the body nothing.
 			body = "";
-			trailBody = truncateToWidth(trailBody, contentBudget, "…") + LINK_CLOSE;
+			anchor = truncateToWidth(anchor, contentBudget, "…") + LINK_CLOSE;
 		} else if (visibleWidth(body) > bodyBudget) {
 			body = truncateToWidth(body, bodyBudget, "…") + LINK_CLOSE;
 		}
 		if (visibleWidth(body) === 0) {
-			// No left-aligned body survives: render the trail as a plain right-aligned
-			// run so the row is a single broken rule rather than a notch beside an
-			// empty status slot.
-			const fill = width - LEAD_WIDTH - visibleWidth(trailBody) - (TRAIL_WIDTH - RULE_RUN);
-			return `${paint(leftCorner + RULE.repeat(fill))} ${trailBody}${paint(` ${RULE.repeat(RULE_RUN)}${rightCorner}`)}`;
+			// No body survives: render the anchor as a plain run aligned to its own
+			// corner, so the row is a single broken rule rather than a notch beside
+			// an empty status slot.
+			return runRow(width, paint, leftCorner, rightCorner, anchorSide, anchor);
 		}
-		const fill = width - LEAD_WIDTH - visibleWidth(body) - visibleWidth(trailBody) - (TRAIL_WIDTH + RULE_RUN);
-		return `${paint(leftCorner + RULE.repeat(RULE_RUN))} ${body}${paint(` ${RULE.repeat(fill)}`)} ${trailBody}${paint(` ${RULE.repeat(RULE_RUN)}${rightCorner}`)}`;
+		const [first, second] = anchorSide === "right" ? [body, anchor] : [anchor, body];
+		const fill = width - LEAD_WIDTH - visibleWidth(first) - visibleWidth(second) - (TRAIL_WIDTH + RULE_RUN);
+		return `${paint(leftCorner + RULE.repeat(RULE_RUN))} ${first}${paint(` ${RULE.repeat(fill)}`)} ${second}${paint(` ${RULE.repeat(RULE_RUN)}${rightCorner}`)}`;
 	}
 
-	// One rule run is fixed at the item end; the other absorbs the remainder.
+	return runRow(width, paint, leftCorner, rightCorner, align, body);
+}
+
+/** One body flush to one end: a fixed rule run at the item end, the other absorbs the remainder. */
+function runRow(width: number, paint: BoxPaint, leftCorner: string, rightCorner: string, align: Align, body: string): string {
 	const fill = width - LEAD_WIDTH - visibleWidth(body) - (TRAIL_WIDTH - RULE_RUN);
 	const leadRun = align === "left" ? RULE_RUN : fill;
 	const trailRun = align === "left" ? fill : RULE_RUN;
