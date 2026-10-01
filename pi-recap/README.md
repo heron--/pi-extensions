@@ -69,6 +69,8 @@ The manifest records:
 - `timer.lastCheckedAt`, the timer's heartbeat
 - a generation lock, so timer and manual requests cannot write duplicate logs
 - the latest generation error, including its message and stack trace
+- the current failure streak: the consecutive failures since the last
+  successful recap, each with its time, reason, and model
 
 Manifest writes are atomic and guarded by a short-lived filesystem mutation
 lock. On load, recap log filenames are reconciled back into the manifest, so a
@@ -118,12 +120,37 @@ data rather than instructions. Its response remains the two-line `Recap:` and
 
 ## Timer and generation errors
 
-Generation errors are written to `manifest.json` with a timestamp, message, and
-stack trace. The TUI only shows the short notification:
+A failed generation records its reason in `manifest.json` together with a
+timestamp, stack trace, and the model it used. The reason is the provider's
+error message, `Timed out after 30s`, `The recap model returned no text`, or
+`No recap model is configured and authenticated`.
+
+Consecutive failures form a streak, and the TUI shows one `Recap failed` box per
+streak. The streak's first failure appends the box; each later failure adds a row
+to the same box rather than a new message. Every row shows the failure time,
+model, and reason:
 
 ```text
-Recap failed; details are in the recap manifest
+╭  Recap failed ───────────────────────────────────────╮
+│                                                      │
+│ 3:04pm · GLM 5.3 Flash (Baseten)                     │
+│   Timed out after 30s                                │
+│ 3:09pm · Gemini 3.8 Flash (Google)                   │
+│   429 Resource exhausted                             │
+│                                                      │
+│ Retrying on the next check.                          │
+│                                                      │
+╰────────────────────────────── 2 of 3 attempts failed ╯
 ```
+
+Later failures are stored as `recap-error-update` session entries, which have no
+renderer of their own; the box reads them, so it stays complete after the
+session is reloaded.
+
+After three consecutive failures, automatic checks stop and the box says so.
+`/recap now` still runs. If it fails while automatic checks are stopped, it
+starts a new streak and a new box, and automatic checks resume. Any successful
+recap clears the streak.
 
 While the manifest has an active error, all recap foreground colors switch to
 the theme's `error` color, including recaps already in the transcript. A
@@ -131,8 +158,9 @@ successful generation clears the active state and restores the normal recap
 colors while retaining the last error details for debugging. Skipped checks do
 not clear the active state.
 
-`/recap status` reports the manifest path, recap count, last check time, and
-whether an error is active. Error details remain in the manifest.
+`/recap status` reports the manifest path, recap count, last check time, the
+number of consecutive failures with the latest reason, and whether automatic
+checks are stopped.
 
 ## Model rotation
 

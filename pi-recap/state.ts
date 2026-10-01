@@ -20,6 +20,9 @@ export const RECAP_LOG_SCHEMA_VERSION = 1;
 export const MANIFEST_FILE_NAME = "manifest.json";
 export const RECAP_LOG_PREFIX = "recap-log-";
 
+/** Consecutive failures after which automatic recaps stop until a recap succeeds. */
+export const MAX_CONSECUTIVE_FAILURES = 3;
+
 const INTERNAL_LOCK_STALE_MS = 60_000;
 const INTERNAL_LOCK_RETRIES = 20;
 const INTERNAL_LOCK_RETRY_MS = 10;
@@ -43,6 +46,17 @@ export interface RecapError {
 	at: string;
 	message: string;
 	stack: string | null;
+	/** Display name of the model the attempt used, or null when none was selected. */
+	model: string | null;
+}
+
+/**
+ * The consecutive failures since the last successful recap. `id` names the
+ * streak so its transcript entries can be grouped; a success clears it.
+ */
+export interface FailureStreak {
+	id: string;
+	failures: RecapError[];
 }
 
 export interface RecapManifest {
@@ -60,6 +74,7 @@ export interface RecapManifest {
 	generationLock: GenerationLock | null;
 	errorActive: boolean;
 	lastError: RecapError | null;
+	failureStreak: FailureStreak | null;
 	updatedAt: string;
 }
 
@@ -127,7 +142,22 @@ function normalizeError(value: unknown): RecapError | null {
 		at: value.at,
 		message: value.message,
 		stack: typeof value.stack === "string" ? value.stack : null,
+		model: typeof value.model === "string" ? value.model : null,
 	};
+}
+
+export function normalizeFailureStreak(value: unknown): FailureStreak | null {
+	if (!isRecord(value) || typeof value.id !== "string" || !value.id || !Array.isArray(value.failures)) return null;
+	const failures = value.failures
+		.map(normalizeError)
+		.filter((failure): failure is RecapError => failure !== null)
+		.slice(-MAX_CONSECUTIVE_FAILURES);
+	return failures.length > 0 ? { id: value.id, failures } : null;
+}
+
+/** Whether automatic recap checks are paused by too many consecutive failures. */
+export function automaticRecapsPaused(manifest: RecapManifest): boolean {
+	return (manifest.failureStreak?.failures.length ?? 0) >= MAX_CONSECUTIVE_FAILURES;
 }
 
 function defaultManifest(
@@ -152,6 +182,7 @@ function defaultManifest(
 		generationLock: null,
 		errorActive: false,
 		lastError: null,
+		failureStreak: null,
 		updatedAt: now.toISOString(),
 	};
 }
@@ -199,6 +230,7 @@ function normalizeManifest(
 		generationLock: normalizeGenerationLock(value.generationLock),
 		errorActive: typeof value.errorActive === "boolean" ? value.errorActive : normalizeError(value.lastError) !== null,
 		lastError: normalizeError(value.lastError),
+		failureStreak: normalizeFailureStreak(value.failureStreak),
 		updatedAt: isIsoDate(value.updatedAt) ? value.updatedAt : fallback.updatedAt,
 	};
 }

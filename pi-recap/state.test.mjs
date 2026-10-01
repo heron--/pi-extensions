@@ -5,8 +5,10 @@ import { join } from "node:path";
 import test from "node:test";
 import { readRecapConfig, updateRecapConfig } from "./config-store.ts";
 import {
+	MAX_CONSECUTIVE_FAILURES,
 	RecapStore,
 	aggregateUsage,
+	automaticRecapsPaused,
 	createRecapKey,
 	formatConversation,
 	selectRecapSlice,
@@ -278,6 +280,8 @@ test("RecapStore writes configured timer settings and reconciles orphaned recap 
 		});
 		assert.equal(failed.errorActive, true);
 		assert.equal(failed.lastError.stack, "Error: generation failed\n    at recap");
+		assert.equal(failed.lastError.model, null);
+		assert.equal(failed.failureStreak, null);
 
 		const key = "20260101T001000000Z";
 		store.saveLog({
@@ -304,6 +308,44 @@ test("RecapStore writes configured timer settings and reconciles orphaned recap 
 		assert.equal(reconciled.cursor.entryId, "last");
 		assert.equal(store.readRecentLogs(reconciled.recapLogKeys, 5)[0].summary, "Recap: complete\nNext: continue");
 		assert.match(readFileSync(store.manifestPath, "utf8"), /"lastCheckedAt": "2026-01-01T00:00:00.000Z"/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("RecapStore keeps a failure streak capped at the consecutive-failure limit", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-recap-test-"));
+	try {
+		const store = new RecapStore(root, "session-1", undefined, 600_000, 1);
+		const failure = (index) => ({
+			at: `2026-01-01T00:0${index}:00.000Z`,
+			message: `failure ${index}`,
+			stack: null,
+			model: "Test Model",
+		});
+
+		const first = store.update((manifest) => {
+			manifest.failureStreak = { id: "streak-1", failures: [failure(1)] };
+			return manifest;
+		});
+		assert.deepEqual(first.failureStreak, { id: "streak-1", failures: [failure(1)] });
+		assert.equal(automaticRecapsPaused(first), false);
+
+		const capped = store.update((manifest) => {
+			manifest.failureStreak.failures.push(failure(2), failure(3), failure(4));
+			return manifest;
+		});
+		assert.equal(capped.failureStreak.failures.length, MAX_CONSECUTIVE_FAILURES);
+		assert.equal(capped.failureStreak.failures.at(-1).message, "failure 4");
+		assert.equal(automaticRecapsPaused(capped), true);
+		assert.equal(automaticRecapsPaused(store.read()), true);
+
+		const invalid = store.update((manifest) => {
+			manifest.failureStreak = { id: "streak-2", failures: [{ message: "no timestamp" }] };
+			return manifest;
+		});
+		assert.equal(invalid.failureStreak, null);
+		assert.equal(automaticRecapsPaused(invalid), false);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

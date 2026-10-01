@@ -19,9 +19,11 @@ import {
 } from "./config-store.ts";
 import {
 	MANIFEST_SCHEMA_VERSION,
+	MAX_CONSECUTIVE_FAILURES,
 	RECAP_LOG_SCHEMA_VERSION,
 	RecapStore,
 	aggregateUsage,
+	automaticRecapsPaused,
 	createRecapKey,
 	formatConversation,
 	selectRecapSlice,
@@ -61,6 +63,15 @@ const config = {
 };
 
 const ENTRY_TYPE = "recap";
+/** The transcript box for a failure streak, appended on the streak's first failure. */
+const ENTRY_ERROR = "recap-error";
+/**
+ * A later failure in a streak. It has no renderer, so it draws nothing itself;
+ * the streak's `recap-error` box reads it and grows by one row.
+ */
+const ENTRY_ERROR_UPDATE = "recap-error-update";
+const LABEL_FAILED = "Recap failed";
+const REASON_MAX_CHARS = 240;
 const LABEL_RECAP = "Recap";
 const LABEL_NEXT = "Next:";
 const PAD_X = 1;
@@ -187,6 +198,16 @@ const RECAP_SYSTEM_PROMPT = [
 	"sign-off, bullet points, markdown, or unsupported details.",
 ].join("\n");
 
+interface RecapErrorEntry {
+	streakId: string;
+	failures: RecapError[];
+}
+
+interface RecapErrorUpdateEntry {
+	streakId: string;
+	failure: RecapError;
+}
+
 interface RecapResult {
 	text: string;
 	modelName: string;
@@ -195,12 +216,16 @@ interface RecapResult {
 	logKey?: string;
 }
 
-function formatStamp(at: Date): string {
+function formatTime(at: Date): string {
 	const hours = at.getHours();
 	const hour12 = hours % 12 || 12;
 	const minutes = at.getMinutes().toString().padStart(2, "0");
 	const meridiem = hours < 12 ? "am" : "pm";
-	return `${hour12}:${minutes}${meridiem}, ${MONTHS[at.getMonth()]} ${at.getDate()}`;
+	return `${hour12}:${minutes}${meridiem}`;
+}
+
+function formatStamp(at: Date): string {
+	return `${formatTime(at)}, ${MONTHS[at.getMonth()]} ${at.getDate()}`;
 }
 
 function formatMinutes(minutes: number): string {
@@ -350,6 +375,94 @@ function renderClean(theme: Theme, recap: RecapResult, width: number, hasError: 
 	];
 }
 
+interface FailureView {
+	failures: RecapError[];
+	/** Whether this streak is the session's unresolved one, so the retry state still applies. */
+	current: boolean;
+}
+
+function failureHead(failure: RecapError): string {
+	const at = new Date(failure.at);
+	const time = Number.isFinite(at.getTime()) ? formatTime(at) : failure.at;
+	return failure.model ? `${time} · ${failure.model}` : time;
+}
+
+function failureHint(view: FailureView): string | null {
+	if (!view.current) return null;
+	return view.failures.length >= MAX_CONSECUTIVE_FAILURES
+		? "Automatic recaps are paused. Run /recap now to retry."
+		: "Retrying on the next check.";
+}
+
+function failureCount(view: FailureView): string {
+	return `${view.failures.length} of ${MAX_CONSECUTIVE_FAILURES} attempts failed`;
+}
+
+/** One block per failure: the time and model, then the wrapped reason indented beneath. */
+function failureBlocks(theme: Theme, failures: RecapError[], width: number): string[] {
+	const rows: string[] = [];
+	for (const failure of failures) {
+		rows.push(truncateToWidth(theme.bold(theme.fg("error", failureHead(failure))), width, "…"));
+		const reason = clampChars(failure.message || "Unknown error", REASON_MAX_CHARS);
+		for (const line of wrap(reason, Math.max(1, width - 2))) rows.push(`  ${theme.fg("error", line)}`);
+	}
+	return rows;
+}
+
+function renderErrorFrame(theme: Theme, view: FailureView, width: number): string[] {
+	if (width < MIN_BOX_WIDTH) return [];
+	const filled = (row: string) => groundRow(row, theme.getBgAnsi("userMessageBg"));
+	const rule = (text: string) => theme.fg("error", text);
+	const inner = width - 2;
+	const content = Math.max(1, inner - PAD_X * 2);
+	const row = (text: string): string =>
+		railRow({ line: text, paint: rule, padX: PAD_X, padTo: content, bg: filled });
+
+	const rows = [
+		filled(labelRuleRow({
+			width,
+			paint: rule,
+			cornerL: CORNER_TL,
+			cornerR: CORNER_TR,
+			label: theme.bold(theme.fg("error", `${config.markers.recap} ${LABEL_FAILED}`)),
+			side: "left",
+			padLabel: true,
+		})),
+		row(""),
+	];
+	for (const line of failureBlocks(theme, view.failures, content)) rows.push(row(line));
+	const hint = failureHint(view);
+	if (hint) {
+		rows.push(row(""));
+		for (const line of wrap(hint, content)) rows.push(row(theme.fg("error", line)));
+	}
+	rows.push(row(""));
+	const stamp = ` ${failureCount(view)} `;
+	rows.push(filled(inner - visibleWidth(stamp) >= 2
+		? labelRuleRow({
+				width,
+				paint: rule,
+				cornerL: CORNER_BL,
+				cornerR: CORNER_BR,
+				label: theme.fg("error", stamp),
+				side: "right",
+				padLabel: false,
+			})
+		: labelRuleRow({ width, paint: rule, cornerL: CORNER_BL, cornerR: CORNER_BR })));
+	return rows;
+}
+
+function renderErrorClean(theme: Theme, view: FailureView, width: number): string[] {
+	const content = Math.max(1, width - 2);
+	const hint = failureHint(view);
+	return [
+		theme.bold(theme.fg("error", `${config.markers.recap} ${LABEL_FAILED}`)),
+		...failureBlocks(theme, view.failures, content),
+		...(hint ? wrap(hint, content).map((line) => theme.fg("error", line)) : []),
+		theme.italic(theme.fg("error", failureCount(view))),
+	];
+}
+
 function buildPrompt(previousLogs: RecapLog[], conversation: string): string {
 	const previous = previousLogs.length === 0
 		? "(none)"
@@ -365,11 +478,21 @@ function buildPrompt(previousLogs: RecapLog[], conversation: string): string {
 	].join("\n");
 }
 
-function errorRecord(error: unknown, at: Date): RecapError {
+function errorRecord(error: unknown, at: Date, model: string | null): RecapError {
 	if (error instanceof Error) {
-		return { at: at.toISOString(), message: error.message, stack: error.stack ?? null };
+		return { at: at.toISOString(), message: error.message, stack: error.stack ?? null, model };
 	}
-	return { at: at.toISOString(), message: String(error), stack: null };
+	return { at: at.toISOString(), message: String(error), stack: null, model };
+}
+
+/**
+ * `complete()` reports provider failures and aborts on the returned message
+ * instead of rejecting, so they are converted here into the failure reason.
+ */
+function replyFailure(reply: AssistantMessage): Error | null {
+	if (reply.stopReason === "aborted") return new Error(`Timed out after ${RECAP_TIMEOUT_MS / 1000}s`);
+	if (reply.stopReason === "error") return new Error(reply.errorMessage || "The model request failed");
+	return null;
 }
 
 function freshnessTime(manifest: RecapManifest): number {
@@ -405,7 +528,53 @@ export default function recapExtension(pi: ExtensionAPI): void {
 	let sessionEpoch = 0;
 	let deferredUntilSettled = false;
 	let recapErrorActive = false;
+	let activeStreakId: string | null = null;
+	/** Every failure streak in the session file, keyed by streak id, in failure order. */
+	const failureStreaks = new Map<string, RecapError[]>();
 	let shuttingDown = false;
+
+	function observeManifest(manifest: RecapManifest): void {
+		recapErrorActive = manifest.errorActive;
+		activeStreakId = manifest.failureStreak?.id ?? null;
+	}
+
+	function indexFailureStreaks(ctx: ExtensionContext): void {
+		failureStreaks.clear();
+		for (const entry of ctx.sessionManager.getEntries()) {
+			if (entry.type !== "custom") continue;
+			if (entry.customType === ENTRY_ERROR) {
+				const data = entry.data as RecapErrorEntry | undefined;
+				if (data?.streakId && Array.isArray(data.failures)) failureStreaks.set(data.streakId, [...data.failures]);
+			} else if (entry.customType === ENTRY_ERROR_UPDATE) {
+				const data = entry.data as RecapErrorUpdateEntry | undefined;
+				if (data?.failure) failureStreaks.get(data.streakId)?.push(data.failure);
+			}
+		}
+	}
+
+	function streakShownOnBranch(ctx: ExtensionContext, streakId: string): boolean {
+		return ctx.sessionManager.getBranch().some((entry) =>
+			entry.type === "custom" &&
+			entry.customType === ENTRY_ERROR &&
+			(entry.data as RecapErrorEntry | undefined)?.streakId === streakId,
+		);
+	}
+
+	/**
+	 * A streak's first failure appends its box. Later failures append a
+	 * renderer-less entry, which persists the failure and makes pi redraw the
+	 * existing box from `failureStreaks`.
+	 */
+	function showFailure(ctx: ExtensionContext, streak: { id: string; failures: RecapError[] }): void {
+		const failure = streak.failures[streak.failures.length - 1]!;
+		const shown = failureStreaks.has(streak.id) && streakShownOnBranch(ctx, streak.id);
+		failureStreaks.set(streak.id, [...streak.failures]);
+		if (shown) {
+			pi.appendEntry<RecapErrorUpdateEntry>(ENTRY_ERROR_UPDATE, { streakId: streak.id, failure });
+		} else {
+			pi.appendEntry<RecapErrorEntry>(ENTRY_ERROR, { streakId: streak.id, failures: streak.failures });
+		}
+	}
 
 	function intervalMs(): number {
 		return config.intervalMinutes * 60_000;
@@ -445,7 +614,7 @@ export default function recapExtension(pi: ExtensionAPI): void {
 			current.timer.minimumCompletedInteractions = config.minimumCompletedInteractions;
 			return current;
 		});
-		recapErrorActive = manifest.errorActive;
+		observeManifest(manifest);
 		return manifest;
 	}
 
@@ -471,7 +640,7 @@ export default function recapExtension(pi: ExtensionAPI): void {
 			claimed = true;
 			return current;
 		}, now);
-		recapErrorActive = manifest.errorActive;
+		observeManifest(manifest);
 		return claimed && ownsTimer(manifest);
 	}
 
@@ -510,7 +679,7 @@ export default function recapExtension(pi: ExtensionAPI): void {
 			current.timer.lastCheckedAt = at.toISOString();
 			return current;
 		}, at);
-		recapErrorActive = manifest.errorActive;
+		observeManifest(manifest);
 		return allowed ? manifest : null;
 	}
 
@@ -525,7 +694,7 @@ export default function recapExtension(pi: ExtensionAPI): void {
 			acquired = true;
 			return current;
 		}, at);
-		recapErrorActive = manifest.errorActive;
+		observeManifest(manifest);
 		return acquired ? manifest : null;
 	}
 
@@ -534,7 +703,7 @@ export default function recapExtension(pi: ExtensionAPI): void {
 			if (current.generationLock?.ownerId === ownerId) current.generationLock = null;
 			return current;
 		});
-		if (epoch === sessionEpoch) recapErrorActive = manifest.errorActive;
+		if (epoch === sessionEpoch) observeManifest(manifest);
 	}
 
 	function showRecap(recap: RecapResult): void {
@@ -556,6 +725,7 @@ export default function recapExtension(pi: ExtensionAPI): void {
 			return false;
 		}
 		if (!manifest) return false;
+		if (!options.force && automaticRecapsPaused(manifest)) return false;
 
 		if (checkingEpoch === runEpoch) {
 			if (options.announce) ctx.ui.notify("Recap is already running", "info");
@@ -580,6 +750,7 @@ export default function recapExtension(pi: ExtensionAPI): void {
 		}
 
 		checkingEpoch = runEpoch;
+		let attemptedModel: Model<Api> | undefined;
 		try {
 			manifest = recapStore.read();
 			slice = selectRecapSlice(ctx.sessionManager.getBranch(), manifest.cursor);
@@ -599,6 +770,7 @@ export default function recapExtension(pi: ExtensionAPI): void {
 			const rotation = resolveRotation(ctx);
 			if (rotation.length === 0) throw new Error("No recap model is configured and authenticated");
 			const model = rotation[takeRotationIndex(rotation.length)]!;
+			attemptedModel = model;
 
 			const previousLogs = recapStore.readRecentLogs(manifest.recapLogKeys, PREVIOUS_RECAP_COUNT);
 			const prompt: UserMessage = {
@@ -625,6 +797,8 @@ export default function recapExtension(pi: ExtensionAPI): void {
 				return false;
 			}
 
+			const failure = replyFailure(reply);
+			if (failure) throw failure;
 			const text = assistantText(reply);
 			if (!text) throw new Error("The recap model returned no text");
 			const generatedAt = new Date();
@@ -656,10 +830,11 @@ export default function recapExtension(pi: ExtensionAPI): void {
 				current.cursor = slice!.cursor;
 				current.generationLock = null;
 				current.errorActive = false;
+				current.failureStreak = null;
 				current.timer.lastCheckedAt = generatedAt.toISOString();
 				return current;
 			}, generatedAt);
-			recapErrorActive = false;
+			observeManifest(manifest);
 			showRecap({
 				text,
 				modelName: model.name,
@@ -679,19 +854,28 @@ export default function recapExtension(pi: ExtensionAPI): void {
 				return false;
 			}
 			const failedAt = new Date();
+			const failure = errorRecord(error, failedAt, attemptedModel?.name ?? null);
 			try {
 				manifest = recapStore.update((current) => {
 					if (current.generationLock?.ownerId === ownerId) current.generationLock = null;
 					current.errorActive = true;
-					current.lastError = errorRecord(error, failedAt);
+					current.lastError = failure;
+					// A manual retry after the cap starts a new streak, which resumes automatic checks.
+					if (current.failureStreak && !automaticRecapsPaused(current)) {
+						current.failureStreak.failures.push(failure);
+					} else {
+						current.failureStreak = { id: randomUUID(), failures: [failure] };
+					}
 					current.timer.lastCheckedAt = failedAt.toISOString();
 					return current;
 				}, failedAt);
-				recapErrorActive = manifest.errorActive;
+				observeManifest(manifest);
 			} catch {
 				recapErrorActive = true;
+				ctx.ui.notify(`Recap failed: ${clampChars(failure.message, REASON_MAX_CHARS)}`, "error");
+				return false;
 			}
-			ctx.ui.notify("Recap failed; details are in the recap manifest", "error");
+			if (manifest.failureStreak) showFailure(ctx, manifest.failureStreak);
 			return false;
 		} finally {
 			if (checkingEpoch === runEpoch) checkingEpoch = null;
@@ -723,7 +907,7 @@ export default function recapExtension(pi: ExtensionAPI): void {
 		let manifest: RecapManifest;
 		try {
 			manifest = recapStore.read();
-			recapErrorActive = manifest.errorActive;
+			observeManifest(manifest);
 		} catch {
 			return;
 		}
@@ -779,6 +963,23 @@ export default function recapExtension(pi: ExtensionAPI): void {
 		};
 	});
 
+	pi.registerEntryRenderer<RecapErrorEntry>(ENTRY_ERROR, (entry, _options, theme): Component | undefined => {
+		const data = entry.data;
+		if (!data?.streakId || !Array.isArray(data.failures) || data.failures.length === 0) return undefined;
+		return {
+			invalidate() {},
+			render(width: number): string[] {
+				const view: FailureView = {
+					failures: failureStreaks.get(data.streakId) ?? data.failures,
+					current: data.streakId === activeStreakId,
+				};
+				return config.style === "frame"
+					? renderErrorFrame(theme, view, width)
+					: renderErrorClean(theme, view, width);
+			},
+		};
+	});
+
 	pi.on("session_start", async (_event, ctx) => {
 		sessionEpoch += 1;
 		activeGenerationAbort?.abort();
@@ -787,12 +988,15 @@ export default function recapExtension(pi: ExtensionAPI): void {
 		releaseTimer();
 		store = undefined;
 		deferredUntilSettled = false;
+		activeStreakId = null;
+		failureStreaks.clear();
 		loadConfig();
 		if (ctx.mode !== "tui") return;
 		shuttingDown = false;
+		indexFailureStreaks(ctx);
 		store = makeStore(ctx);
 		try {
-			recapErrorActive = store.read().errorActive;
+			observeManifest(store.read());
 		} catch {
 			recapErrorActive = true;
 		}
@@ -881,7 +1085,15 @@ export default function recapExtension(pi: ExtensionAPI): void {
 				try {
 					const manifest = currentStore(ctx).read();
 					const checked = manifest.timer.lastCheckedAt ?? "never";
-					const error = manifest.errorActive ? " Last generation failed; details are in the manifest." : "";
+					const streak = manifest.failureStreak;
+					const lastFailure = streak?.failures[streak.failures.length - 1];
+					const error = automaticRecapsPaused(manifest)
+						? ` Automatic recaps are paused after ${MAX_CONSECUTIVE_FAILURES} consecutive failures; run /recap now to retry. Last reason: ${clampChars(lastFailure!.message, REASON_MAX_CHARS)}`
+						: lastFailure
+							? ` ${streak!.failures.length} consecutive failure(s). Last reason: ${clampChars(lastFailure.message, REASON_MAX_CHARS)}`
+							: manifest.errorActive
+								? " Last generation failed; details are in the manifest."
+								: "";
 					ctx.ui.notify(
 						`${manifest.recapLogKeys.length} recap log(s). Checking every ${formatMinutes(manifest.timer.intervalMs / 60_000)} after ${manifest.timer.minimumCompletedInteractions} completed interaction(s). Last checked: ${checked}. Manifest: ${currentStore(ctx).manifestPath}.${error}`,
 						manifest.errorActive ? "error" : "info",
