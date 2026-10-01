@@ -190,8 +190,8 @@ persist across pi processes. `/recap after` remains an alias for `every`, and
 
 ## Configuration
 
-The timer interval, completed-interaction threshold, style, icons, and model
-rotation position persist in:
+The timer interval, completed-interaction threshold, style, and icons persist
+in:
 
 ```text
 <agent dir>/pi-recap/config.json
@@ -204,11 +204,17 @@ that extension path can be a symlink into a git checkout.
 {
   "markers": { "recap": "", "next": "" },
   "style": "frame",
-  "rotationIndex": 2,
   "intervalMinutes": 5,
   "minimumCompletedInteractions": 5
 }
 ```
+
+The model rotation position advances on every recap, so it is kept apart in
+`<agent dir>/pi-recap/rotation.json` (`{ "rotationIndex": 2 }`), leaving
+`config.json` with settings only. That keeps `config.json` suitable for
+sharing between machines, including as a symlink into a dotfiles checkout:
+writes replace the link's target, not the link. A `rotationIndex` still held
+by `config.json` is read when `rotation.json` does not exist yet.
 
 Missing or invalid fields use built-in defaults. Changes made directly in this
 file take effect when the extension next loads. Extension writes acquire a
