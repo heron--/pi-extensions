@@ -23,6 +23,27 @@ to the transcript. Both values are persistent settings.
 The transcript entry is display-only and scrolls with the rest of the session.
 The durable recap state lives in JSON files outside the session transcript.
 
+## The recap box
+
+Each attempt adds its box to the transcript when the request starts, so a recap
+in progress is visible along with the model generating it:
+
+```text
+╭  Recap ──────────────────────────────────────────╮
+│                                                  │
+│ Generating with GPT-6 Luna (OpenAI)…             │
+│                                                  │
+╰─────────────────────── started 7:52pm, October 1 ╯
+```
+
+When the request finishes, the same box shows the recap, or the failure details
+described under [Timer and generation errors](#timer-and-generation-errors).
+
+The box is a `recap-generation` session entry. The outcome is a separate
+`recap-generation-result` entry with no renderer of its own; appending it makes
+pi redraw the box. An attempt that never finished, because pi exited while the
+request was in flight, shows nothing once the session is loaded again.
+
 ## Periodic checks
 
 The default check interval is five minutes. A check always updates the
@@ -126,9 +147,9 @@ error message, `Timed out after 30s`, `The recap model returned no text`, or
 `No recap model is configured and authenticated`.
 
 Consecutive failures form a streak, and the TUI shows one `Recap failed` box per
-streak. The streak's first failure appends the box; each later failure adds a row
-to the same box rather than a new message. Every row shows the failure time,
-model, and reason:
+streak. The box belongs to the streak's newest attempt: when a later attempt
+fails, its box lists every failure in the streak and the earlier attempt's box
+collapses. Every row shows the failure time, model, and reason:
 
 ```text
 ╭  Recap failed ───────────────────────────────────────╮
@@ -143,10 +164,9 @@ model, and reason:
 ╰────────────────────────────── 2 of 3 attempts failed ╯
 ```
 
-Later failures are stored as `recap-error-update` session entries, which have no
-renderer of their own. Each one holds the manifest's whole streak, and the box
-shows the latest for its streak, so it stays complete after the session is
-reloaded even if an earlier failure never reached the transcript.
+A failed attempt's result entry holds the manifest's whole streak, so the box
+stays complete after the session is reloaded, even if an earlier failure never
+reached the transcript.
 
 After three consecutive failures, automatic checks stop and the box says so.
 `/recap now` still runs. If it fails while automatic checks are stopped, it
