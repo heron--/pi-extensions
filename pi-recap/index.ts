@@ -893,7 +893,6 @@ export default function recapExtension(pi: ExtensionAPI): void {
 					logKey: key,
 				},
 			});
-			if (options.announce) ctx.ui.notify(`Recap saved as ${key}`, "info");
 			return true;
 		} catch (error) {
 			if (shuttingDown || runEpoch !== sessionEpoch) {
