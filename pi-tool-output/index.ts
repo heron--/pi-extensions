@@ -16,6 +16,7 @@ import {
 	SettingsManager,
 	ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import { Container, Text } from "@earendil-works/pi-tui";
 import {
 	BUILTIN_TOOL_NAMES,
@@ -48,6 +49,7 @@ import {
 import { toolCallBox, toolResultBox } from "./tool-box.ts";
 import { callArgumentsComponent } from "./call-rendering.ts";
 import { codemodeCallsComponent, codemodeFullOutputNotice, codemodeOutput } from "./codemode.ts";
+import { rowCappedPreview, type RowCapState } from "./preview.ts";
 
 type ResultLike = AgentToolResult<unknown>;
 type DecoratedProperty = "renderCall" | "renderResult" | "renderShell";
@@ -191,6 +193,14 @@ function previewLimit(lines: string[], options: ToolRenderResultOptions, collaps
 	return options.expanded ? expandedLineLimit(lines, config) : collapsed;
 }
 
+function moreOutputNotice({ lineCut, remaining }: RowCapState): string {
+	const parts = [
+		...(lineCut ? ["line continues"] : []),
+		...(remaining > 0 ? [`${remaining} more ${pluralize(remaining, "line")}`] : []),
+	];
+	return `… ${parts.join(" · ")} · ${keyHint("app.tools.expand", "to expand")}`;
+}
+
 function renderPreview(
 	lines: string[],
 	limit: number,
@@ -199,13 +209,19 @@ function renderPreview(
 	theme: Theme,
 	color: ColorSpec = TOOL_OUTPUT_COLORS.result.output,
 	footer?: string,
-): Text | Container {
+): Component {
 	if (lines.length === 0 && !footer) return emptyResult();
-	const { shown, remaining } = previewSlice(lines, limit);
-	let text = shown.map((line) => paint(theme, color, sanitizeAnsiForToolOutput(line))).join("\n");
-	if (remaining > 0 && !options.expanded) {
-		text += `\n${paint(theme, TOOL_OUTPUT_COLORS.result.meta, `… ${remaining} more ${pluralize(remaining, "line")} · ${keyHint("app.tools.expand", "to expand")}`)}`;
+	if (!options.expanded) {
+		return rowCappedPreview({
+			lines: lines.map(sanitizeAnsiForToolOutput),
+			maxRows: limit,
+			paintLine: (line) => paint(theme, color, line),
+			moreNotice: (state) => paint(theme, TOOL_OUTPUT_COLORS.result.meta, moreOutputNotice(state)),
+			footer: footer ? paint(theme, TOOL_OUTPUT_COLORS.result.notice, footer) : undefined,
+		});
 	}
+	const { shown } = previewSlice(lines, limit);
+	let text = shown.map((line) => paint(theme, color, sanitizeAnsiForToolOutput(line))).join("\n");
 	if (options.expanded && config.expandedPreviewMaxLines > 0 && lines.length > config.expandedPreviewMaxLines) {
 		text += `\n${paint(theme, TOOL_OUTPUT_COLORS.result.notice, `display capped at ${config.expandedPreviewMaxLines} lines`)}`;
 	}
@@ -220,7 +236,7 @@ function renderError(
 	theme: Theme,
 	fallback: string,
 	footer?: string,
-): Text {
+): Component {
 	const lines = outputLines(extractTextOutput(result), options.expanded);
 	const { error, notice } = TOOL_OUTPUT_COLORS.result;
 	if (lines.length === 0) {
@@ -228,8 +244,7 @@ function renderError(
 		return textResult(footer ? `${message}\n${paint(theme, notice, footer)}` : message);
 	}
 	const limit = previewLimit(lines, options, config.previewLines, config);
-	const preview = renderPreview(lines, limit, options, config, theme, error, footer);
-	return preview instanceof Text ? preview : textResult(paint(theme, error, fallback));
+	return renderPreview(lines, limit, options, config, theme, error, footer);
 }
 
 function renderModeContent(
@@ -241,7 +256,7 @@ function renderModeContent(
 	mode: OutputMode,
 	summary: (lines: string[]) => string,
 	footer?: string,
-): Text | Container {
+): Component {
 	if (isErrorResult(result, context)) return renderError(result, options, config, theme, "Tool failed", footer);
 	if (options.isPartial || mode === "hidden") return emptyResult();
 	const lines = outputLines(extractTextOutput(result), options.expanded);
@@ -303,7 +318,7 @@ function bashResult(
 	theme: Theme,
 	context: ToolRenderContextLike,
 	config: ToolOutputConfig,
-): Text | Container {
+): Component {
 	const truncationNotice = bashTruncationNotice(result);
 	const { output, meta, notice } = TOOL_OUTPUT_COLORS.result;
 	const withNotice = (text: string) => (truncationNotice ? `${text}\n${paint(theme, notice, truncationNotice)}` : text);

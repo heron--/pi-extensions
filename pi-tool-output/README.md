@@ -13,8 +13,13 @@ The default presentation uses:
   scope, shell command sketch, subagent mode and declared lanes, or MCP target;
 - bounded accent-key / emphasized-value argument previews instead of walls of scripts or JSON;
 - dimmed result text, with errors kept red and truncation notices visible;
-- an 8-line collapsed preview for read, search, MCP, and known custom tools;
-- up to 10 collapsed lines for bash output.
+- an 8-row collapsed preview for read, search, MCP, Code Mode, and known custom
+  tools;
+- up to 10 collapsed rows for bash output.
+
+Collapsed previews count terminal rows after wrapping, so a single very long
+line — minified JSON, a one-line script result — is cut after the row limit and
+marked `… line continues`, rather than filling the screen.
 
 Press Pi's `app.tools.expand` binding—Ctrl+O by default—to expand or collapse
 both call arguments and results, including pending calls. The hint follows any
