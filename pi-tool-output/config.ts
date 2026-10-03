@@ -93,8 +93,34 @@ function asOutputMode(value: unknown, fallback: OutputMode): OutputMode {
 	return OUTPUT_MODES.includes(value as OutputMode) ? (value as OutputMode) : fallback;
 }
 
+/** pi-tui's `KeyId` grammar: optional distinct modifiers, then one base key. */
+const KEY_MODIFIERS = ["ctrl", "shift", "alt", "super"];
+const KEY_SYMBOLS = "`-=[]\\;',./!@#$%^&*()_+|~{}:<>?";
+const KEY_SPECIALS = [
+	"escape", "esc", "enter", "return", "tab", "space", "backspace", "delete", "insert", "clear", "home", "end",
+	"pageUp", "pageDown", "up", "down", "left", "right",
+	"f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
+];
+
+/** A valid pi key ID in its canonical spelling, or undefined. */
+export function normalizeKeyId(value: string): string | undefined {
+	const key = value.trim();
+	// `+` is itself a key: `alt++` is alt with `+`.
+	const split = key.endsWith("++") ? key.length - 1 : key === "+" ? 0 : key.lastIndexOf("+") + 1;
+	const base = key.slice(split);
+	const modifiers = split > 0 ? key.slice(0, split - 1).toLowerCase().split("+") : [];
+	if (modifiers.some((modifier) => !KEY_MODIFIERS.includes(modifier))) return undefined;
+	if (new Set(modifiers).size !== modifiers.length) return undefined;
+	const lower = base.toLowerCase();
+	const canonical =
+		/^[a-z0-9]$/.test(lower) ? lower
+			: base.length === 1 && KEY_SYMBOLS.includes(base) ? base
+				: KEY_SPECIALS.find((special) => special.toLowerCase() === lower);
+	return canonical === undefined ? undefined : [...modifiers, canonical].join("+");
+}
+
 function asKey(value: unknown, fallback: string): string {
-	return typeof value === "string" && /^[a-z0-9+\-\]\[]+$/i.test(value.trim()) ? value.trim().toLowerCase() : fallback;
+	return (typeof value === "string" && normalizeKeyId(value)) || fallback;
 }
 
 function asBashOutputMode(value: unknown, fallback: BashOutputMode): BashOutputMode {

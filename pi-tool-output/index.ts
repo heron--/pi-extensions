@@ -527,7 +527,7 @@ function markHouseRenderer(renderer: unknown): void {
 let groupTheme: Theme | undefined;
 /** The most recently created member: the expand-last shortcut's target, and the only row with the hint. */
 let lastMember: WeakRef<GroupMember> | undefined;
-const seenMembers = new WeakSet<object>();
+const seenTools = new WeakSet<object>();
 /** Row owners from each leader's last render, for click routing. */
 const groupRowOwners = new WeakMap<object, (GroupMember | undefined)[]>();
 
@@ -545,10 +545,16 @@ function isGroupMember(instance: ToolExecutionInstanceLike, config: ToolOutputCo
 	return resolveRuntimeRenderingTarget(instance, config) !== undefined;
 }
 
-function noteMember(instance: ToolExecutionInstanceLike): void {
-	if (seenMembers.has(instance)) return;
-	seenMembers.add(instance);
-	lastMember = new WeakRef(instance as unknown as GroupMember);
+/**
+ * Record a tool call the first time it is seen. Calls are created in
+ * transcript order, so the newest one decides the expand-last target: a group
+ * member becomes it, and a call outside the groups (a tool that keeps its own
+ * renderer) clears it, so the hint and the shortcut never point past it.
+ */
+function noteTool(instance: ToolExecutionInstanceLike, member: boolean): void {
+	if (seenTools.has(instance)) return;
+	seenTools.add(instance);
+	lastMember = member ? new WeakRef(instance as unknown as GroupMember) : undefined;
 }
 
 /** Expand or collapse only the most recent call. */
@@ -595,8 +601,9 @@ function patchToolExecutionRendering(getConfig: () => ToolOutputConfig): void {
 		const renderer: RuntimeCallRenderer | undefined = target
 			? (args, theme, context) => adapterCall(target.tool, args, theme, context)
 			: originalCall.call(this);
-		if (!renderer || !isGroupMember(this, config)) return renderer;
-		noteMember(this);
+		const member = renderer !== undefined && isGroupMember(this, config);
+		noteTool(this, member);
+		if (!member) return renderer;
 		return (args, theme, context) => {
 			groupTheme = theme;
 			return renderer(args, theme, context);
@@ -616,7 +623,11 @@ function patchToolExecutionRendering(getConfig: () => ToolOutputConfig): void {
 
 	installedRenderWrapper = function (this: ToolExecutionInstanceLike, width: number): string[] {
 		const config = getConfig();
-		if (!patchState.active || !groupTheme || !isGroupMember(this, config)) return originalRender.call(this, width);
+		if (!patchState.active) return originalRender.call(this, width);
+		const joins = isGroupMember(this, config);
+		// Calls with no definition never reach the call-renderer wrapper; note them here.
+		noteTool(this, joins);
+		if (!groupTheme || !joins) return originalRender.call(this, width);
 		const member = this as unknown as GroupMember;
 		const role = resolveGroup(member, this.ui, width, (component): component is GroupMember =>
 			component instanceof ToolExecutionComponent && isGroupMember(component as unknown as ToolExecutionInstanceLike, config),

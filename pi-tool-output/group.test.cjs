@@ -227,6 +227,19 @@ void (async () => {
 	grep.setExpanded(false);
 	bash.setExpanded(false);
 
+	// A call outside the groups (a tool that keeps its own renderer) takes the
+	// "most recent" role away from the last grouped call: no stale hint or target.
+	const ownRenderer = new codingAgent.ToolExecutionComponent(
+		"custom_unmapped", "u1", {}, { showImages: false },
+		{ name: "custom_unmapped", renderCall: () => new piTui.Text("CUSTOM_ROW", 0, 0) }, ui, process.cwd(),
+	);
+	chat.addChild(ownRenderer);
+	assert.match(screen(), /CUSTOM_ROW/);
+	assert.doesNotMatch(screen(), /to expand all|alt\+o to collapse/, "no grouped call keeps the hint");
+	const expandedBefore = chat.children.filter((c) => c.expanded).length;
+	await shortcuts.get("alt+o").handler({});
+	assert.equal(chat.children.filter((c) => c.expanded).length, expandedBefore, "Alt+O does not reach past it");
+
 	// Never wider than the terminal, at any width.
 	bash.setExpanded(true);
 	for (const width of [120, 60, 30, 14, 8]) {
