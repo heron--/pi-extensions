@@ -29,21 +29,19 @@ user keybinding override rather than hard-coding the key label.
 
 Neighbouring tool calls share one house box. The top of the box always reads
 `Ran N tools` (`Running N tools` while any call is still going), and each call
-gets three rows: a Nerd Font icon and its display name, the tool's own summary
-(see [Call summaries](#call-summaries)), and the size of its output instead of
-the output itself. The summary and size line up under the name:
+gets two rows: a Nerd Font icon, its display name, and the size of its output
+instead of the output itself; then the tool's own summary (see
+[Call summaries](#call-summaries)) lined up under the name. Names are padded
+so the sizes form one column:
 
 ```text
 ╭  Ran 3 tools ──────────────────────╮
-│  Read File                        │
+│  Read File     12 lines, 133 B    │
 │   path: lib/box.ts:10-29            │
-│   12 lines, 133 B                   │
-│  Search Files                     │
+│  Search Files  2 lines, 31 B      │
 │   pattern: /TODO/ · path: src       │
-│   2 lines, 31 B                     │
-│  Run Command                      │
+│  Run Command   1 line, 11 B       │
 │   npm test                          │
-│   1 line, 11 B                      │
 │   alt+o to expand · ctrl+o to expand all │
 ╰─────────────────────────────────────╯
 ```

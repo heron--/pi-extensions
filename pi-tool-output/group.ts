@@ -201,16 +201,28 @@ const INDENT = "  ";
 /** Whether the member's last drawn summary row showed its whole summary. */
 const summaryFits = new WeakMap<GroupMember, boolean>();
 
+function memberHead(member: GroupMember): string {
+	return `${toolIcon(member.toolName)} ${memberName(member)}`;
+}
+
+const GAP = "  ";
+
 /**
- * One call, three rows: icon and name; the tool's own summary under the name;
- * then the size of its output. Rows two and three line up with the name.
+ * One call, two rows: icon, name, and the size of its output, then the tool's
+ * own summary lined up under the name. `nameWidth` pads every name in the
+ * group to one width so the sizes form a column.
  */
-function toolRows(member: GroupMember, width: number, theme: Theme): string[] {
+function toolRows(member: GroupMember, width: number, nameWidth: number, theme: Theme): string[] {
 	const failed = member.result?.isError === true && !member.isPartial;
 	const { name: nameTone, size: sizeTone, failed: failedTone, summaryPlain, summaryKey } = TOOL_OUTPUT_COLORS.group;
 	const inner = Math.max(1, width - INDENT.length);
-	const head = `${toolIcon(member.toolName)} ${memberName(member)}`;
-	const rows = [truncateToWidth(theme.bold(paint(theme, failed ? failedTone : nameTone, head)), width, "…")];
+	const head = memberHead(member);
+	const padded = head + " ".repeat(Math.max(0, nameWidth - visibleWidth(head)));
+	const first =
+		theme.bold(paint(theme, failed ? failedTone : nameTone, padded)) +
+		GAP +
+		paint(theme, failed ? failedTone : sizeTone, memberMeta(member));
+	const rows = [truncateToWidth(first, width, "…")];
 	const summary = memberSummary(member).text;
 	const shown = summary ? truncateToWidth(summary, inner, "…") : "";
 	summaryFits.set(member, shown === summary);
@@ -218,7 +230,6 @@ function toolRows(member: GroupMember, width: number, theme: Theme): string[] {
 		const colors = { plain: summaryPlain, key: summaryKey, value: TOOL_OUTPUT_COLORS.call.summaryValue };
 		rows.push(INDENT + theme.bold(paintSummary(shown, theme, colors)));
 	}
-	rows.push(INDENT + truncateToWidth(paint(theme, failed ? failedTone : sizeTone, memberMeta(member)), inner, "…"));
 	return rows;
 }
 
@@ -305,8 +316,11 @@ export function renderGroup(members: readonly GroupMember[], width: number, opti
 	const body: string[] = [];
 	const bodyOwners: GroupMember[] = [];
 	const images: string[] = [];
+	// Sizes line up in one column, unless the longest name would leave them no room.
+	const longest = Math.max(...members.map((member) => visibleWidth(memberHead(member))));
+	const nameWidth = Math.min(longest, Math.max(0, contentWidth - GAP.length - "12 lines, 1.0 KB".length));
 	for (const member of members) {
-		const rows = toolRows(member, contentWidth, theme);
+		const rows = toolRows(member, contentWidth, nameWidth, theme);
 		if (member.expanded) {
 			rows.push(...expandedRows(member, contentWidth, theme));
 			for (const image of member.imageComponents ?? []) images.push(...image.render(width));

@@ -76,26 +76,30 @@ void (async () => {
 	let text = screen();
 	assert.match(text, /Ran 3 tools/);
 	assert.equal(text.match(/╭/g)?.length, 1, "one box for the whole run");
-	// Three rows per call: icon and name, then summary and size lined up under the name.
+	// Two rows per call: icon, name and size, then the summary lined up under the name.
 	const rowsOf = (screenText) => screenText.split("\n").map((line) => line.replace(/^│|│\s*$/g, ""));
 	const at = (screenText, needle) => rowsOf(screenText).findIndex((row) => row.includes(needle));
 	const textRows = rowsOf(text);
 	const readName = at(text, "Read File");
+	assert.match(textRows[readName], /Read File\s+12 lines, \d+ B\s*$/);
 	assert.match(textRows[readName + 1], /^\s+path: lib\/box\.ts:10-29\s*$/);
-	assert.match(textRows[readName + 2], /^\s+12 lines, \d+ B\s*$/);
 	const nameColumn = textRows[readName].indexOf("Read File");
 	assert.equal(textRows[readName + 1].indexOf("path:"), nameColumn, "summary lines up with the name");
-	assert.equal(textRows[readName + 2].indexOf("12 lines"), nameColumn, "size lines up with the name");
 	assert.notEqual(textRows[readName].slice(0, nameColumn).trim(), "", "an icon precedes the name");
 	assert.match(text, /a\.ts|TODO/);
 	const grepName = at(text, "Search Files");
 	assert.match(textRows[grepName + 1], /pattern: \/TODO\/ · path: src/);
-	assert.match(textRows[grepName + 2], /2 lines, 25 B/);
+	assert.match(textRows[grepName], /2 lines, 25 B/);
+	assert.equal(
+		textRows[grepName].indexOf("2 lines"),
+		textRows[readName].indexOf("12 lines"),
+		"sizes form one column",
+	);
 	assert.doesNotMatch(text, /READ_LINE_0|BASH_OUTPUT/, "collapsed rows show no output");
 	assert.equal(text.match(/to expand all/g)?.length, 1, "only the most recent call carries the hint");
 	const lines = text.split("\n");
 	const hint = lines.findIndex((line) => line.includes("to expand all"));
-	assert.ok(lines[hint - 2].includes("npm test"), "the hint sits under the most recent call");
+	assert.ok(lines[hint - 1].includes("npm test"), "the hint sits under the most recent call");
 	assert.deepEqual(grep.render(100), [], "followers draw nothing");
 	assert.deepEqual(bash.render(100), []);
 
