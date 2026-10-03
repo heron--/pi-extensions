@@ -492,12 +492,16 @@ test("layout keeps Pi's transcript and dock, splits evenly and restores the orig
 	assert.equal(layout.enable(), "enabled", "enable is idempotent");
 	const split = tui.layoutRoot.children[0];
 	assert(split instanceof HStack);
-	assert.equal(split.children[0], transcript, "left pane is Pi's original transcript");
+	assert.equal(split.children.length, 2);
+	assert.equal(split.children[0].children[0], transcript, "left pane is Pi's original transcript");
 	assert.equal(tui.layoutRoot.children[1], dock, "the input dock is unchanged");
-	const right = split.children[2];
+	const right = split.children[1];
 	assert(right instanceof VStack);
 	const header = right.children[0];
-	const headerRows = (width) => header.render(width).map(stripTerminalSequences);
+	const headerRows = (width) => header.render(width + 1).map(stripTerminalSequences).map((line) => {
+		assert.equal(line[0], "│", "the header row starts with the divider");
+		return line.slice(1);
+	});
 	assert.deepEqual(headerRows(91), [
 		" Transcript Digest   1 User Messages · 0 Agent Messages · 0 Tool Calls · 0 Thinking Blocks ",
 	], "counts share the title row, right-aligned");
@@ -509,20 +513,11 @@ test("layout keeps Pi's transcript and dock, splits evenly and restores the orig
 	assert.deepEqual(headerRows(20).map((line) => line.trim()), [
 		"Transcript Digest", "1 User Messages", "0 Agent Messages", "0 Tool Calls", "0 Thinking Blocks",
 	], "a narrow pane gives the title its own row");
-	assert.equal(right.children.length, 2, "no footer below the conversation");
 	const side = right.children[1];
 	assert(side instanceof ScrollView);
-	assert.equal(side.scrollbar, "always");
-	assert.equal(visibleWidth(split.render(81)[0]), 81);
-	assert.equal(stripTerminalSequences(split.render(81)[0])[40], "│", "the panes share the available columns equally");
-	tui.terminal.columns = 40;
-	layout.reconcile();
-	assert.equal(stripTerminalSequences(split.render(40)[0])[19], "│", "resize keeps a 50/50 split");
-	assert(stripTerminalSequences(split.render(40)[0]).includes("Transcript Digest"));
-	assert.equal(visibleWidth(split.render(MIN_SPLIT_COLUMNS - 1)[0]), MIN_SPLIT_COLUMNS - 1);
-	tui.terminal.columns = 81;
-	layout.reconcile();
-	assert.equal(layout.isVisible, true);
+	assert.equal(side.scrollbar, "hidden", "the pane paints its own scrollbar");
+	assert.equal(right.children.length, 3, "only the scrollbar continuation follows the conversation");
+	assert.deepEqual(stripTerminalSequences(right.children[2].render(5)[0]), "│   ┃");
 
 	side.updateLayout(60, 10, () => {});
 	layout.scroll("up");
@@ -531,14 +526,6 @@ test("layout keeps Pi's transcript and dock, splits evenly and restores the orig
 	assert.equal(side.scrollTop, 39);
 	const click = { type: "click", button: "left", x: 2, y: 5, screenX: 43, screenY: 5, width: 40, height: 23 };
 	assert.equal(right.handleMouse(click), undefined, "unhandled clicks remain available to Pi's selection");
-	const forwarded = [];
-	pane.handleMouse = (event) => { forwarded.push(event); return { handled: true }; };
-	if (typeof VStack.prototype.handleMouse === "function") {
-		assert.equal(right.handleMouse(click)?.target.component, pane, "nested controls receive non-wheel events");
-		assert.equal(forwarded[0].y, click.y - header.render(click.width).length, "header rows are excluded from child coordinates");
-	} else {
-		assert.equal(right.handleMouse(click), undefined, "older renderers leave clicks to Pi");
-	}
 	layout.scroll("end");
 	assert.equal(side.scrollTop, 50);
 	layout.disable();
@@ -546,9 +533,9 @@ test("layout keeps Pi's transcript and dock, splits evenly and restores the orig
 	assert.equal(layout.isEnabled, false);
 });
 
-test("fullscreen mouse press and drag scroll the right scrollbar independently", () => {
+function fullscreenSplit(messages, { columns = 81, rows = 24 } = {}) {
 	const terminal = {
-		columns: 81, rows: 24, kittyProtocolActive: false,
+		columns, rows, kittyProtocolActive: false,
 		write() {}, start() {}, stop() {}, hideCursor() {}, showCursor() {},
 	};
 	const tui = new TuiAltScreen(terminal, false, undefined, { copyOnSelect: false });
@@ -560,29 +547,103 @@ test("fullscreen mouse press and drag scroll the right scrollbar independently",
 		{ component: transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
 		{ component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
 	]));
-	const messages = Array.from({ length: 40 }, (_, index) => entry(String(index + 1), user(`Message ${index + 1}`)));
 	const layout = new TranscriptDigestLayout(tui, theme, new ConversationPane(session(messages), theme));
 	assert.equal(layout.enable(), "enabled");
 	tui.start();
+	tui.renderNow();
+	const side = tui.layoutRoot.children[0].children[1].children[1];
+	const screen = () => tui.getScreenLines().map(stripTerminalSequences);
+	const headerHeight = () => screen().length - 1 - side.viewportHeight; // the dock is one row
+	const close = () => {
+		layout.disable();
+		tui.stop({ preserveScreen: true });
+	};
+	return { terminal, tui, layout, transcript, side, screen, headerHeight, close };
+}
+
+const manyMessages = () => Array.from({ length: 40 }, (_, index) => entry(String(index + 1), user(`Message ${index + 1}`)));
+
+test("the right pane paints its divider and scrollbar into the frame", () => {
+	const { terminal, tui, layout, side, screen, headerHeight, close } = fullscreenSplit(manyMessages());
 	try {
+		const conversationRows = screen().slice(headerHeight(), headerHeight() + side.viewportHeight);
+		assert(screen().slice(0, -1).every((line) => line[40] === "│"), "the panes share the available columns equally");
+		assert(screen().slice(0, -1).every((line) => visibleWidth(line) === 81));
+		assert(screen()[0].includes("Transcript Digest"));
+		const bar = conversationRows.map((line) => line[80]).join("");
+		assert.match(bar, /^│+┃+$/, "following the latest message puts the thumb at the end of the track");
+		assert(conversationRows.some((line) => line.slice(41, 80).includes("Message 40")));
+
+		terminal.columns = 40;
+		layout.reconcile();
 		tui.renderNow();
-		const right = tui.layoutRoot.children[0].children[2];
-		const side = right.children[1];
+		assert(screen().slice(0, -1).every((line) => line[19] === "│"), "resize keeps a 50/50 split");
+		assert(screen()[0].includes("Transcript Digest"));
+
+		terminal.columns = MIN_SPLIT_COLUMNS - 1;
+		layout.reconcile();
+		tui.renderNow();
+		assert(!screen().some((line) => line.includes("Transcript Digest") || line.includes("│")), "a narrow terminal hides the right pane");
+		assert(screen().every((line) => visibleWidth(line) <= MIN_SPLIT_COLUMNS - 1));
+	} finally {
+		close();
+	}
+});
+
+test("a conversation shorter than the pane keeps the divider and a full-height thumb", () => {
+	const { side, screen, headerHeight, close } = fullscreenSplit([entry("1", user("hello"))]);
+	try {
+		assert(headerHeight() > 3, "the conversation is shorter than the pane");
+		const header = screen().findLastIndex((line) => line.includes("Thinking Blocks"));
+		const paneRows = screen().slice(header + 1, -1);
+		assert(paneRows.every((line) => line[40] === "│" && line[80] === "┃"));
+	} finally {
+		close();
+	}
+});
+
+test("selecting right pane text copies no divider or scrollbar glyphs", () => {
+	const { tui, side, headerHeight, close } = fullscreenSplit(manyMessages());
+	try {
+		const top = headerHeight() + side.viewportHeight - 3; // the last four conversation rows, 1-based
+		tui.handleTerminalInput(`\x1b[<0;42;${top}M`);
+		tui.handleTerminalInput(`\x1b[<32;81;${top + 3}M`);
+		tui.handleTerminalInput(`\x1b[<0;81;${top + 3}m`);
+		const text = tui.getActiveSelectionText();
+		assert(text?.includes("Message 40"), "the selection covers conversation text");
+		assert(!/[│┃█]/.test(text), "the selection excludes painted glyphs");
+	} finally {
+		close();
+	}
+});
+
+test("fullscreen mouse press and drag scroll the right scrollbar independently", () => {
+	const { terminal, tui, transcript, side, screen, headerHeight, close } = fullscreenSplit(manyMessages());
+	try {
 		const atEnd = side.scrollTop;
 		assert(atEnd > 0, "conversation exceeds its viewport");
 		const x = terminal.columns;
-		const thumbY = 1 + side.viewportHeight; // the title row precedes the last scrollbar row
+		const thumbY = headerHeight() + side.viewportHeight; // 1-based row of the last scrollbar cell
 		tui.handleTerminalInput(`\x1b[<0;${x};${thumbY}M`); // press the scrollbar thumb
+		tui.renderNow();
+		assert.equal(screen()[thumbY - 1][x - 1], "█", "a held thumb is highlighted");
 		tui.handleTerminalInput(`\x1b[<32;${x};4M`); // drag while holding the primary button
 		assert(side.scrollTop < atEnd, "drag moves the right pane up");
 		const afterDragUp = side.scrollTop;
 		tui.handleTerminalInput(`\x1b[<32;${x};${thumbY}M`);
 		assert(side.scrollTop > afterDragUp, "drag moves the right pane down");
 		tui.handleTerminalInput(`\x1b[<0;${x};${thumbY}m`); // release
+		tui.renderNow();
+		assert.equal(screen()[thumbY - 1][x - 1], "┃", "release restores the thumb");
 		assert.equal(transcript.scrollTop, 0, "the left transcript is not scrolled");
+		assert.equal(tui.hasActiveSelection(), false, "dragging the scrollbar selects no text");
+
+		const trackTop = headerHeight() + 1;
+		tui.handleTerminalInput(`\x1b[<0;${x};${trackTop}M`); // press the track above the thumb
+		tui.handleTerminalInput(`\x1b[<0;${x};${trackTop}m`);
+		assert.equal(side.scrollTop, 0, "pressing the track's top jumps to the start");
 	} finally {
-		layout.disable();
-		tui.stop({ preserveScreen: true });
+		close();
 	}
 });
 

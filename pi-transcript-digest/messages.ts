@@ -270,13 +270,21 @@ function isMessageItem(item: ConversationItem): item is ConversationMessageItem 
 	return item.role === "user" || item.role === "assistant";
 }
 
+/**
+ * Rows have two blank columns on each side. The layout paints the divider and
+ * scrollbar over the outer column of each pair, so rows must begin and end
+ * with a literal space.
+ */
+const ROW_GUTTER = 2;
+
 function paneRow(text: string, width: number): string {
-	return width < 3 ? " ".repeat(width) : ` ${truncateToWidth(text, width - 2, "", true)} `;
+	const gutter = " ".repeat(ROW_GUTTER);
+	return width <= ROW_GUTTER * 2 ? " ".repeat(width) : `${gutter}${truncateToWidth(text, width - ROW_GUTTER * 2, "", true)}${gutter}`;
 }
 
 function renderItems(messages: readonly ConversationItem[], width: number, theme: Theme, hasPriorMessage = false): string[] {
 	const lines: string[] = [];
-	const contentWidth = Math.max(1, width - 2);
+	const contentWidth = Math.max(1, width - ROW_GUTTER * 2);
 	let hasMessage = hasPriorMessage;
 	for (let index = 0; index < messages.length; index++) {
 		const message = messages[index]!;

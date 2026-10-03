@@ -69,13 +69,14 @@ function profileAppend(args) {
 	}));
 }
 
-function profileScroll(args) {
-	const variant = args[0] ?? "split";
-	if (variant !== "split" && variant !== "baseline") throw new Error("scroll variant must be split or baseline");
-	const messageCount = positiveInteger(args[1], 2000, "messageCount");
-	const frames = positiveInteger(args[2], 500, "frames");
-	const columns = positiveInteger(args[3], 120, "columns");
-	const rows = positiveInteger(args[4], 40, "rows");
+function variantArgument(value) {
+	const variant = value ?? "split";
+	if (variant !== "split" && variant !== "baseline") throw new Error("variant must be split or baseline");
+	return variant;
+}
+
+/** Pi's fullscreen transcript and dock, split when variant is "split". */
+function openFullscreen(variant, messageCount, columns, rows) {
 	const entries = createEntries(messageCount);
 	const document = new Container();
 	for (const entry of entries) {
@@ -111,9 +112,23 @@ function profileScroll(args) {
 	const layout = new TranscriptDigestLayout(tui, theme, new ConversationPane(createSession(entries), theme));
 	if (variant === "split" && layout.enable() !== "enabled") throw new Error("could not enable split layout");
 	tui.start();
+	tui.renderNow();
+	const scroll = variant === "split" ? tui.layoutRoot.children[0].children[1].children[1] : transcript;
+	const close = () => {
+		layout.disable();
+		tui.stop({ preserveScreen: true });
+	};
+	return { tui, scroll, close };
+}
+
+function profileScroll(args) {
+	const variant = variantArgument(args[0]);
+	const messageCount = positiveInteger(args[1], 2000, "messageCount");
+	const frames = positiveInteger(args[2], 500, "frames");
+	const columns = positiveInteger(args[3], 120, "columns");
+	const rows = positiveInteger(args[4], 40, "rows");
+	const { tui, scroll, close } = openFullscreen(variant, messageCount, columns, rows);
 	try {
-		tui.renderNow();
-		const scroll = variant === "split" ? tui.layoutRoot.children[0].children[2].children[1] : transcript;
 		scroll.scrollToStart();
 		tui.renderNow();
 		const startedAt = performance.now();
@@ -133,12 +148,41 @@ function profileScroll(args) {
 			msPerFrame: elapsedMs / frames,
 		}));
 	} finally {
-		layout.disable();
-		tui.stop({ preserveScreen: true });
+		close();
+	}
+}
+
+/** Pointer motion over the right half, as terminals report it with all-motion mouse tracking. */
+function profileHover(args) {
+	const variant = variantArgument(args[0]);
+	const messageCount = positiveInteger(args[1], 2000, "messageCount");
+	const events = positiveInteger(args[2], 200, "events");
+	const columns = positiveInteger(args[3], 120, "columns");
+	const rows = positiveInteger(args[4], 40, "rows");
+	const { tui, close } = openFullscreen(variant, messageCount, columns, rows);
+	try {
+		const x = Math.floor(columns * 0.75);
+		const y = Math.floor(rows / 2);
+		const startedAt = performance.now();
+		for (let event = 0; event < events; event++) tui.handleTerminalInput(`\x1b[<35;${x + (event % 2)};${y}M`);
+		const elapsedMs = performance.now() - startedAt;
+		console.log(JSON.stringify({
+			scenario: "hover",
+			variant,
+			messageCount,
+			events,
+			columns,
+			rows,
+			elapsedMs,
+			msPerEvent: elapsedMs / events,
+		}));
+	} finally {
+		close();
 	}
 }
 
 const [scenario = "append", ...args] = process.argv.slice(2);
 if (scenario === "append") profileAppend(args);
 else if (scenario === "scroll") profileScroll(args);
-else throw new Error("scenario must be append or scroll");
+else if (scenario === "hover") profileHover(args);
+else throw new Error("scenario must be append, scroll, or hover");
