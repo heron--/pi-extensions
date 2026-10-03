@@ -33,16 +33,16 @@ first row is a Nerd Font icon, its display name, the tool's own summary (see
 [Call summaries](#call-summaries)), and the size of its output instead of the
 output itself. A call with an input — a script, a file body, a prompt: its
 largest multi-line or long string argument — measures that first, before a
-` · `. Arguments the summary and input do not cover go on a second row:
+` · `. An edit shows its changed lines instead, `+added -removed` in the
+theme's diff colors:
 
 ```text
 ╭  Ran 4 tools ──────────────────────────────────────────────────────────╮
 │  Read File     path: lib/box.ts:10-29  12 lines, 133 B                │
 │  Search Files  pattern: /TODO/ · path: src  2 lines, 31 B             │
 │  Run Command   python3 - · heredoc script  42 lines, 379 B · 1 line, 2 B │
-│   timeout: 120                                                          │
+│  Edit File     path: lib/box.ts  +12 -3                               │
 │  MCP Gateway   linear · list_issue_statuses  1 line, 571 B            │
-│   args: {"team":"DevinsBots"}                                           │
 │   alt+o to expand · ctrl+o to expand all                                │
 ╰─────────────────────────────────────────────────────────────────────────╯
 ```
@@ -52,7 +52,8 @@ green; the summary's prose and keys use `group.summaryPlain`/`group.summaryKey`
 (`#57a174`, a subdued green), and its values keep their usual tint. The input
 size uses the argument descriptors' measure/unit tints; the output size is
 muted. Icons come from `TOOL_ICONS` in `rendering.ts`; tools without one get
-the wrench. Expanding a call shows only its output.
+the wrench. Expanding a call shows the arguments its row does not (`timeout:
+120`, MCP's `args:`), then its output; an expanded edit shows its diff.
 
 Sizes count raw output lines and bytes, not wrapped rows. Any assistant text or
 thinking between two calls starts a new box; an empty tool-only assistant turn

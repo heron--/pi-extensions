@@ -138,6 +138,10 @@ export const TOOL_OUTPUT_COLORS = {
 		summaryKey: "#57a174",
 		/** The output size after the summary: "12 lines, 3.4 KB", "running…". */
 		size: "muted",
+		/** An edit's `+added` line count, in place of its output size. */
+		added: "toolDiffAdded",
+		/** An edit's `-removed` line count. */
+		removed: "toolDiffRemoved",
 		/** Name and size of a failed call. */
 		failed: "error",
 		/** Key names in the expand hint under the most recent call. */

@@ -15,8 +15,8 @@
  * expand-last shortcut all toggle the same state.
  */
 
-import { keyText, type Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { keyText, renderDiff, type Theme } from "@earendil-works/pi-coding-agent";
+import { Text, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { CALL_LIMITS, compactArguments } from "./arguments.ts";
 import { paintArgumentLine, paintMeasure, paintSummary } from "./call-rendering.ts";
 import { paint, TOOL_OUTPUT_COLORS } from "./colors.ts";
@@ -245,10 +245,48 @@ function memberArguments(member: GroupMember): string {
 }
 
 /**
- * One call, up to two rows:
+ * An edit's change counts: from the diff in its result once it has one,
+ * otherwise from the edits it asks for. Every other tool has none.
+ */
+export function editChanges(member: Pick<GroupMember, "toolName" | "args" | "result">): { added: number; removed: number } | undefined {
+	if (member.toolName !== "edit") return undefined;
+	const diff = record(member.result?.details)?.diff;
+	if (typeof diff === "string") {
+		let added = 0;
+		let removed = 0;
+		for (const line of diff.split("\n")) {
+			if (line.startsWith("+")) added++;
+			else if (line.startsWith("-")) removed++;
+		}
+		return { added, removed };
+	}
+	const args = record(member.args);
+	const edits = Array.isArray(args?.edits) ? args.edits : args ? [args] : [];
+	const lines = (text: unknown) => (typeof text === "string" && text ? text.split("\n").length : 0);
+	let added = 0;
+	let removed = 0;
+	for (const edit of edits) {
+		added += lines(record(edit)?.newText);
+		removed += lines(record(edit)?.oldText);
+	}
+	return added || removed ? { added, removed } : undefined;
+}
+
+function changeText({ added, removed }: { added: number; removed: number }): { plain: string; painted: (theme: Theme) => string } {
+	const plus = `+${added.toLocaleString("en-US")}`;
+	const minus = `-${removed.toLocaleString("en-US")}`;
+	return {
+		plain: `${plus} ${minus}`,
+		painted: (theme) =>
+			`${paint(theme, TOOL_OUTPUT_COLORS.group.added, plus)} ${paint(theme, TOOL_OUTPUT_COLORS.group.removed, minus)}`,
+	};
+}
+
+/**
+ * One call, one row — plus, when expanded, its leftover arguments:
  *
  *   icon name  summary  [input size · ]output size
- *   key: value · key: value      (arguments the summary does not show)
+ *   key: value · key: value      (expanded only: arguments the summary does not show)
  *
  * `nameWidth` pads every name in the group to one width so the summaries form
  * a column. The summary yields width first; the sizes are kept whole.
@@ -258,12 +296,18 @@ function toolRows(member: GroupMember, width: number, nameWidth: number, theme: 
 	const { name: nameTone, size: sizeTone, failed: failedTone, summaryPlain, summaryKey } = TOOL_OUTPUT_COLORS.group;
 	const head = memberHead(member);
 	const padded = head + " ".repeat(Math.max(0, nameWidth - visibleWidth(head)));
-	const input = memberInput(member);
+	// An edit shows what it changed, +added -removed, instead of an input and output size.
+	const changes = editChanges(member);
+	const change = changes && !failed ? changeText(changes) : undefined;
+	const input = change ? undefined : memberInput(member);
 	const meta = memberMeta(member);
-	const sizes =
-		(input ? `${paintMeasure(input.size, theme)}${paint(theme, sizeTone, DOT)}` : "") +
-		paint(theme, failed ? failedTone : sizeTone, meta);
-	const sizesWidth = (input ? visibleWidth(input.size) + DOT.length : 0) + visibleWidth(meta);
+	const sizes = change
+		? change.painted(theme)
+		: (input ? `${paintMeasure(input.size, theme)}${paint(theme, sizeTone, DOT)}` : "") +
+			paint(theme, failed ? failedTone : sizeTone, meta);
+	const sizesWidth = change
+		? visibleWidth(change.plain)
+		: (input ? visibleWidth(input.size) + DOT.length : 0) + visibleWidth(meta);
 	const room = width - visibleWidth(padded) - GAP.length * 2 - sizesWidth;
 	const summary = memberSummary(member).text;
 	const shown = room >= 4 && summary ? truncateToWidth(summary, room, "…") : "";
@@ -274,13 +318,30 @@ function toolRows(member: GroupMember, width: number, nameWidth: number, theme: 
 		sizes,
 	].join(GAP);
 	const rows = [truncateToWidth(first, width, "…")];
-	const rest = memberArguments(member);
+	// Leftover arguments only show expanded, above the output. An edit's
+	// arguments are the changes themselves, which its expanded diff shows.
+	const rest = member.expanded && !changes ? memberArguments(member) : "";
 	if (rest) rows.push(INDENT + truncateToWidth(paintArgumentLine(rest, theme), Math.max(1, width - INDENT.length), "…"));
 	return rows;
 }
 
-/** The call's output, unframed: what its own result renderer drew, without its arguments. */
+const diffCache = new WeakMap<GroupMember, { diff: string; component: Component }>();
+
+/**
+ * The call's output, unframed: what its own result renderer drew, without its
+ * arguments. An edit's diff lives in pi's call block (beside an `edit <path>`
+ * header the row already says), so it is drawn here from the result instead.
+ */
 function expandedComponents(member: GroupMember): Component[] {
+	const diff = record(member.result?.details)?.diff;
+	if (member.toolName === "edit" && typeof diff === "string" && !member.result?.isError) {
+		let cached = diffCache.get(member);
+		if (cached?.diff !== diff) {
+			cached = { diff, component: new Text(renderDiff(diff), 0, 0) };
+			diffCache.set(member, cached);
+		}
+		return [cached.component];
+	}
 	const result = boxInner(member.resultRendererComponent) ?? member.resultRendererComponent;
 	return result ? [result] : [];
 }

@@ -46,9 +46,10 @@ def seed(cwd):
               "provider": "openai", "model": "gpt-4o", "timestamp": 0,
               "stopReason": "toolUse", "usage": USAGE})
 
-    def result(call_id, name, text):
+    def result(call_id, name, text, details=None):
         push({"role": "toolResult", "toolCallId": call_id, "toolName": name,
-              "content": [{"type": "text", "text": text}], "isError": False, "timestamp": 0})
+              "content": [{"type": "text", "text": text}], "isError": False, "timestamp": 0,
+              **({"details": details} if details else {})})
 
     push({"role": "user", "content": "Grouped tool-call fixture", "timestamp": 0})
     calls = [("c1", "read", {"path": "lib/box.ts"}, "\n".join(f"READ_OUT_{i}" for i in range(12))),
@@ -57,6 +58,11 @@ def seed(cwd):
     assistant([{"type": "toolCall", "id": cid, "name": name, "arguments": args} for cid, name, args, _ in calls])
     for cid, name, _, text in calls:
         result(cid, name, text)
+    assistant([{"type": "text", "text": "EDIT_TEXT"},
+               {"type": "toolCall", "id": "e1", "name": "edit", "arguments": {
+                   "path": "lib/box.ts", "edits": [{"oldText": "const A = 1;", "newText": "const A = 2;\nconst B = 3;"}]}}])
+    result("e1", "edit", "Successfully replaced 1 block(s) in lib/box.ts.",
+           {"diff": " 1 // top\n-2 const A = 1;\n+2 EDIT_ADDED_A\n+3 EDIT_ADDED_B", "firstChangedLine": 2})
     assistant([{"type": "text", "text": "BETWEEN_TEXT"},
                {"type": "toolCall", "id": "c4", "name": "bg_status", "arguments": {"taskId": "job-1"}}])
     result("c4", "bg_status", "BG_OUT running")
@@ -135,6 +141,16 @@ export default function(pi) {
             assert "Ran 1 tool" in collapsed, collapsed
             assert collapsed.count("╭") >= 2, collapsed
             assert "12 lines" in collapsed, collapsed
+            # An edit shows +added -removed in diff colors, not sizes or its arguments.
+            assert "+2 -1" in collapsed, collapsed
+            assert "edits:" not in collapsed and "EDIT_ADDED" not in collapsed, collapsed
+            def fg_at(needle):
+                for row, line in enumerate(screen.display):
+                    col = line.find(needle)
+                    if col >= 0:
+                        return screen.buffer[row][col].fg
+                raise AssertionError(needle)
+            assert fg_at("+2") != fg_at("-1"), "added and removed have their own colors"
             assert "UNDECORATED" not in collapsed, collapsed
             assert not any(out in collapsed for out in outputs), collapsed
             assert collapsed.count("ctrl+o") == 1, collapsed

@@ -56,7 +56,9 @@ void (async () => {
 	const screen = (width = 100) => piTui.stripTerminalSequences(chat.render(width).join("\n"));
 	const addTool = (name, id, args, output, isError = false) => {
 		const component = new codingAgent.ToolExecutionComponent(
-			name, id, args, { showImages: false }, tools.get(name), ui, process.cwd(),
+			name, id, args, { showImages: false },
+			tools.get(name) ?? (name === "edit" ? codingAgent.createEditToolDefinition(process.cwd()) : undefined),
+			ui, process.cwd(),
 		);
 		chat.addChild(component);
 		component.setArgsComplete();
@@ -146,19 +148,41 @@ void (async () => {
 	pending.updateResult({ content: [{ type: "text", text: "boom" }], details: {}, isError: true });
 	assert.match(screen(), /failed · 1 line, 4 B/);
 
-	// A call with an input measures it before the output; the rest of its arguments get a row.
+	// A call with an input measures it before the output; the rest of its arguments show only expanded.
 	chat.addChild(new piTui.Text("more prose", 0, 0));
 	const script = `python3 - <<'PY'\n${"print(1)\n".repeat(40)}PY`;
 	const scripted = addTool("bash", "b2", { command: script, timeout: 120 }, "SCRIPT_OUT");
 	let rows3 = rowsOf(screen());
 	const scriptRow = at(screen(), "heredoc");
 	assert.match(rows3[scriptRow], /42 lines, 379 B · 1 line, 10 B\s*$/);
-	assert.match(rows3[scriptRow + 1], /^\s+timeout: 120\s*$/);
+	assert.doesNotMatch(screen(), /timeout/, "leftover arguments stay hidden while collapsed");
 	scripted.setExpanded(true);
 	rows3 = rowsOf(screen());
-	assert.match(rows3[scriptRow + 2], /SCRIPT_OUT/, "expanded shows the output");
+	assert.match(rows3[scriptRow + 1], /^\s+timeout: 120\s*$/, "expanded shows leftover arguments first");
+	assert.match(rows3[scriptRow + 2], /SCRIPT_OUT/, "then the output");
 	assert.equal(rows3.filter((row) => row.includes("timeout")).length, 1, "expanded does not repeat the arguments");
 	assert.doesNotMatch(screen(), /print\(1\)/, "expanded does not show the input body");
+
+	// An edit shows +added -removed instead of sizes, and no argument row.
+	chat.addChild(new piTui.Text("edit prose", 0, 0));
+	const diff = [" 1 // top", "-2 const A = 1;", "+2 const A = 2;", "+3 const B = 3;"].join("\n");
+	const edited = addTool("edit", "e1", { path: "lib/box.ts", edits: [{ oldText: "const A = 1;", newText: "const A = 2;\nconst B = 3;" }] });
+	edited.updateResult({ content: [{ type: "text", text: "Successfully replaced 1 block(s)." }], details: { diff } });
+	const pendingEdit = addTool("edit", "e2", { path: "big.ts", edits: [{ oldText: "a\nb", newText: "x\n".repeat(1200) }] });
+	let editRows = rowsOf(screen());
+	const editRow = at(screen(), "Edit File");
+	assert.match(editRows[editRow], /Edit File\s+path: lib\/box\.ts  \+2 -1\s*$/);
+	assert.match(editRows[editRow + 1], /Edit File\s+path: big\.ts  \+1,201 -2\s*$/, "pending edits count from the arguments");
+	assert.doesNotMatch(screen(), /edits:|Successfully replaced/);
+	assert.equal(group.editChanges({ toolName: "read", args: {} }), undefined);
+	edited.setExpanded(true);
+	editRows = rowsOf(screen());
+	assert.match(editRows[editRow + 1], /1 \/\/ top/, "expanded shows the diff");
+	assert.match(editRows[editRow + 2], /const A = 1;/);
+	assert.match(editRows[editRow + 3], /const A = 2;/);
+	assert.doesNotMatch(screen(), /edit lib\/box\.ts/, "without pi's own edit header");
+	edited.setExpanded(false);
+	void pendingEdit;
 
 	// Never wider than the terminal, at any width.
 	bash.setExpanded(true);
