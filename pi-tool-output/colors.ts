@@ -119,8 +119,14 @@ export const TOOL_OUTPUT_COLORS = {
 
 	/** The grouped layout's per-call rows. */
 	group: {
-		/** The tool's display name at the head of its row (drawn bold). */
+		/** The tool's icon and display name at the head of its first row (drawn bold). */
 		name: "success",
+		/**
+		 * The summary row's prose and field keys — a command sketch, `pattern:` —
+		 * set apart from the green name above it. Field values keep `call.summaryValue`.
+		 */
+		summaryPlain: "text",
+		summaryKey: "text",
 		/** The collapsed size line: "12 lines, 3.4 KB", "running…". */
 		size: "muted",
 		/** Name and size of a failed call. */

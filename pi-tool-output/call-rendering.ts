@@ -81,9 +81,16 @@ function paintArguments(preview: ArgumentPreview, theme: Theme, expanded: boolea
 		.join("\n");
 }
 
-export function paintSummary(text: string, theme: Theme): string {
-	const { summaryPlain, summaryKey, summaryValue } = TOOL_OUTPUT_COLORS.call;
-	return paintKeyValueLine(text, theme, { plain: summaryPlain, key: summaryKey, value: summaryValue });
+export function paintSummary(
+	text: string,
+	theme: Theme,
+	colors: KeyValueColors = {
+		plain: TOOL_OUTPUT_COLORS.call.summaryPlain,
+		key: TOOL_OUTPUT_COLORS.call.summaryKey,
+		value: TOOL_OUTPUT_COLORS.call.summaryValue,
+	},
+): string {
+	return paintKeyValueLine(text, theme, colors);
 }
 
 /**

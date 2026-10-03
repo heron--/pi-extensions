@@ -29,17 +29,29 @@ user keybinding override rather than hard-coding the key label.
 
 Neighbouring tool calls share one house box. The top of the box always reads
 `Ran N tools` (`Running N tools` while any call is still going), and each call
-gets one row — its name, its summary, and the size of its output instead of the
-output itself:
+gets three rows: a Nerd Font icon and its display name, the tool's own summary
+(see [Call summaries](#call-summaries)), and the size of its output instead of
+the output itself. The summary and size line up under the name:
 
 ```text
-╭  Ran 3 tools ─────────────────────────────────────────────╮
-│ Read File  path: lib/box.ts  12 lines, 133 B               │
-│ Search Files  pattern: /TODO/ · path: src  2 lines, 31 B   │
-│ Run Command  npm test  1 line, 11 B                        │
-│ alt+o to expand · ctrl+o to expand all                     │
-╰────────────────────────────────────────────────────────────╯
+╭  Ran 3 tools ──────────────────────╮
+│  Read File                        │
+│   path: lib/box.ts:10-29            │
+│   12 lines, 133 B                   │
+│  Search Files                     │
+│   pattern: /TODO/ · path: src       │
+│   2 lines, 31 B                     │
+│  Run Command                      │
+│   npm test                          │
+│   1 line, 11 B                      │
+│   alt+o to expand · ctrl+o to expand all │
+╰─────────────────────────────────────╯
 ```
+
+The name keeps the box's green. The summary's prose and keys use
+`group.summaryPlain`/`group.summaryKey` (the theme's `text` for now), and its
+values keep their usual tint. Icons come from `TOOL_ICONS` in `rendering.ts`;
+tools without one get the wrench.
 
 Sizes count raw output lines and bytes, not wrapped rows. Any assistant text or
 thinking between two calls starts a new box; an empty tool-only assistant turn

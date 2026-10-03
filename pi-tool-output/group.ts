@@ -20,7 +20,7 @@ import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/p
 import { compactArguments } from "./arguments.ts";
 import { callArgumentsComponent, paintSummary } from "./call-rendering.ts";
 import { paint, TOOL_OUTPUT_COLORS } from "./colors.ts";
-import { displayToolName, extractTextOutput, pluralize } from "./rendering.ts";
+import { displayToolName, extractTextOutput, pluralize, toolIcon } from "./rendering.ts";
 import { summarizeToolCall } from "./summaries.ts";
 import { boxContentWidth, boxInner, boxRows, ICON_TOOL } from "./tool-box.ts";
 
@@ -195,28 +195,31 @@ function memberName(member: GroupMember): string {
 	return displayToolName(member.toolName, typeof label === "string" ? label : undefined);
 }
 
-const GAP = "  ";
+/** Rows under the name start where the name does: one icon cell and a space in. */
+const INDENT = "  ";
 
-/** Whether the member's last drawn row showed its whole summary. */
+/** Whether the member's last drawn summary row showed its whole summary. */
 const summaryFits = new WeakMap<GroupMember, boolean>();
 
-function toolRow(member: GroupMember, width: number, theme: Theme): string {
+/**
+ * One call, three rows: icon and name; the tool's own summary under the name;
+ * then the size of its output. Rows two and three line up with the name.
+ */
+function toolRows(member: GroupMember, width: number, theme: Theme): string[] {
 	const failed = member.result?.isError === true && !member.isPartial;
-	const name = memberName(member);
-	const meta = memberMeta(member);
-	const { name: nameTone, size: sizeTone, failed: failedTone } = TOOL_OUTPUT_COLORS.group;
-	const nameColor = failed ? failedTone : nameTone;
-	const metaColor = failed ? failedTone : sizeTone;
-	const room = width - visibleWidth(name) - GAP.length * 2 - visibleWidth(meta);
+	const { name: nameTone, size: sizeTone, failed: failedTone, summaryPlain, summaryKey } = TOOL_OUTPUT_COLORS.group;
+	const inner = Math.max(1, width - INDENT.length);
+	const head = `${toolIcon(member.toolName)} ${memberName(member)}`;
+	const rows = [truncateToWidth(theme.bold(paint(theme, failed ? failedTone : nameTone, head)), width, "…")];
 	const summary = memberSummary(member).text;
-	const shown = room >= 4 && summary ? truncateToWidth(summary, room, "…") : "";
+	const shown = summary ? truncateToWidth(summary, inner, "…") : "";
 	summaryFits.set(member, shown === summary);
-	const row = [
-		theme.bold(paint(theme, nameColor, name)),
-		...(shown ? [theme.bold(paintSummary(shown, theme))] : []),
-		paint(theme, metaColor, meta),
-	].join(GAP);
-	return truncateToWidth(row, width, "…");
+	if (shown) {
+		const colors = { plain: summaryPlain, key: summaryKey, value: TOOL_OUTPUT_COLORS.call.summaryValue };
+		rows.push(INDENT + theme.bold(paintSummary(shown, theme, colors)));
+	}
+	rows.push(INDENT + truncateToWidth(paint(theme, failed ? failedTone : sizeTone, memberMeta(member)), inner, "…"));
+	return rows;
 }
 
 /** The arguments the row's summary did not already show in full. */
@@ -252,8 +255,6 @@ function expandedComponents(member: GroupMember, theme: Theme): Component[] {
 		(component): component is Component => component !== undefined,
 	);
 }
-
-const INDENT = "  ";
 
 function expandedRows(member: GroupMember, width: number, theme: Theme): string[] {
 	const inner = Math.max(1, width - INDENT.length);
@@ -305,12 +306,14 @@ export function renderGroup(members: readonly GroupMember[], width: number, opti
 	const bodyOwners: GroupMember[] = [];
 	const images: string[] = [];
 	for (const member of members) {
-		const rows = [toolRow(member, contentWidth, theme)];
+		const rows = toolRows(member, contentWidth, theme);
 		if (member.expanded) {
 			rows.push(...expandedRows(member, contentWidth, theme));
 			for (const image of member.imageComponents ?? []) images.push(...image.render(width));
 		}
-		if (member === options.lastMember) rows.push(hintRow(member, options.expandLastKey, contentWidth, theme));
+		if (member === options.lastMember) {
+			rows.push(INDENT + hintRow(member, options.expandLastKey, Math.max(1, contentWidth - INDENT.length), theme));
+		}
 		body.push(...rows);
 		bodyOwners.push(...rows.map(() => member));
 	}
