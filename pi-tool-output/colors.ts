@@ -13,6 +13,7 @@
  */
 
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
+import { foregroundAnsi, parseColor } from "@earendil-works/pi-tui";
 
 /**
  * Color names that only project-local themes define. `Theme.fg` **throws** on
@@ -23,8 +24,15 @@ import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
  */
 export type ProjectThemeColor = "emphasisText";
 
-/** A theme color name: Pi's standard palette, or a project-local addition. */
-export type PaletteColor = ThemeColor | ProjectThemeColor;
+/**
+ * A literal `#rrggbb`, for a tone no theme names. It is rendered in the
+ * theme's color mode (truecolor, or the nearest 256-color index) and does not
+ * follow theme switches, so prefer a theme name where one fits.
+ */
+export type HexColor = `#${string}`;
+
+/** A theme color name: Pi's standard palette, a project-local addition, or a literal hex. */
+export type PaletteColor = ThemeColor | ProjectThemeColor | HexColor;
 
 /**
  * One color, or a preference chain tried left to right.
@@ -122,12 +130,13 @@ export const TOOL_OUTPUT_COLORS = {
 		/** The tool's icon and display name at the head of its first row (drawn bold). */
 		name: "success",
 		/**
-		 * The summary row's prose and field keys — a command sketch, `pattern:` —
-		 * set apart from the green name above it. Field values keep `call.summaryValue`.
+		 * The summary's prose and field keys beside the name — a command sketch,
+		 * `pattern:` — a subdued green under the name's. Field values keep
+		 * `call.summaryValue`.
 		 */
-		summaryPlain: "text",
-		summaryKey: "text",
-		/** The collapsed size line: "12 lines, 3.4 KB", "running…". */
+		summaryPlain: "#57a174",
+		summaryKey: "#57a174",
+		/** The output size after the summary: "12 lines, 3.4 KB", "running…". */
 		size: "muted",
 		/** Name and size of a failed call. */
 		failed: "error",
@@ -154,6 +163,14 @@ function candidates(spec: ColorSpec): readonly PaletteColor[] {
  */
 export function paint(theme: Theme, spec: ColorSpec, text: string): string {
 	for (const color of candidates(spec)) {
+		if (color.startsWith("#")) {
+			try {
+				const mode = typeof theme.getColorMode === "function" ? theme.getColorMode() : "truecolor";
+				return `${foregroundAnsi(parseColor(color), mode)}${text}\x1b[39m`;
+			} catch {
+				continue;
+			}
+		}
 		try {
 			return theme.fg(color as ThemeColor, text);
 		} catch {

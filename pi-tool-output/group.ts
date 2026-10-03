@@ -17,8 +17,8 @@
 
 import { keyText, type Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
-import { compactArguments } from "./arguments.ts";
-import { callArgumentsComponent, paintSummary } from "./call-rendering.ts";
+import { CALL_LIMITS, compactArguments } from "./arguments.ts";
+import { paintArgumentLine, paintMeasure, paintSummary } from "./call-rendering.ts";
 import { paint, TOOL_OUTPUT_COLORS } from "./colors.ts";
 import { displayToolName, extractTextOutput, pluralize, toolIcon } from "./rendering.ts";
 import { summarizeToolCall } from "./summaries.ts";
@@ -195,82 +195,100 @@ function memberName(member: GroupMember): string {
 	return displayToolName(member.toolName, typeof label === "string" ? label : undefined);
 }
 
-/** Rows under the name start where the name does: one icon cell and a space in. */
+/** The argument row starts where the name does: one icon cell and a space in. */
 const INDENT = "  ";
-
-/** Whether the member's last drawn summary row showed its whole summary. */
-const summaryFits = new WeakMap<GroupMember, boolean>();
+const GAP = "  ";
+const DOT = " · ";
 
 function memberHead(member: GroupMember): string {
 	return `${toolIcon(member.toolName)} ${memberName(member)}`;
 }
 
-const GAP = "  ";
+function record(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
+}
 
 /**
- * One call, two rows: icon, name, and the size of its output, then the tool's
- * own summary lined up under the name. `nameWidth` pads every name in the
- * group to one width so the sizes form a column.
+ * The call's input, when it carries one: its largest multi-line or long string
+ * argument — a script, a file body, a prompt. It is measured on the first row
+ * beside the output size instead of appearing among the arguments.
+ */
+function memberInput(member: GroupMember): { field: string; size: string } | undefined {
+	const args = record(member.args);
+	if (!args) return undefined;
+	let best: { field: string; value: string } | undefined;
+	for (const [field, value] of Object.entries(args)) {
+		if (typeof value !== "string" || (value.length <= CALL_LIMITS.inlineChars && !/[\r\n]/.test(value))) continue;
+		if (!best || value.length > best.value.length) best = { field, value };
+	}
+	return best && { field: best.field, size: sizeText(outputSize(best.value)) };
+}
+
+const argumentLineCache = new WeakMap<GroupMember, { args: unknown; text: string }>();
+
+/** The arguments the summary and input did not cover, as one `key: value · …` row. */
+function memberArguments(member: GroupMember): string {
+	const cached = argumentLineCache.get(member);
+	if (cached && cached.args === member.args) return cached.text;
+	const input = memberInput(member);
+	const args = record(member.args);
+	const rest = args && input ? Object.fromEntries(Object.entries(args).filter(([field]) => field !== input.field)) : member.args;
+	const restRecord = record(rest);
+	const text =
+		restRecord && Object.keys(restRecord).length === 0
+			? ""
+			: compactArguments(rest, memberSummary(member).fields).text.replace(/^\(no arguments\)$/, "");
+	argumentLineCache.set(member, { args: member.args, text });
+	return text;
+}
+
+/**
+ * One call, up to two rows:
+ *
+ *   icon name  summary  [input size · ]output size
+ *   key: value · key: value      (arguments the summary does not show)
+ *
+ * `nameWidth` pads every name in the group to one width so the summaries form
+ * a column. The summary yields width first; the sizes are kept whole.
  */
 function toolRows(member: GroupMember, width: number, nameWidth: number, theme: Theme): string[] {
 	const failed = member.result?.isError === true && !member.isPartial;
 	const { name: nameTone, size: sizeTone, failed: failedTone, summaryPlain, summaryKey } = TOOL_OUTPUT_COLORS.group;
-	const inner = Math.max(1, width - INDENT.length);
 	const head = memberHead(member);
 	const padded = head + " ".repeat(Math.max(0, nameWidth - visibleWidth(head)));
-	const first =
-		theme.bold(paint(theme, failed ? failedTone : nameTone, padded)) +
-		GAP +
-		paint(theme, failed ? failedTone : sizeTone, memberMeta(member));
-	const rows = [truncateToWidth(first, width, "…")];
+	const input = memberInput(member);
+	const meta = memberMeta(member);
+	const sizes =
+		(input ? `${paintMeasure(input.size, theme)}${paint(theme, sizeTone, DOT)}` : "") +
+		paint(theme, failed ? failedTone : sizeTone, meta);
+	const sizesWidth = (input ? visibleWidth(input.size) + DOT.length : 0) + visibleWidth(meta);
+	const room = width - visibleWidth(padded) - GAP.length * 2 - sizesWidth;
 	const summary = memberSummary(member).text;
-	const shown = summary ? truncateToWidth(summary, inner, "…") : "";
-	summaryFits.set(member, shown === summary);
-	if (shown) {
-		const colors = { plain: summaryPlain, key: summaryKey, value: TOOL_OUTPUT_COLORS.call.summaryValue };
-		rows.push(INDENT + theme.bold(paintSummary(shown, theme, colors)));
-	}
+	const shown = room >= 4 && summary ? truncateToWidth(summary, room, "…") : "";
+	const colors = { plain: summaryPlain, key: summaryKey, value: TOOL_OUTPUT_COLORS.call.summaryValue };
+	const first = [
+		theme.bold(paint(theme, failed ? failedTone : nameTone, padded)),
+		...(shown ? [paintSummary(shown, theme, colors)] : []),
+		sizes,
+	].join(GAP);
+	const rows = [truncateToWidth(first, width, "…")];
+	const rest = memberArguments(member);
+	if (rest) rows.push(INDENT + truncateToWidth(paintArgumentLine(rest, theme), Math.max(1, width - INDENT.length), "…"));
 	return rows;
 }
 
-/** The arguments the row's summary did not already show in full. */
-function remainingArguments(member: GroupMember): unknown {
-	const summary = memberSummary(member);
-	const args = member.args;
-	if (summary.partial || summaryFits.get(member) === false || summary.fields.length === 0) return args;
-	if (typeof args !== "object" || args === null || Array.isArray(args)) return args;
-	const rest = { ...(args as Record<string, unknown>) };
-	for (const field of summary.fields) delete rest[field];
-	return Object.keys(rest).length > 0 ? rest : undefined;
-}
-
-const argumentsCache = new WeakMap<GroupMember, { args: unknown; shown: unknown; component: Component | undefined }>();
-
-/** The call's own content, unframed: arguments the row did not show, then the output its renderer drew. */
-function expandedComponents(member: GroupMember, theme: Theme): Component[] {
-	const resultInner = boxInner(member.resultRendererComponent);
-	if (boxInner(member.callRendererComponent) || resultInner) {
-		const shown = remainingArguments(member);
-		const cached = argumentsCache.get(member);
-		const component =
-			cached && cached.args === member.args && (cached.shown === undefined) === (shown === undefined)
-				? cached.component
-				: shown === undefined
-					? undefined
-					: callArgumentsComponent(member.toolName, shown, true, theme, { showSummary: false });
-		argumentsCache.set(member, { args: member.args, shown, component });
-		return [...(component ? [component] : []), ...(resultInner ? [resultInner] : [])];
-	}
-	// A builtin drawn by pi's (or another extension's) renderer: keep its rows as they are.
-	return [member.callRendererComponent, member.resultRendererComponent].filter(
-		(component): component is Component => component !== undefined,
-	);
+/** The call's output, unframed: what its own result renderer drew, without its arguments. */
+function expandedComponents(member: GroupMember): Component[] {
+	const result = boxInner(member.resultRendererComponent) ?? member.resultRendererComponent;
+	return result ? [result] : [];
 }
 
 function expandedRows(member: GroupMember, width: number, theme: Theme): string[] {
 	const inner = Math.max(1, width - INDENT.length);
 	const rows: string[] = [];
-	for (const component of expandedComponents(member, theme)) {
+	for (const component of expandedComponents(member)) {
 		try {
 			for (const row of component.render(inner)) rows.push(INDENT + truncateToWidth(row, inner, "…"));
 		} catch {
@@ -316,9 +334,9 @@ export function renderGroup(members: readonly GroupMember[], width: number, opti
 	const body: string[] = [];
 	const bodyOwners: GroupMember[] = [];
 	const images: string[] = [];
-	// Sizes line up in one column, unless the longest name would leave them no room.
+	// Summaries line up in one column, unless the longest name would crowd them out.
 	const longest = Math.max(...members.map((member) => visibleWidth(memberHead(member))));
-	const nameWidth = Math.min(longest, Math.max(0, contentWidth - GAP.length - "12 lines, 1.0 KB".length));
+	const nameWidth = Math.min(longest, Math.max(0, Math.floor(contentWidth / 3)));
 	for (const member of members) {
 		const rows = toolRows(member, contentWidth, nameWidth, theme);
 		if (member.expanded) {

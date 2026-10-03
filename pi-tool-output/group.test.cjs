@@ -76,24 +76,21 @@ void (async () => {
 	let text = screen();
 	assert.match(text, /Ran 3 tools/);
 	assert.equal(text.match(/╭/g)?.length, 1, "one box for the whole run");
-	// Two rows per call: icon, name and size, then the summary lined up under the name.
+	// First row: icon, name, summary, output size. The summary's fields are not repeated below.
 	const rowsOf = (screenText) => screenText.split("\n").map((line) => line.replace(/^│|│\s*$/g, ""));
 	const at = (screenText, needle) => rowsOf(screenText).findIndex((row) => row.includes(needle));
 	const textRows = rowsOf(text);
 	const readName = at(text, "Read File");
-	assert.match(textRows[readName], /Read File\s+12 lines, \d+ B\s*$/);
-	assert.match(textRows[readName + 1], /^\s+path: lib\/box\.ts:10-29\s*$/);
+	assert.match(textRows[readName], /Read File\s+path: lib\/box\.ts:10-29  12 lines, \d+ B\s*$/);
+	assert.match(textRows[readName + 1], /Search Files/, "no argument row: the summary covers path, offset and limit");
 	const nameColumn = textRows[readName].indexOf("Read File");
-	assert.equal(textRows[readName + 1].indexOf("path:"), nameColumn, "summary lines up with the name");
 	assert.notEqual(textRows[readName].slice(0, nameColumn).trim(), "", "an icon precedes the name");
-	assert.match(text, /a\.ts|TODO/);
 	const grepName = at(text, "Search Files");
-	assert.match(textRows[grepName + 1], /pattern: \/TODO\/ · path: src/);
-	assert.match(textRows[grepName], /2 lines, 25 B/);
+	assert.match(textRows[grepName], /Search Files\s+pattern: \/TODO\/ · path: src  2 lines, 25 B/);
 	assert.equal(
-		textRows[grepName].indexOf("2 lines"),
-		textRows[readName].indexOf("12 lines"),
-		"sizes form one column",
+		textRows[grepName].indexOf("pattern:"),
+		textRows[readName].indexOf("path:"),
+		"summaries form one column",
 	);
 	assert.doesNotMatch(text, /READ_LINE_0|BASH_OUTPUT/, "collapsed rows show no output");
 	assert.equal(text.match(/to expand all/g)?.length, 1, "only the most recent call carries the hint");
@@ -148,6 +145,20 @@ void (async () => {
 	assert.match(text, /assistant prose/);
 	pending.updateResult({ content: [{ type: "text", text: "boom" }], details: {}, isError: true });
 	assert.match(screen(), /failed · 1 line, 4 B/);
+
+	// A call with an input measures it before the output; the rest of its arguments get a row.
+	chat.addChild(new piTui.Text("more prose", 0, 0));
+	const script = `python3 - <<'PY'\n${"print(1)\n".repeat(40)}PY`;
+	const scripted = addTool("bash", "b2", { command: script, timeout: 120 }, "SCRIPT_OUT");
+	let rows3 = rowsOf(screen());
+	const scriptRow = at(screen(), "heredoc");
+	assert.match(rows3[scriptRow], /42 lines, 379 B · 1 line, 10 B\s*$/);
+	assert.match(rows3[scriptRow + 1], /^\s+timeout: 120\s*$/);
+	scripted.setExpanded(true);
+	rows3 = rowsOf(screen());
+	assert.match(rows3[scriptRow + 2], /SCRIPT_OUT/, "expanded shows the output");
+	assert.equal(rows3.filter((row) => row.includes("timeout")).length, 1, "expanded does not repeat the arguments");
+	assert.doesNotMatch(screen(), /print\(1\)/, "expanded does not show the input body");
 
 	// Never wider than the terminal, at any width.
 	bash.setExpanded(true);

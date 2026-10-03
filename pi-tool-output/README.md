@@ -28,28 +28,31 @@ user keybinding override rather than hard-coding the key label.
 ### Grouped layout (default)
 
 Neighbouring tool calls share one house box. The top of the box always reads
-`Ran N tools` (`Running N tools` while any call is still going), and each call
-gets two rows: a Nerd Font icon, its display name, and the size of its output
-instead of the output itself; then the tool's own summary (see
-[Call summaries](#call-summaries)) lined up under the name. Names are padded
-so the sizes form one column:
+`Ran N tools` (`Running N tools` while any call is still going). Each call's
+first row is a Nerd Font icon, its display name, the tool's own summary (see
+[Call summaries](#call-summaries)), and the size of its output instead of the
+output itself. A call with an input — a script, a file body, a prompt: its
+largest multi-line or long string argument — measures that first, before a
+` · `. Arguments the summary and input do not cover go on a second row:
 
 ```text
-╭  Ran 3 tools ──────────────────────╮
-│  Read File     12 lines, 133 B    │
-│   path: lib/box.ts:10-29            │
-│  Search Files  2 lines, 31 B      │
-│   pattern: /TODO/ · path: src       │
-│  Run Command   1 line, 11 B       │
-│   npm test                          │
-│   alt+o to expand · ctrl+o to expand all │
-╰─────────────────────────────────────╯
+╭  Ran 4 tools ──────────────────────────────────────────────────────────╮
+│  Read File     path: lib/box.ts:10-29  12 lines, 133 B                │
+│  Search Files  pattern: /TODO/ · path: src  2 lines, 31 B             │
+│  Run Command   python3 - · heredoc script  42 lines, 379 B · 1 line, 2 B │
+│   timeout: 120                                                          │
+│  MCP Gateway   linear · list_issue_statuses  1 line, 571 B            │
+│   args: {"team":"DevinsBots"}                                           │
+│   alt+o to expand · ctrl+o to expand all                                │
+╰─────────────────────────────────────────────────────────────────────────╯
 ```
 
-The name keeps the box's green. The summary's prose and keys use
-`group.summaryPlain`/`group.summaryKey` (the theme's `text` for now), and its
-values keep their usual tint. Icons come from `TOOL_ICONS` in `rendering.ts`;
-tools without one get the wrench.
+Names are padded so the summaries form one column. The name keeps the box's
+green; the summary's prose and keys use `group.summaryPlain`/`group.summaryKey`
+(`#57a174`, a subdued green), and its values keep their usual tint. The input
+size uses the argument descriptors' measure/unit tints; the output size is
+muted. Icons come from `TOOL_ICONS` in `rendering.ts`; tools without one get
+the wrench. Expanding a call shows only its output.
 
 Sizes count raw output lines and bytes, not wrapped rows. Any assistant text or
 thinking between two calls starts a new box; an empty tool-only assistant turn
@@ -66,8 +69,7 @@ Expansion is per call:
   collapses everything.
 - **Ctrl+O** (Pi's `app.tools.expand`) expands or collapses every call.
 
-Only the most recent call carries the key hint. An expanded call shows the
-arguments its summary row did not already show in full, then its output.
+Only the most recent call carries the key hint.
 
 Clicks need Pi's fullscreen TUI (the default `tuiMode`); in `regular` mode the
 terminal does not report the mouse, and the keys still work. Set `"layout":
