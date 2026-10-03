@@ -281,7 +281,9 @@ export function editChanges(member: Pick<GroupMember, "toolName" | "args" | "res
 	}
 	const args = record(member.args);
 	const edits = Array.isArray(args?.edits) ? args.edits : args ? [args] : [];
-	const lines = (text: unknown) => (typeof text === "string" && text ? text.split("\n").length : 0);
+	// A trailing newline ends the last line rather than starting another, as in the result's diff.
+	const lines = (text: unknown) =>
+		typeof text === "string" && text ? text.replace(/\n$/, "").split("\n").length : 0;
 	let added = 0;
 	let removed = 0;
 	for (const edit of edits) {

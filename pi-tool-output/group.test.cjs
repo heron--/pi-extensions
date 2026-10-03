@@ -177,9 +177,14 @@ void (async () => {
 	let editRows = rowsOf(screen());
 	const editRow = at(screen(), "Edit File");
 	assert.match(editRows[editRow], /Edit File\s+path: lib\/box\.ts  \+2 -1\s*$/);
-	assert.match(editRows[editRow + 1], /Edit File\s+path: big\.ts  \+1,201 -2\s*$/, "pending edits count from the arguments");
+	assert.match(editRows[editRow + 1], /Edit File\s+path: big\.ts  \+1,200 -2\s*$/, "pending edits count from the arguments");
 	assert.doesNotMatch(screen(), /edits:|Successfully replaced/);
 	assert.equal(group.editChanges({ toolName: "read", args: {} }), undefined);
+	assert.deepEqual(
+		group.editChanges({ toolName: "edit", args: { edits: [{ oldText: "a\n", newText: "b\n" }] } }),
+		{ added: 1, removed: 1 },
+		"a trailing newline is not an extra line",
+	);
 	edited.setExpanded(true);
 	editRows = rowsOf(screen());
 	assert.match(editRows[editRow + 1], /1 \/\/ top/, "expanded shows the diff");
