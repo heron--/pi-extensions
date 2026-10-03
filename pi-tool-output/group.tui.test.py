@@ -54,7 +54,7 @@ def seed(cwd):
     push({"role": "user", "content": "Grouped tool-call fixture", "timestamp": 0})
     calls = [("c1", "read", {"path": "lib/box.ts"}, "\n".join(f"READ_OUT_{i}" for i in range(12))),
              ("c2", "grep", {"pattern": "TODO", "path": "src"}, "GREP_OUT a.ts:1\nGREP_OUT b.ts:2"),
-             ("c3", "bash", {"command": "npm test"}, "BASH_OUT ok")]
+             ("c3", "bash", {"command": "python3 - <<'PY'\nprint('INPUT_MARKER')\n" + "pass\n" * 3 + "PY"}, "BASH_OUT ok")]
     assistant([{"type": "toolCall", "id": cid, "name": name, "arguments": args} for cid, name, args, _ in calls])
     for cid, name, _, text in calls:
         result(cid, name, text)
@@ -167,8 +167,9 @@ export default function(pi) {
             save("click", clicked)
             assert "BG_OUT" in clicked and "READ_OUT_0" not in clicked and "BASH_OUT" not in clicked, clicked
 
-            os.write(fd, b"\x0f")  # Ctrl+O: everything
-            receive_until(lambda t: "BASH_OUT" in t)
+            assert "INPUT_MARKER" not in collapsed, "the input body stays hidden while collapsed"
+            os.write(fd, b"\x0f")  # Ctrl+O: everything, inputs included
+            receive_until(lambda t: "BASH_OUT" in t and "INPUT_MARKER" in t)
             os.write(fd, b"\x0f")  # and back: individual expansions reset too
             reset = receive_until(lambda t: "BETWEEN_TEXT" in t and not any(out in t for out in outputs))
             save("ctrl-o-reset", reset)

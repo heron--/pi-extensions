@@ -53,7 +53,9 @@ green; the summary's prose and keys use `group.summaryPlain`/`group.summaryKey`
 size uses the argument descriptors' measure/unit tints; the output size is
 muted. Icons come from `TOOL_ICONS` in `rendering.ts`; tools without one get
 the wrench. Expanding a call shows the arguments its row does not (`timeout:
-120`, MCP's `args:`), then its output; an expanded edit shows its diff.
+120`, MCP's `args:`), then its input in full (the script or prompt the row
+only measures), a blank row, and its output. An expanded edit shows its diff;
+an expanded write does not repeat the file it wrote.
 
 Sizes count raw output lines and bytes, not wrapped rows. Any assistant text or
 thinking between two calls starts a new box; an empty tool-only assistant turn

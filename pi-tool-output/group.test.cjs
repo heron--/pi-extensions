@@ -57,7 +57,9 @@ void (async () => {
 	const addTool = (name, id, args, output, isError = false) => {
 		const component = new codingAgent.ToolExecutionComponent(
 			name, id, args, { showImages: false },
-			tools.get(name) ?? (name === "edit" ? codingAgent.createEditToolDefinition(process.cwd()) : undefined),
+			tools.get(name) ??
+				(name === "edit" ? codingAgent.createEditToolDefinition(process.cwd())
+					: name === "write" ? codingAgent.createWriteToolDefinition(process.cwd()) : undefined),
 			ui, process.cwd(),
 		);
 		chat.addChild(component);
@@ -159,9 +161,12 @@ void (async () => {
 	scripted.setExpanded(true);
 	rows3 = rowsOf(screen());
 	assert.match(rows3[scriptRow + 1], /^\s+timeout: 120\s*$/, "expanded shows leftover arguments first");
-	assert.match(rows3[scriptRow + 2], /SCRIPT_OUT/, "then the output");
+	assert.match(rows3[scriptRow + 2], /^\s+command: python3 - <<'PY'\s*$/, "then the input in full");
+	assert.equal(rows3.filter((row) => row.includes("print(1)")).length, 40);
+	const outputRow = rows3.findIndex((row) => row.includes("SCRIPT_OUT"));
+	assert.equal(rows3[outputRow - 1].trim(), "", "a blank row separates input from output");
+	assert.ok(outputRow > rows3.findIndex((row) => row.includes("print(1)")), "then the output");
 	assert.equal(rows3.filter((row) => row.includes("timeout")).length, 1, "expanded does not repeat the arguments");
-	assert.doesNotMatch(screen(), /print\(1\)/, "expanded does not show the input body");
 
 	// An edit shows +added -removed instead of sizes, and no argument row.
 	chat.addChild(new piTui.Text("edit prose", 0, 0));
@@ -181,8 +186,15 @@ void (async () => {
 	assert.match(editRows[editRow + 2], /const A = 1;/);
 	assert.match(editRows[editRow + 3], /const A = 2;/);
 	assert.doesNotMatch(screen(), /edit lib\/box\.ts/, "without pi's own edit header");
+	assert.doesNotMatch(screen(), /newText|oldText/, "an edit does not repeat its input");
 	edited.setExpanded(false);
 	void pendingEdit;
+	// A write's input is the file it wrote; expanding does not repeat it.
+	const written = addTool("write", "w1", { path: "notes.md", content: "WRITTEN_BODY\n".repeat(30) }, "Successfully wrote 390 bytes");
+	assert.match(screen(), /Write File\s+path: notes\.md  30 lines, 389 B · 1 line, 28 B/);
+	written.setExpanded(true);
+	assert.doesNotMatch(screen(), /WRITTEN_BODY/);
+	written.setExpanded(false);
 
 	// Never wider than the terminal, at any width.
 	bash.setExpanded(true);

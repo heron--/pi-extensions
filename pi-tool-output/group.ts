@@ -18,7 +18,7 @@
 import { keyText, renderDiff, type Theme } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { CALL_LIMITS, compactArguments } from "./arguments.ts";
-import { paintArgumentLine, paintMeasure, paintSummary } from "./call-rendering.ts";
+import { callArgumentsComponent, paintArgumentLine, paintMeasure, paintSummary } from "./call-rendering.ts";
 import { paint, TOOL_OUTPUT_COLORS } from "./colors.ts";
 import { displayToolName, extractTextOutput, pluralize, toolIcon } from "./rendering.ts";
 import { summarizeToolCall } from "./summaries.ts";
@@ -332,7 +332,7 @@ const diffCache = new WeakMap<GroupMember, { diff: string; component: Component 
  * arguments. An edit's diff lives in pi's call block (beside an `edit <path>`
  * header the row already says), so it is drawn here from the result instead.
  */
-function expandedComponents(member: GroupMember): Component[] {
+function expandedComponents(member: GroupMember, theme: Theme): Component[] {
 	const diff = record(member.result?.details)?.diff;
 	if (member.toolName === "edit" && typeof diff === "string" && !member.result?.isError) {
 		let cached = diffCache.get(member);
@@ -343,13 +343,36 @@ function expandedComponents(member: GroupMember): Component[] {
 		return [cached.component];
 	}
 	const result = boxInner(member.resultRendererComponent) ?? member.resultRendererComponent;
-	return result ? [result] : [];
+	const input = inputComponent(member, theme);
+	return [...(input ? [input, BLANK] : []), ...(result ? [result] : [])];
+}
+
+const BLANK: Component = { render: () => [""], invalidate() {} };
+const inputCache = new WeakMap<GroupMember, { args: unknown; component: Component | undefined }>();
+
+/**
+ * The call's input in full — the script, prompt, or body the first row only
+ * measures — in the call's argument tones, bounded like the old expanded
+ * arguments. A write's input is the file it wrote, and an edit's is its diff,
+ * so neither repeats it.
+ */
+function inputComponent(member: GroupMember, theme: Theme): Component | undefined {
+	const cached = inputCache.get(member);
+	if (cached && cached.args === member.args) return cached.component;
+	const input = member.toolName === "write" || member.toolName === "edit" ? undefined : memberInput(member);
+	const component = input
+		? callArgumentsComponent(member.toolName, { [input.field]: record(member.args)?.[input.field] }, true, theme, {
+				showSummary: false,
+			})
+		: undefined;
+	inputCache.set(member, { args: member.args, component });
+	return component;
 }
 
 function expandedRows(member: GroupMember, width: number, theme: Theme): string[] {
 	const inner = Math.max(1, width - INDENT.length);
 	const rows: string[] = [];
-	for (const component of expandedComponents(member)) {
+	for (const component of expandedComponents(member, theme)) {
 		try {
 			for (const row of component.render(inner)) rows.push(INDENT + truncateToWidth(row, inner, "…"));
 		} catch {
