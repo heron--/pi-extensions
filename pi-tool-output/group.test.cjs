@@ -189,6 +189,23 @@ void (async () => {
 	assert.doesNotMatch(screen(), /newText|oldText/, "an edit does not repeat its input");
 	edited.setExpanded(false);
 	void pendingEdit;
+	// An edit drawn by another extension (pi-tool-display) keeps that extension's view.
+	const elsewhere = {
+		...codingAgent.createEditToolDefinition(process.cwd()),
+		renderCall: () => new piTui.Text("THIRD_PARTY_DIFF_VIEW", 0, 0),
+		renderResult: () => new piTui.Text("", 0, 0),
+	};
+	const thirdParty = new codingAgent.ToolExecutionComponent(
+		"edit", "e3", { path: "c.ts", edits: [{ oldText: "a", newText: "b" }] }, { showImages: false }, elsewhere, ui, process.cwd(),
+	);
+	chat.addChild(thirdParty);
+	thirdParty.updateResult({ content: [{ type: "text", text: "ok" }], details: { diff: "-1 a\n+1 b" } });
+	assert.doesNotMatch(screen(), /THIRD_PARTY_DIFF_VIEW/);
+	assert.match(screen(), /path: c\.ts  \+1 -1/);
+	thirdParty.setExpanded(true);
+	assert.match(screen(), /THIRD_PARTY_DIFF_VIEW/);
+	thirdParty.setExpanded(false);
+
 	// A write's input is the file it wrote; expanding does not repeat it.
 	const written = addTool("write", "w1", { path: "notes.md", content: "WRITTEN_BODY\n".repeat(30) }, "Successfully wrote 390 bytes");
 	assert.match(screen(), /Write File\s+path: notes\.md  30 lines, 389 B · 1 line, 28 B/);

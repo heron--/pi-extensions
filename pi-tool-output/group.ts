@@ -15,7 +15,13 @@
  * expand-last shortcut all toggle the same state.
  */
 
-import { keyText, renderDiff, type Theme } from "@earendil-works/pi-coding-agent";
+import {
+	createEditToolDefinition,
+	createWriteToolDefinition,
+	keyText,
+	renderDiff,
+	type Theme,
+} from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { CALL_LIMITS, compactArguments } from "./arguments.ts";
 import { callArgumentsComponent, paintArgumentLine, paintMeasure, paintSummary } from "./call-rendering.ts";
@@ -327,12 +333,36 @@ function toolRows(member: GroupMember, width: number, nameWidth: number, theme: 
 
 const diffCache = new WeakMap<GroupMember, { diff: string; component: Component }>();
 
+/** Pi's own edit/write call renderers: one shared object spread into every definition. */
+let piFileRenderers: Set<unknown> | undefined;
+
+/**
+ * Whether an edit or write is drawn by another extension (`pi-tool-display`'s
+ * diff view) rather than by pi itself. That view is kept as the expanded body.
+ */
+function drawnElsewhere(member: GroupMember): boolean {
+	const renderCall = member.toolDefinition?.renderCall;
+	if (typeof renderCall !== "function" || boxInner(member.callRendererComponent)) return false;
+	piFileRenderers ??= new Set([
+		createEditToolDefinition(process.cwd()).renderCall,
+		createWriteToolDefinition(process.cwd()).renderCall,
+	]);
+	return !piFileRenderers.has(renderCall);
+}
+
 /**
  * The call's output, unframed: what its own result renderer drew, without its
- * arguments. An edit's diff lives in pi's call block (beside an `edit <path>`
- * header the row already says), so it is drawn here from the result instead.
+ * arguments. An edit or write drawn by another extension keeps that
+ * extension's view. Otherwise an edit's diff lives in pi's call block (beside an
+ * `edit <path>` header the row already says), so it is drawn here from the
+ * result instead.
  */
 function expandedComponents(member: GroupMember, theme: Theme): Component[] {
+	if ((member.toolName === "edit" || member.toolName === "write") && drawnElsewhere(member)) {
+		return [member.callRendererComponent, member.resultRendererComponent].filter(
+			(component): component is Component => component !== undefined,
+		);
+	}
 	const diff = record(member.result?.details)?.diff;
 	if (member.toolName === "edit" && typeof diff === "string" && !member.result?.isError) {
 		let cached = diffCache.get(member);
