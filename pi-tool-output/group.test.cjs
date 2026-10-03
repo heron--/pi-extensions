@@ -193,7 +193,11 @@ void (async () => {
 	assert.doesNotMatch(screen(), /edit lib\/box\.ts/, "without pi's own edit header");
 	assert.doesNotMatch(screen(), /newText|oldText/, "an edit does not repeat its input");
 	edited.setExpanded(false);
-	void pendingEdit;
+	// Before a result diff exists, expanding a pending edit still shows the change.
+	pendingEdit.setExpanded(true);
+	// pi's call view: its header now, its preview diff once pi has read the file.
+	assert.match(screen(), /│\s+edit big\.ts/, "a pending edit's expanded view is not empty");
+	pendingEdit.setExpanded(false);
 	// An edit drawn by another extension (pi-tool-display) keeps that extension's view.
 	const elsewhere = {
 		...codingAgent.createEditToolDefinition(process.cwd()),

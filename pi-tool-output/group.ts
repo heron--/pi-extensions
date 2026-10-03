@@ -394,6 +394,14 @@ function expandedComponents(member: GroupMember, theme: Theme): Component[] {
 		}
 		return [cached.component];
 	}
+	if (member.toolName === "edit") {
+		// No result diff yet (pending, or failed without one): pi's own call view
+		// previews the change from the arguments, and its result view carries
+		// any error. Keep both rather than show nothing.
+		return [member.callRendererComponent, member.resultRendererComponent].filter(
+			(component): component is Component => component !== undefined,
+		);
+	}
 	const result = boxInner(member.resultRendererComponent) ?? member.resultRendererComponent;
 	const shown = argumentsComponent(member, theme);
 	return [...(shown ? [shown, BLANK] : []), ...(result ? [result] : [])];
