@@ -121,8 +121,9 @@ export default function(pi) {
 
         try:
             # Collapsed: one grouped row with the summary, the output measured but not shown.
-            # Narrow rows truncate the summary; the tool name always shows.
-            label = summary if width >= 100 else display
+            # Narrow rows truncate the summary first; at the narrowest the name
+            # gives way too, so the output size keeps its place.
+            label = summary if width >= 100 else display if width >= 40 else display[:4]
             collapsed = receive_until(lambda text: label in text and "Ran 1 tool" in text)
             save("collapsed", collapsed)
             assert "RESULT_VISIBLE" not in collapsed, collapsed

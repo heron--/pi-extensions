@@ -195,7 +195,11 @@ function memberSummary(member: GroupMember): MemberSummary {
 	const found = summarizeToolCall(member.toolName, member.args);
 	const summary: MemberSummary = found
 		? { text: found.text.trim(), fields: found.fields, partial: found.hidden === true }
-		: { text: (compactArguments(member.args).text.split("\n")[0] ?? "").trim(), fields: [], partial: true };
+		: {
+				text: (compactArguments(member.args).text.split("\n")[0] ?? "").trim().replace(/^\(no arguments\)$/, ""),
+				fields: [],
+				partial: true,
+			};
 	summaryCache.set(member, { args: member.args, summary });
 	return summary;
 }
@@ -314,12 +318,16 @@ function changeText({ added, removed }: { added: number; removed: number }): { p
 function toolRows(member: GroupMember, width: number, nameWidth: number, theme: Theme): string[] {
 	const failed = member.result?.isError === true && !member.isPartial;
 	const { name: nameTone, size: sizeTone, failed: failedTone, summaryPlain, summaryKey } = TOOL_OUTPUT_COLORS.group;
-	const head = memberHead(member);
-	const padded = head + " ".repeat(Math.max(0, nameWidth - visibleWidth(head)));
 	// An edit shows what it changed, +added -removed, instead of an input and output size.
 	const changes = editChanges(member);
 	const change = changes && !failed ? changeText(changes) : undefined;
 	const meta = memberMeta(member);
+	// A name is cut only when it would push the output size or status off the
+	// row; nameWidth just pads shorter names so the summaries line up.
+	const head = memberHead(member);
+	const headRoom = Math.max(1, width - GAP.length - visibleWidth(change ? change.plain : meta));
+	const fitted = visibleWidth(head) > headRoom ? truncateToWidth(head, headRoom, "…") : head;
+	const padded = fitted + " ".repeat(Math.max(0, nameWidth - visibleWidth(fitted)));
 	// On a narrow row the summary outranks the input's size: drop the input
 	// size when keeping it would leave the summary under MIN_SUMMARY cells.
 	const measured = change ? undefined : memberInput(member);
@@ -344,7 +352,7 @@ function toolRows(member: GroupMember, width: number, nameWidth: number, theme: 
 	return [truncateToWidth(first, width, "…")];
 }
 
-const diffCache = new WeakMap<GroupMember, { diff: string; component: Component }>();
+const diffCache = new WeakMap<GroupMember, { diff: string; theme: Theme; component: Component }>();
 
 /** Pi's own edit/write call renderers: one shared object spread into every definition. */
 let piFileRenderers: Set<unknown> | undefined;
@@ -379,8 +387,9 @@ function expandedComponents(member: GroupMember, theme: Theme): Component[] {
 	const diff = record(member.result?.details)?.diff;
 	if (member.toolName === "edit" && typeof diff === "string" && !member.result?.isError) {
 		let cached = diffCache.get(member);
-		if (cached?.diff !== diff) {
-			cached = { diff, component: new Text(renderDiff(diff), 0, 0) };
+		// renderDiff bakes the active theme's colors in, so a theme switch rebuilds it too.
+		if (cached?.diff !== diff || cached.theme !== theme) {
+			cached = { diff, theme, component: new Text(renderDiff(diff), 0, 0) };
 			diffCache.set(member, cached);
 		}
 		return [cached.component];
@@ -392,17 +401,18 @@ function expandedComponents(member: GroupMember, theme: Theme): Component[] {
 
 const BLANK_ROWS: string[] = [""];
 const BLANK: Component = { render: () => BLANK_ROWS, invalidate() {} };
-const argumentsCache = new WeakMap<GroupMember, { args: unknown; component: Component | undefined }>();
+const argumentsCache = new WeakMap<GroupMember, { args: unknown; theme: Theme; component: Component | undefined }>();
 
 /** The expanded arguments, wrapped in full in the call's argument tones and bounded like any expanded call. */
 function argumentsComponent(member: GroupMember, theme: Theme): Component | undefined {
 	const cached = argumentsCache.get(member);
-	if (cached && cached.args === member.args) return cached.component;
+	// The component bakes its colors in: a theme switch must rebuild it.
+	if (cached && cached.args === member.args && cached.theme === theme) return cached.component;
 	const shown = expandedArguments(member);
 	const component = shown
 		? callArgumentsComponent(member.toolName, shown, true, theme, { showSummary: false })
 		: undefined;
-	argumentsCache.set(member, { args: member.args, component });
+	argumentsCache.set(member, { args: member.args, theme, component });
 	return component;
 }
 

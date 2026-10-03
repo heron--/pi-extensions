@@ -240,6 +240,38 @@ void (async () => {
 	await shortcuts.get("alt+o").handler({});
 	assert.equal(chat.children.filter((c) => c.expanded).length, expandedBefore, "Alt+O does not reach past it");
 
+	// A long display name is cut to the name column, never the sizes after it.
+	const houseCall = () => new piTui.Text("", 0, 0);
+	houseCall[Symbol.for("pi-tool-output.house-renderer.v1")] = true;
+	const longName = new codingAgent.ToolExecutionComponent(
+		"custom_long", "long", {}, { showImages: false },
+		{ name: "custom_long", label: "An Extremely Long Display Name That Would Crowd Out Everything Else", renderCall: houseCall },
+		ui, process.cwd(),
+	);
+	chat.addChild(new piTui.Text("long-name prose", 0, 0));
+	chat.addChild(longName);
+	longName.updateResult({ content: [{ type: "text", text: "x" }], details: {} });
+	for (const width of [100, 60]) {
+		const rows = piTui.stripTerminalSequences(longName.render(width).join("\n")).split("\n");
+		const row = rows.find((line) => line.includes("An Extremely"));
+		assert.match(row ?? "", width < 80 ? /…\s+1 line, 1 B/ : /Everything Else\s+1 line, 1 B/, `the size survives a long name at ${width}`);
+	}
+
+	// Expanded arguments rebuild their baked-in colors when the theme changes.
+	const themed = addTool("bash", "theme1", { command: "true", timeout: 5 }, "ok");
+	themed.setExpanded(true);
+	const fakeTheme = (tag) => ({
+		fg: (_color, text) => `<${tag}>${text}`, bg: (_color, text) => text, bold: (text) => text,
+		getBgAnsi: () => "", getFgAnsi: () => "", getColorMode: () => "truecolor",
+	});
+	const renderWith = (tag) =>
+		group.renderGroup([themed], 100, { theme: fakeTheme(tag), lastMember: undefined, expandLastKey: "alt+o" })
+			.lines.find((line) => line.includes("timeout")) ?? "";
+	assert.match(renderWith("A"), /<A>/);
+	assert.match(renderWith("B"), /<B>/, "a theme switch repaints the expanded arguments");
+	assert.doesNotMatch(renderWith("B"), /<A>/);
+	themed.setExpanded(false);
+
 	// Never wider than the terminal, at any width.
 	bash.setExpanded(true);
 	for (const width of [120, 60, 30, 14, 8]) {
