@@ -329,6 +329,16 @@ npm run profile:transcript-digest -- scroll split    2000 500 120 40
 # arguments: variant messageCount frames columns rows
 ```
 
+The hover scenario measures pointer motion over the right pane, which
+terminals report on every cell moved under all-motion mouse tracking. It
+should cost about the same as the baseline at any `messageCount`:
+
+```bash
+npm run profile:transcript-digest -- hover baseline 2000 200 120 40
+npm run profile:transcript-digest -- hover split    2000 200 120 40
+# arguments: variant messageCount events columns rows
+```
+
 Each command warms the component caches before timing and prints one JSON
 record. Run several times and compare medians; terminal dimensions and Node/Pi
 versions are part of the result even though they are not embedded in the JSON.
@@ -355,6 +365,29 @@ to lost history reuse. Self time in `compositeTuiLine`, `sliceWithWidth`, or
 scrollbar painting during `scroll` is fullscreen frame composition rather than
 conversation normalization. `PI_TUI_WRITE_LOG` is complementary when the
 question is excess terminal output rather than CPU time.
+
+Three pi-tui costs shape `layout.ts`; each was measured, not assumed:
+
+- **Compositing is per grapheme.** Every box that does not span the full
+  width is composited into its row through `Intl.Segmenter`, and pi-tui's own
+  scrollbar painter rescans the row three times per scrollbar cell. The right
+  column is therefore one box whose rows already carry the divider and
+  scrollbar cell; its ScrollView uses `scrollbar: "hidden"` and drags its own
+  bar. Its content's `render()` stays glyph-free because pi-tui copies
+  selections from it. Do not split the divider or a pi-tui scrollbar back out
+  into separate boxes.
+- **Stacks measure what stretch ignores.** An `HStack` measures each column's
+  natural height every frame even under the default `align: "stretch"`, and a
+  `VStack`'s natural height renders every child. Split columns override
+  `render()` to return `[]` so that measurement is free.
+- **`Container.handleMouse` renders children.** Without a cached
+  `mouseLayout` (which only `Container.render` sets, and the stacks override
+  it), forwarding an event renders every child to find its rows. The renderer
+  already offers each event to every component under the pointer and skips
+  layout nodes that keep the default handler, so an override must not call
+  `super.handleMouse` for events it ignores. Doing so once cost two full
+  conversation re-wraps per pointer move, because the forwarded width
+  differed from the laid-out width and replaced the pane's width-keyed cache.
 
 The synthetic harness is the repeatable regression check, not the final UI
 check. After profiling changes, run `npm run test:transcript-digest`, typecheck, and use

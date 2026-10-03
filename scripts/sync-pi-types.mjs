@@ -60,16 +60,33 @@ function candidates() {
 	}
 
 	// 2. Follow `pi` on PATH to its real target (handles npm/brew shims).
+	let which = "";
 	try {
-		const which = execFileSync("sh", ["-c", "command -v pi"], { encoding: "utf8" }).trim();
+		which = execFileSync("sh", ["-c", "command -v pi"], { encoding: "utf8" }).trim();
 		const root = which ? packageRootFrom(which) : null;
 		if (root) found.push(root);
 	} catch {
 		// pi not on PATH; fall through to the static candidates
 	}
 
-	// 2. Common install roots, for machines where pi is not on PATH.
+	// 3. The managed installer's launcher is a shell script in <agent>/bin that
+	// execs <agent>/install/releases/<current-version>/node_modules/.bin/pi.
 	const home = process.env.HOME ?? "";
+	const agentDirs = [
+		process.env.PI_CODING_AGENT_DIR,
+		which ? dirname(dirname(which)) : undefined,
+		`${home}/.pi/agent`,
+	].filter(Boolean);
+	for (const agentDir of agentDirs) {
+		try {
+			const current = readFileSync(join(agentDir, "install/current-version"), "utf8").trim();
+			if (current) found.push(join(agentDir, "install/releases", current, "node_modules", PKG));
+		} catch {
+			// Not a managed install.
+		}
+	}
+
+	// 4. Common install roots, for machines where pi is not on PATH.
 	const statics = [
 		`${home}/.volta/tools/image/packages/@earendil-works/pi-coding-agent/lib/node_modules/${PKG}`,
 		`${home}/.bun/install/global/node_modules/${PKG}`,
@@ -109,7 +126,9 @@ if (!piRoot) {
 	process.exit(1);
 }
 
-const nested = join(piRoot, "node_modules/@earendil-works");
+// Sibling packages are nested under pi's own node_modules by npm global
+// installs and hoisted beside it by the managed installer.
+const siblingRoots = [join(piRoot, "node_modules/@earendil-works"), dirname(piRoot)];
 const version = (() => {
 	try {
 		return JSON.parse(readFileSync(join(piRoot, "package.json"), "utf8")).version ?? "unknown";
@@ -124,8 +143,8 @@ const siblings = ["pi-tui", "pi-ai", "pi-agent-core", "pi-protocol", "pi-client"
 const paths = { [PKG]: [`${piRoot}/dist/index.d.ts`] };
 const missing = [];
 for (const name of siblings) {
-	const entry = join(nested, name, "dist/index.d.ts");
-	if (existsSync(entry)) {
+	const entry = siblingRoots.map((root) => join(root, name, "dist/index.d.ts")).find((path) => existsSync(path));
+	if (entry) {
 		paths[`@earendil-works/${name}`] = [entry];
 	} else {
 		missing.push(name);
