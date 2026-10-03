@@ -194,6 +194,82 @@ session rather than the active branch, because an abandoned branch was still
 billed. Only assistant responses carry a model id, so everything else can
 contribute only the cost pi recorded for it.
 
+### Optional external cost source
+
+Local calculation is the default. An independently installed extension can
+provide a session total instead, without a dependency on this package or any
+service-specific code in the footer:
+
+```text
+/context-footer cost                 show the current source
+/context-footer cost meter           select a provider named "meter"
+/context-footer cost local           return to local pricing
+```
+
+The choice persists in `<agent dir>/pi-context-footer/config.json`:
+
+```json
+{
+  "costSource": { "id": "meter", "refreshSeconds": 60 }
+}
+```
+
+`refreshSeconds` defaults to 60 and accepts 15–3600. The footer requests a
+value when installed and waits that interval after each response or timeout
+before requesting again. Requests are non-blocking and never overlap; renders
+only read the cached value. A provider has 45 seconds to answer. Turning the
+footer off, changing source/session, or shutting down aborts the current
+request and clears its cache. Polling runs only in TUI mode.
+
+Until a source answers, local pricing remains visible. A missing source or a
+failed/timed-out lookup preserves the last successful value, or the local
+fallback if there is none. A reply with `costUsd: null` explicitly returns to
+local calculation. Zero is valid. A partial subtotal displays `(partial)`;
+external totals are not added to local costs, and token counts remain local.
+External values are snapshots, so they can lag newly completed calls and may
+cover a different set of requests than the local total.
+
+#### Provider protocol
+
+Pi's in-process `pi.events` bus carries `pi-context-footer:cost-request:v1`.
+There are no package imports between provider and footer. Its payload is:
+
+```ts
+interface CostRequest {
+  source: string;            // configured provider identifier
+  sessionId: string;         // current Pi session
+  signal: AbortSignal;       // aborted on cancellation or timeout
+  respond(snapshot: { costUsd: number | null; partial?: boolean }): void;
+}
+```
+
+Providers should subscribe during `session_start`, unsubscribe and cancel
+work on `session_shutdown`, ignore unrelated sources and sessions, honor the
+signal, and answer asynchronously. Only the first valid answer is accepted;
+late, cancelled, negative, non-finite, or malformed answers are ignored.
+After answering, the request signal is aborted to release request resources.
+On failure, do not answer; the footer keeps its previous snapshot. A valid
+reply has a whole-session USD total, not a per-model token price:
+
+```ts
+// Inside a provider's session_start handler; ctx is its active session context.
+const unsubscribe = pi.events.on("pi-context-footer:cost-request:v1", async (data) => {
+  const request = data as CostRequest;
+  if (request.source !== "meter" || request.signal.aborted
+      || request.sessionId !== ctx.sessionManager.getSessionId()) return;
+  try {
+    const costUsd = await readSessionTotal(request.sessionId, request.signal);
+    if (!request.signal.aborted) request.respond({ costUsd });
+  } catch {
+    // Retain the last successful snapshot.
+  }
+});
+// Call unsubscribe() and cancel outstanding work at session_shutdown.
+```
+
+The source choice is the polling opt-in. Without `costSource`, the footer
+emits no cost requests and retains its local behavior.
+
 ## Copying out of the prompt
 
 The rails are real characters, so a normal drag across them copies them too —
@@ -234,6 +310,7 @@ discovery directory.
 /context-footer pad none   set the padding (see above)
 /context-footer animate [on|off]   report or toggle the traveling gloss
 /context-footer host [on|off]      report the hostname state, or set its switch
+/context-footer cost [local|<source-id>]   report or select the cost source
 ```
 
 The animation preference and the hostname settings are machine settings
@@ -257,6 +334,8 @@ to draw is how the model, context and cost disappear entirely.
 
 ```bash
 npm run typecheck
+npm run test:context-footer
+python3 pi-context-footer/tui.test.py   # real Pi/PTY check; requires pyte
 pi
 ```
 

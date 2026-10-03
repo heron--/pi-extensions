@@ -39,6 +39,10 @@ import {
 	updateContextFooterConfig,
 } from "../lib/thinking-colors.ts";
 
+import { CostSourcePoller, parseCostSourceSettings, type CostSourceSettings } from "./cost-source.ts";
+
+let costPoller: CostSourcePoller | null = null;
+
 const ICON_MODEL = String.fromCodePoint(0xf068c);
 const ICON_FOLDER = "\uf115";
 const ICON_BRANCH = "\uf126";
@@ -564,7 +568,10 @@ function buildBottomSegments(
 
 	// The money glyph is itself a dollar sign, so `formatDollars` supplies the
 	// only one the segment needs.
-	if (totals.hasCost) {
+	const external = costPoller?.getSnapshot();
+	if (external?.costUsd !== null && external?.costUsd !== undefined) {
+		segments.push(theme.fg("accent", `${formatDollars(external.costUsd)}${external.partial ? " (partial)" : ""}`));
+	} else if (totals.hasCost) {
 		segments.push(theme.fg("accent", formatDollars(totals.cost)));
 	}
 	if (totals.input || totals.output) {
@@ -729,10 +736,28 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 	let enabled = true;
 	let installed = false;
 	let padding: Padding = "full";
+	let costSettings: CostSourceSettings | null = null;
+	let activeContext: ExtensionContext | undefined;
+
+	function reloadCostSource(ctx: ExtensionContext): void {
+		costSettings = null;
+		try {
+			const config = JSON.parse(readFileSync(contextFooterConfigFile(), "utf8"));
+			costSettings = parseCostSourceSettings(config?.costSource);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+			ctx.ui.notify(`context-footer cost: ${error instanceof Error ? error.message : String(error)}`, "warning");
+		}
+	}
 
 	function buildFooter(ctx: ExtensionContext) {
 		return (tui: TUI, _theme: Theme, provider: ReadonlyFooterDataProvider) => {
 			footerData = provider;
+			const poller = costSettings
+				? new CostSourcePoller(pi.events, costSettings, ctx.sessionManager.getSessionId(), () => tui.requestRender())
+				: null;
+			costPoller = poller;
+			poller?.start();
 
 			const lookupContext = {
 				cwd: ctx.sessionManager.getCwd(),
@@ -753,6 +778,8 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 
 			return {
 				dispose() {
+					poller?.stop();
+					if (costPoller === poller) costPoller = null;
 					unsubscribe();
 					// A footer built before this one was disposed owns the lookup now.
 					if (prLookupContext !== lookupContext) return;
@@ -789,6 +816,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 			const baseRender = editor.render.bind(editor);
 
 			editor.render = (width: number): string[] => {
+				const context = activeContext ?? ctx;
 				// One predicate drives both the ticker and the gloss: the highlight
 				// advances only while the ticker runs, so a gloss that is not being
 				// driven never jumps to a new position on an unrelated render — it
@@ -797,13 +825,13 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 					enabled
 						&& animate
 						&& width >= MIN_FRAMED_WIDTH
-						&& !!ctx.model?.reasoning
-						&& ctx.thinkingLevel === "max";
+						&& !!context.model?.reasoning
+						&& context.thinkingLevel === "max";
 				syncSheenTicker(animated);
 				// Too narrow for a rule plus a label: leave pi's own rows alone.
 				if (!enabled || width < MIN_FRAMED_WIDTH) return baseRender(width);
 
-				const theme = ctx.ui.theme;
+				const theme = context.ui.theme;
 				// The frame is chrome, not signal: it paints the theme's border
 				// colour and does not follow pi's thinking-level tint, which can be
 				// near-invisible where a theme maps thinkingOff to a rule shade —
@@ -823,9 +851,9 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 					theme,
 					paint,
 					padding,
-					buildTopSegments(ctx, theme, animated),
-					buildBottomSegments(ctx, theme, footerData),
-					[sessionNameSegment(ctx, theme)].filter((s): s is string => s !== null),
+					buildTopSegments(context, theme, animated),
+					buildBottomSegments(context, theme, footerData),
+					[sessionNameSegment(context, theme)].filter((s): s is string => s !== null),
 					[hostnameSegment(theme)].filter((s): s is string => s !== null),
 				);
 			};
@@ -853,24 +881,56 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
+		activeContext = ctx;
 		refreshPricingOverridesForSession(ctx);
 		animate = loadThinkingAnimatePreference();
 		reloadHostname(ctx);
-		if (ctx.mode === "tui") install(ctx);
+		costPoller?.stop();
+		costPoller = null;
+		reloadCostSource(ctx);
+		if (ctx.mode === "tui") {
+			if (installed) ctx.ui.setFooter(enabled ? buildFooter(ctx) : undefined);
+			else install(ctx);
+		}
 	});
 
 	pi.on("session_shutdown", async () => {
 		// The TUI is going away; a live interval would paint into it after the
 		// session ends and pin the event loop open at quit.
 		syncSheenTicker(false);
+		costPoller?.stop();
+		costPoller = null;
 		cancelPullRequestRecheck();
 		prLookupContext = null;
 	});
 
 	pi.registerCommand("context-footer", {
-		description: "Toggle the context-footer border, set its padding, toggle the thinking shimmer, or show the hostname",
+		description: "Configure the context-footer border, padding, thinking shimmer, hostname, or cost source",
 		handler: async (args, ctx) => {
 			const [verb, value, ...extra] = (args ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+
+			if (verb === "cost") {
+				if (value === undefined) {
+					ctx.ui.notify(costSettings ? `Cost source: ${costSettings.id} (refresh every ${costSettings.refreshSeconds}s)` : "Cost source: local", "info");
+					return;
+				}
+				let next: CostSourceSettings | null;
+				try {
+					if (extra.length > 0) throw new Error("Usage: /context-footer cost [local|<source-id>]");
+					next = value === "local" ? null : parseCostSourceSettings({ id: value, refreshSeconds: costSettings?.refreshSeconds });
+				} catch (error) {
+					ctx.ui.notify(String(error instanceof Error ? error.message : error), "warning");
+					return;
+				}
+				const saved = updateContextFooterConfig((config) => {
+					if (next) config.costSource = next;
+					else delete config.costSource;
+				});
+				costSettings = next;
+				if (ctx.mode === "tui" && enabled) ctx.ui.setFooter(buildFooter(ctx));
+				ctx.ui.notify(`Cost source: ${next?.id ?? "local"}${saved ? "" : " (this session only; config file not writable)"}`, "info");
+				return;
+			}
 
 			if (verb === "pad" || verb === "padding") {
 				if (value === undefined) {
@@ -945,7 +1005,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 			}
 
 			if (value !== undefined || (verb !== undefined && verb !== "on" && verb !== "off")) {
-				ctx.ui.notify("Usage: /context-footer [on|off|pad full|pad none|animate on|animate off|host on|host off]", "warning");
+				ctx.ui.notify("Usage: /context-footer [on|off|pad full|pad none|animate on|animate off|host on|host off|cost local|cost <source-id>]", "warning");
 				return;
 			}
 
