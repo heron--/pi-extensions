@@ -5,8 +5,10 @@ import { dirname, join } from "node:path";
 export const OUTPUT_MODES = ["hidden", "summary", "preview"] as const;
 export const BASH_OUTPUT_MODES = ["opencode", "summary", "preview"] as const;
 export const CUSTOM_TOOL_KINDS = ["generic", "mcp"] as const;
+export const LAYOUTS = ["grouped", "separate"] as const;
 export const BUILTIN_TOOL_NAMES = ["read", "grep", "find", "ls", "bash", "edit", "write"] as const;
 
+export type ToolOutputLayout = (typeof LAYOUTS)[number];
 export type OutputMode = (typeof OUTPUT_MODES)[number];
 export type BashOutputMode = (typeof BASH_OUTPUT_MODES)[number];
 export type CustomToolKind = (typeof CUSTOM_TOOL_KINDS)[number];
@@ -30,6 +32,10 @@ export interface CustomToolOverride {
 
 export interface ToolOutputConfig {
 	enabled: boolean;
+	/** `grouped`: neighbouring calls share one box, output collapsed to a size line. `separate`: one box per call. */
+	layout: ToolOutputLayout;
+	/** Key that expands or collapses only the most recent tool call (grouped layout). */
+	expandLastKey: string;
 	registerToolOverrides: ToolOwnership;
 	customToolOverrides: Record<string, CustomToolOverride>;
 	readOutputMode: OutputMode;
@@ -43,6 +49,8 @@ export interface ToolOutputConfig {
 
 export const DEFAULT_TOOL_OUTPUT_CONFIG: ToolOutputConfig = {
 	enabled: true,
+	layout: "grouped",
+	expandLastKey: "alt+o",
 	registerToolOverrides: {
 		read: true,
 		grep: true,
@@ -88,6 +96,14 @@ function asInteger(value: unknown, minimum: number, maximum: number, fallback: n
 
 function asOutputMode(value: unknown, fallback: OutputMode): OutputMode {
 	return OUTPUT_MODES.includes(value as OutputMode) ? (value as OutputMode) : fallback;
+}
+
+function asLayout(value: unknown, fallback: ToolOutputLayout): ToolOutputLayout {
+	return LAYOUTS.includes(value as ToolOutputLayout) ? (value as ToolOutputLayout) : fallback;
+}
+
+function asKey(value: unknown, fallback: string): string {
+	return typeof value === "string" && /^[a-z0-9+\-\]\[]+$/i.test(value.trim()) ? value.trim().toLowerCase() : fallback;
 }
 
 function asBashOutputMode(value: unknown, fallback: BashOutputMode): BashOutputMode {
@@ -140,6 +156,8 @@ export function normalizeToolOutputConfig(value: unknown): ToolOutputConfig {
 	const source = isRecord(value) ? value : {};
 	return {
 		enabled: asBoolean(source.enabled, DEFAULT_TOOL_OUTPUT_CONFIG.enabled),
+		layout: asLayout(source.layout, DEFAULT_TOOL_OUTPUT_CONFIG.layout),
+		expandLastKey: asKey(source.expandLastKey, DEFAULT_TOOL_OUTPUT_CONFIG.expandLastKey),
 		registerToolOverrides: normalizeOwnership(source.registerToolOverrides),
 		customToolOverrides: normalizeCustomToolOverrides(source.customToolOverrides),
 		readOutputMode: asOutputMode(source.readOutputMode, DEFAULT_TOOL_OUTPUT_CONFIG.readOutputMode),

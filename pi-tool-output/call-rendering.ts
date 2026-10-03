@@ -81,13 +81,23 @@ function paintArguments(preview: ArgumentPreview, theme: Theme, expanded: boolea
 		.join("\n");
 }
 
-function paintSummary(text: string, theme: Theme): string {
+export function paintSummary(text: string, theme: Theme): string {
 	const { summaryPlain, summaryKey, summaryValue } = TOOL_OUTPUT_COLORS.call;
 	return paintKeyValueLine(text, theme, { plain: summaryPlain, key: summaryKey, value: summaryValue });
 }
 
-/** Limits apply to physical rows, after wrapping, including on very narrow terminals. */
-export function callArgumentsComponent(name: string, args: unknown, expanded: boolean, theme: Theme): Component {
+/**
+ * Limits apply to physical rows, after wrapping, including on very narrow terminals.
+ * `showSummary: false` leaves the summary row to the caller (the grouped layout
+ * draws it on the tool's own row) while still dropping the fields it stands for.
+ */
+export function callArgumentsComponent(
+	name: string,
+	args: unknown,
+	expanded: boolean,
+	theme: Theme,
+	{ showSummary = true }: { showSummary?: boolean } = {},
+): Component {
 	const summary = summarizeToolCall(name, args);
 	const preview = expanded ? expandedArguments(args) : compactArguments(args, summary?.fields);
 	let cached: { width: number; rows: string[] } | undefined;
@@ -96,7 +106,7 @@ export function callArgumentsComponent(name: string, args: unknown, expanded: bo
 			if (cached?.width === width) return cached.rows;
 			const w = Math.max(1, Math.floor(width));
 			const rows: string[] = [];
-			if (summary) rows.push(theme.bold(paintSummary(truncateToWidth(summary.text, w, "…"), theme)));
+			if (summary && showSummary) rows.push(theme.bold(paintSummary(truncateToWidth(summary.text, w, "…"), theme)));
 			const limit = expanded ? CALL_LIMITS.expandedRows : CALL_LIMITS.collapsedRows;
 			const wrapped = preview.text ? wrapTextWithAnsi(paintArguments(preview, theme, expanded), w) : [];
 			rows.push(...wrapped.slice(0, limit).map((row) => truncateToWidth(row, w, "…")));

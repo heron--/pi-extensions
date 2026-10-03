@@ -116,6 +116,20 @@ export const TOOL_OUTPUT_COLORS = {
 		/** The one-line collapsed summary shown in `summary` output mode. */
 		summary: "dim",
 	},
+
+	/** The grouped layout's per-call rows. */
+	group: {
+		/** The tool's display name at the head of its row (drawn bold). */
+		name: "success",
+		/** The collapsed size line: "12 lines, 3.4 KB", "running…". */
+		size: "muted",
+		/** Name and size of a failed call. */
+		failed: "error",
+		/** Key names in the expand hint under the most recent call. */
+		hintKey: "dim",
+		/** The words around them. */
+		hintText: "muted",
+	},
 } as const;
 
 /** Background tone filling the house box behind every row. */
