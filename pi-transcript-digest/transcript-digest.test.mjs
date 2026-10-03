@@ -624,17 +624,26 @@ test("fullscreen mouse press and drag scroll the right scrollbar independently",
 		assert(atEnd > 0, "conversation exceeds its viewport");
 		const x = terminal.columns;
 		const thumbY = headerHeight() + side.viewportHeight; // 1-based row of the last scrollbar cell
+		const thumbAt = () => {
+			tui.renderNow();
+			return screen()[thumbY - 1][x - 1];
+		};
+		tui.handleTerminalInput(`\x1b[<35;${x};${thumbY}M`); // hover the thumb
+		assert.equal(thumbAt(), "█", "hovering the bar highlights the thumb");
+		tui.handleTerminalInput(`\x1b[<35;${x - 20};${thumbY}M`);
+		assert.equal(thumbAt(), "┃", "leaving the bar for the pane clears the highlight");
+		tui.handleTerminalInput(`\x1b[<35;${x};${thumbY}M`);
+		tui.handleTerminalInput(`\x1b[<35;${x};${terminal.rows}M`); // the dock row below the pane
+		assert.equal(thumbAt(), "┃", "leaving the bar for the dock clears the highlight");
 		tui.handleTerminalInput(`\x1b[<0;${x};${thumbY}M`); // press the scrollbar thumb
-		tui.renderNow();
-		assert.equal(screen()[thumbY - 1][x - 1], "█", "a held thumb is highlighted");
+		assert.equal(thumbAt(), "█", "a held thumb is highlighted");
 		tui.handleTerminalInput(`\x1b[<32;${x};4M`); // drag while holding the primary button
 		assert(side.scrollTop < atEnd, "drag moves the right pane up");
 		const afterDragUp = side.scrollTop;
 		tui.handleTerminalInput(`\x1b[<32;${x};${thumbY}M`);
 		assert(side.scrollTop > afterDragUp, "drag moves the right pane down");
-		tui.handleTerminalInput(`\x1b[<0;${x};${thumbY}m`); // release
-		tui.renderNow();
-		assert.equal(screen()[thumbY - 1][x - 1], "┃", "release restores the thumb");
+		tui.handleTerminalInput(`\x1b[<0;${x - 20};${thumbY}m`); // release off the bar
+		assert.equal(thumbAt(), "┃", "release off the bar restores the thumb");
 		assert.equal(transcript.scrollTop, 0, "the left transcript is not scrolled");
 		assert.equal(tui.hasActiveSelection(), false, "dragging the scrollbar selects no text");
 

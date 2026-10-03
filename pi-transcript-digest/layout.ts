@@ -139,12 +139,18 @@ class ConversationContent extends VStack {
 	}
 }
 
-/** The right pane's ScrollView. It paints and drags its own scrollbar. */
+/**
+ * The right pane's ScrollView. It paints and drags its own scrollbar, and
+ * highlights the thumb while the pointer is over the bar or holds it, as Pi
+ * does for its own scrollbars.
+ */
 class ConversationScroll extends ScrollView {
 	private readonly content: ConversationContent;
 	private readonly theme: Theme;
 	private contentRows = 0;
 	private drag?: { grabOffset: number };
+	private hovered = false;
+	private pointerOnBar?: { x: number; y: number };
 
 	constructor(content: ConversationContent, theme: Theme) {
 		super(content, { follow: "end", overscroll: "contain", scrollbar: "hidden" });
@@ -152,16 +158,31 @@ class ConversationScroll extends ScrollView {
 		this.theme = theme;
 	}
 
-	get isDragging(): boolean {
-		return this.drag !== undefined;
-	}
-
 	divider(): string {
 		return this.theme.fg("border", "│");
 	}
 
 	thumbGlyph(): string {
-		return this.theme.fg("scrollbarThumb", this.drag ? "█" : "┃");
+		return this.theme.fg("scrollbarThumb", this.drag || this.hovered ? "█" : "┃");
+	}
+
+	/** Records that the pointer of this motion event is over the scrollbar column. */
+	notePointerOnBar(event: TuiMouseEvent): void {
+		if (event.type === "move" && event.x === event.width - 1) this.pointerOnBar = { x: event.screenX, y: event.screenY };
+	}
+
+	/**
+	 * Settles the hover state once every component under the pointer has seen
+	 * the event. A motion event that no bar cell noted is off the bar. Returns
+	 * whether the highlight changed.
+	 */
+	settleHover(event: TuiMouseEvent): boolean {
+		if (event.type !== "move") return false;
+		const onBar = this.pointerOnBar?.x === event.screenX && this.pointerOnBar.y === event.screenY;
+		this.pointerOnBar = undefined;
+		if (onBar === this.hovered) return false;
+		this.hovered = onBar;
+		return true;
 	}
 
 	override updateLayout(contentHeight: number, viewportHeight: number, requestRender: () => void): void {
@@ -179,9 +200,13 @@ class ConversationScroll extends ScrollView {
 	}
 
 	override handleMouse(event: TuiMouseEvent): TuiMouseDispatchResult | undefined {
+		const trackHeight = this.viewportHeight;
+		const onTrack = event.x === event.width - 1 && event.y >= 0 && event.y < trackHeight;
+		if (onTrack) this.notePointerOnBar(event);
 		if (this.drag) {
 			if (event.type === "release") {
 				this.drag = undefined;
+				this.hovered = onTrack;
 				return handledBy(this, event, { render: true });
 			}
 			if (event.type === "drag") {
@@ -189,9 +214,7 @@ class ConversationScroll extends ScrollView {
 				return handledBy(this, event);
 			}
 		}
-		const trackHeight = this.viewportHeight;
-		if (event.type !== "press" || event.button !== "left" || event.x !== event.width - 1) return undefined;
-		if (event.y < 0 || event.y >= trackHeight) return undefined;
+		if (event.type !== "press" || event.button !== "left" || !onTrack) return undefined;
 		// Matches pi-tui: grabbing the thumb keeps the pointer's offset in it;
 		// pressing the track centres the thumb on the pointer.
 		const thumb = scrollbarThumb(this.scrollTop, trackHeight, this.contentRows);
@@ -229,6 +252,25 @@ class RightPane extends SplitColumn {
 		// right pane's scroll limits.
 		this.scroll.scrollBy(event.wheelDelta ?? 0);
 		return handledBy(this, event);
+	}
+}
+
+/**
+ * Pi offers a pointer event to every component under the pointer, deepest
+ * first, until one handles it, so the root sees every motion event that the
+ * panes leave unhandled, after they have.
+ */
+class SplitRoot extends VStack {
+	private readonly onPointer: (event: TuiMouseEvent) => void;
+
+	constructor(children: ConstructorParameters<typeof VStack>[0], onPointer: (event: TuiMouseEvent) => void) {
+		super(children);
+		this.onPointer = onPointer;
+	}
+
+	override handleMouse(event: TuiMouseEvent): TuiMouseDispatchResult | undefined {
+		this.onPointer(event);
+		return undefined;
 	}
 }
 
@@ -345,6 +387,10 @@ export class TranscriptDigestLayout {
 				const row = `${side.divider()}${" ".repeat(Math.max(0, width - 2))}${width > 1 ? side.thumbGlyph() : ""}`;
 				return Array.from({ length: Math.max(1, renderer.terminal.rows) }, () => row);
 			},
+			handleMouse: (event) => {
+				side.notePointerOnBar(event);
+				return undefined;
+			},
 			invalidate: () => {},
 		};
 		const right = new RightPane([
@@ -360,10 +406,12 @@ export class TranscriptDigestLayout {
 		split.setViewportWidth(renderer.terminal.columns);
 		// The fullscreen dock keeps its original components, widths, focus, and
 		// vertical sizing. Only the transcript slot becomes two columns.
-		const splitRoot = new VStack([
+		const splitRoot = new SplitRoot([
 			{ component: split, basis: 0, grow: 1, shrink: 1, minSize: 1 },
 			{ component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
-		]);
+		], (event) => {
+			if (side.settleHover(event)) renderer.requestRender();
+		});
 		this.originalRoot = root;
 		this.splitRoot = splitRoot;
 		this.split = split;
