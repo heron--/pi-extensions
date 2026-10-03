@@ -377,7 +377,8 @@ function expandedComponents(member: GroupMember, theme: Theme): Component[] {
 	return [...(input ? [input, BLANK] : []), ...(result ? [result] : [])];
 }
 
-const BLANK: Component = { render: () => [""], invalidate() {} };
+const BLANK_ROWS: string[] = [""];
+const BLANK: Component = { render: () => BLANK_ROWS, invalidate() {} };
 const inputCache = new WeakMap<GroupMember, { args: unknown; component: Component | undefined }>();
 
 /**
@@ -399,17 +400,67 @@ function inputComponent(member: GroupMember, theme: Theme): Component | undefine
 	return component;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Caching                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Every frame renders every group, and an expanded group can carry thousands
+ * of output rows. pi-tui components hand back the same row array until their
+ * content or width changes, so each level below keys on array identity and
+ * rebuilds (truncating, railing, grounding) only what actually changed.
+ */
+
+function sameKey(left: readonly unknown[] | undefined, right: readonly unknown[]): boolean {
+	return left !== undefined && left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+const expandedCache = new WeakMap<GroupMember, { key: unknown[]; rows: string[] }>();
+
 function expandedRows(member: GroupMember, width: number, theme: Theme): string[] {
 	const inner = Math.max(1, width - INDENT.length);
-	const rows: string[] = [];
+	const rendered: string[][] = [];
 	for (const component of expandedComponents(member, theme)) {
 		try {
-			for (const row of component.render(inner)) rows.push(INDENT + truncateToWidth(row, inner, "…"));
+			rendered.push(component.render(inner));
 		} catch {
 			// A failing third-party renderer must not take the whole group down.
 		}
 	}
+	const key = [inner, ...rendered];
+	const cached = expandedCache.get(member);
+	if (cached && sameKey(cached.key, key)) return cached.rows;
+	const rows: string[] = [];
+	// Components render at `inner`, and the box's railRow guards the width of
+	// every row it rails, so a row is only indented here, never measured.
+	for (const block of rendered) for (const row of block) rows.push(INDENT + row);
 	while (rows.length > 0 && !rows[rows.length - 1]!.trim()) rows.pop();
+	expandedCache.set(member, { key, rows });
+	return rows;
+}
+
+const memberRowsCache = new WeakMap<GroupMember, { key: unknown[]; rows: string[] }>();
+
+/** A member's whole block: its row, its expanded body, and the hint when it is the most recent call. */
+function memberRows(
+	member: GroupMember,
+	contentWidth: number,
+	nameWidth: number,
+	options: GroupRenderOptions,
+): string[] {
+	const { theme } = options;
+	const isLast = member === options.lastMember;
+	const expanded = member.expanded ? expandedRows(member, contentWidth, theme) : undefined;
+	const key = [
+		contentWidth, nameWidth, theme, member.args, member.result, member.isPartial, member.expanded,
+		isLast, options.expandLastKey, expanded,
+	];
+	const cached = memberRowsCache.get(member);
+	if (cached && sameKey(cached.key, key)) return cached.rows;
+	const rows = toolRows(member, contentWidth, nameWidth, theme);
+	if (expanded) rows.push(...expanded);
+	if (isLast) rows.push(INDENT + hintRow(member, options.expandLastKey, Math.max(1, contentWidth - INDENT.length), theme));
+	memberRowsCache.set(member, { key, rows });
 	return rows;
 }
 
@@ -442,31 +493,31 @@ export function groupLabel(members: readonly GroupMember[]): string {
 	return `${ICON_TOOL} ${running ? "Running" : "Ran"} ${count}`;
 }
 
+const groupCache = new WeakMap<GroupMember, { key: unknown[]; render: GroupRender }>();
+
 export function renderGroup(members: readonly GroupMember[], width: number, options: GroupRenderOptions): GroupRender {
 	const { theme } = options;
 	const contentWidth = boxContentWidth(width);
-	const body: string[] = [];
-	const bodyOwners: GroupMember[] = [];
-	const images: string[] = [];
 	// Summaries line up in one column, unless the longest name would crowd them out.
 	const longest = Math.max(...members.map((member) => visibleWidth(memberHead(member))));
 	const nameWidth = Math.min(longest, Math.max(0, Math.floor(contentWidth / 3)));
-	for (const member of members) {
-		const rows = toolRows(member, contentWidth, nameWidth, theme);
-		if (member.expanded) {
-			rows.push(...expandedRows(member, contentWidth, theme));
-			for (const image of member.imageComponents ?? []) images.push(...image.render(width));
-		}
-		if (member === options.lastMember) {
-			rows.push(INDENT + hintRow(member, options.expandLastKey, Math.max(1, contentWidth - INDENT.length), theme));
-		}
-		body.push(...rows);
-		bodyOwners.push(...rows.map(() => member));
-	}
+	const blocks = members.map((member) => memberRows(member, contentWidth, nameWidth, options));
+	const images = members.map((member) =>
+		member.expanded ? (member.imageComponents ?? []).map((image) => image.render(width)) : [],
+	);
+	const key = [width, theme, ...members, ...blocks, ...images.flat()];
+	const leader = members[0]!;
+	const cached = groupCache.get(leader);
+	if (cached && sameKey(cached.key, key)) return cached.render;
+
+	const body = blocks.flat();
+	const bodyOwners = members.flatMap((member, index) => blocks[index]!.map(() => member));
 	const box = boxRows(theme, width, groupLabel(members), body, { includeTop: true, close: true });
 	// Pi's own self-rendered shell leads with one blank row; keep that spacing.
-	const lines = ["", ...box, ...images];
+	const lines = ["", ...box, ...images.flat(2)];
 	const owners: (GroupMember | undefined)[] = [undefined, undefined, ...bodyOwners];
 	while (owners.length < lines.length) owners.push(undefined);
-	return { lines, owners };
+	const render = { lines, owners };
+	groupCache.set(leader, { key, render });
+	return render;
 }

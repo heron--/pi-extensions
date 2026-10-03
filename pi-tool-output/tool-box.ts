@@ -57,7 +57,13 @@ export function boxRows(
 		return rows.map((line) => truncateToWidth(line, w, "…"));
 	}
 
-	const paintFrame = (text: string) => paint(theme, TOOL_OUTPUT_COLORS.box.frame, text);
+	// Every railed row paints the same two rails: paint each glyph run once per box.
+	const painted = new Map<string, string>();
+	const paintFrame = (text: string) => {
+		let result = painted.get(text);
+		if (result === undefined) painted.set(text, (result = paint(theme, TOOL_OUTPUT_COLORS.box.frame, text)));
+		return result;
+	};
 	const ground = (row: string) => groundRow(row, backgroundAnsi(theme));
 	const contentWidth = boxContentWidth(w);
 	const rows: string[] = [];

@@ -213,6 +213,15 @@ void (async () => {
 	assert.doesNotMatch(screen(), /WRITTEN_BODY/);
 	written.setExpanded(false);
 
+	// An unchanged frame reuses the group's rows instead of rebuilding them; a change rebuilds.
+	bash.setExpanded(true);
+	const frame = read.render(100);
+	assert.equal(read.render(100), frame, "unchanged frames reuse the cached rows");
+	grep.setExpanded(true);
+	assert.notEqual(read.render(100), frame, "a member's change rebuilds the group");
+	grep.setExpanded(false);
+	bash.setExpanded(false);
+
 	// Never wider than the terminal, at any width.
 	bash.setExpanded(true);
 	for (const width of [120, 60, 30, 14, 8]) {

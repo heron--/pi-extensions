@@ -226,6 +226,21 @@ the theme each member's renderer receives. Clicks only arrive in pi's
 fullscreen TUI, which enables mouse tracking. `group.tui.test.py` is the live
 check, including a real SGR click.
 
+Every frame renders every group, and an expanded group can hold thousands of
+output rows, so the group render caches at three levels (expanded body, member
+block, whole box), each keyed on the identity of the row arrays beneath it —
+pi-tui components return the same array until their content or width changes.
+Without that, expand-all cost ~1 s per frame at 17k rows (74% in
+`truncateToWidth`); with it, frames match the separate layout. Do not add
+per-row measuring or truncation above `railRow`, which already guards width.
+Measure with the synthetic harness, comparing layouts at identical arguments:
+
+```bash
+npm run profile:tool-output -- grouped  20 4 200 30 120
+npm run profile:tool-output -- separate 20 4 200 30 120
+# arguments: layout groups toolsPerGroup outputLines frames columns
+```
+
 ## Decorating the editor: pi's render-width assertion
 
 `TuiMainScreen.doRender` throws if any rendered row's `visibleWidth()` exceeds
