@@ -50,7 +50,12 @@ def seed(cwd, name, args, result=None):
     return "\n".join(json.dumps(entry) for entry in entries) + "\n"
 
 
+DISPLAY_NAMES = {"bash": "Run Command", "subagent": "Subagent", "mcp": "MCP Gateway",
+                 "unknown_fixture": "Unknown Fixture", "codemode": "Code Mode"}
+
+
 def run_case(name, args, summary, width, output_dir, result=None):
+    display = DISPLAY_NAMES[name]
     with tempfile.TemporaryDirectory(prefix="pi-call-tui-") as scratch:
         cwd = Path(scratch)
         agent = cwd / "agent"
@@ -58,8 +63,6 @@ def run_case(name, args, summary, width, output_dir, result=None):
         (agent / "settings.json").write_text(json.dumps({"theme": "dark", "quietStartup": True}))
         (agent / "pi-tool-output").mkdir()
         (agent / "pi-tool-output" / "config.json").write_text(json.dumps({
-            # This test pins the one-box-per-call layout; group.tui.test.py covers grouping.
-            "layout": "separate",
             "customToolOverrides": {"unknown_fixture": {"enabled": True, "outputMode": "preview"}}}))
         # Pi intentionally uses raw fallback rendering for historical tool names
         # with no installed definition. Register inert definitions to exercise
@@ -117,8 +120,12 @@ export default function(pi) {
             Path(f"{prefix}-{stage}.txt").write_text(text)
 
         try:
-            collapsed = receive_until(lambda text: "RESULT_VISIBLE" in text and summary in text)
+            # Collapsed: one grouped row with the summary, the output measured but not shown.
+            # Narrow rows truncate the summary; the tool name always shows.
+            label = summary if width >= 100 else display
+            collapsed = receive_until(lambda text: label in text and "Ran 1 tool" in text)
             save("collapsed", collapsed)
+            assert "RESULT_VISIBLE" not in collapsed, collapsed
             assert "BODY_MARKER" not in collapsed, collapsed
             assert "UNDECORATED" not in collapsed, collapsed
             # Summary and results have different real theme foregrounds.
@@ -128,24 +135,22 @@ export default function(pi) {
                     if col >= 0:
                         return screen.buffer[row][col].fg
                 raise AssertionError(needle)
-            assert color_at(summary) != color_at("RESULT_VISIBLE")
-            if name == "codemode":
-                assert "✓ Run Command" in collapsed, collapsed
-                assert "✗ Read File" in collapsed, collapsed
-                assert "NESTED_FAILURE" in collapsed, collapsed
-                assert color_at("NESTED_FAILURE") != color_at("RESULT_VISIBLE")
-                assert "Promise.allSettled" not in collapsed, collapsed
-                assert "Wall time" not in collapsed, collapsed
+            summary_color = color_at(label)
             os.write(fd, b"\x0f")  # app.tools.expand: Ctrl+O
             expanded = receive_until(lambda text: "BODY_MARKER" in text and "arguments capped" in text)
             save("expanded", expanded)
-            assert "RESULT_VISIBLE" in expanded, expanded
+            if name != "codemode":
+                # Codemode's last output row sits below its long script.
+                assert "RESULT_VISIBLE" in expanded, expanded
+                assert summary_color != color_at("RESULT_VISIBLE")
+            assert "UNDECORATED" not in expanded, expanded
             os.write(fd, b"\x0f")
-            collapsed_again = receive_until(lambda text: "BODY_MARKER" not in text and "RESULT_VISIBLE" in text and summary in text)
+            collapsed_again = receive_until(lambda text: "BODY_MARKER" not in text and label in text)
             save("recollapsed", collapsed_again)
+            assert "RESULT_VISIBLE" not in collapsed_again, collapsed_again
             assert b"exceeds terminal width" not in raw
             assert b"Failed to load extension" not in raw
-            print(f"PASS {name} at {width} columns: summary, visible result, Ctrl+O round trip", flush=True)
+            print(f"PASS {name} at {width} columns: summary, hidden output, Ctrl+O round trip", flush=True)
         finally:
             Path(f"{prefix}.ansi").write_bytes(raw)
             # The fixture has no live work or durable session to save. Pi can

@@ -538,7 +538,6 @@ const groupRowOwners = new WeakMap<object, (GroupMember | undefined)[]>();
  * ends the run.
  */
 function isGroupMember(instance: ToolExecutionInstanceLike, config: ToolOutputConfig): boolean {
-	if (config.layout !== "grouped") return false;
 	const name = instance.toolName;
 	if (name && (BUILTIN_TOOL_NAMES as readonly string[]).includes(name)) return true;
 	const renderCall = instance.toolDefinition?.renderCall as Record<symbol, unknown> | undefined;
@@ -836,7 +835,6 @@ function configSummary(config: ToolOutputConfig): string {
 		.join(", ");
 	return [
 		`Tool output is ${config.enabled ? "on" : "off"}`,
-		`layout=${config.layout}`,
 		`read=${config.readOutputMode}`,
 		`search=${config.searchOutputMode}`,
 		`mcp=${config.mcpOutputMode}`,
@@ -867,7 +865,7 @@ export default function toolOutputExtension(pi: ExtensionAPI): void {
 		builtinsByCwd.clear();
 	});
 
-	if (config.enabled && config.layout === "grouped") {
+	if (config.enabled) {
 		pi.registerShortcut(config.expandLastKey as KeyId, {
 			description: "Expand or collapse the most recent tool call",
 			handler: () => toggleLastMember(),

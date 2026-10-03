@@ -62,8 +62,6 @@ void (async () => {
 	assert.equal(
 		configModule.saveToolOutputConfig({
 			...configModule.DEFAULT_TOOL_OUTPUT_CONFIG,
-			// This fixture pins the one-box-per-call layout; group.test.mjs covers the grouped one.
-			layout: "separate",
 			expandedPreviewMaxLines: 2,
 			customToolOverrides: {
 				late_generic: { enabled: true, kind: "generic", outputMode: "summary" },
@@ -329,16 +327,16 @@ void (async () => {
 	}
 	codemodeComponent.updateResult({ ...codemodeResult, isError: false });
 	let codemodeScreen = piTui.stripTerminalSequences(codemodeComponent.render(100).join("\n"));
-	assert.match(codemodeScreen, /Code Mode/);
-	assert.match(codemodeScreen, /✓ Read File · path: one.ts/);
-	assert.match(codemodeScreen, /✗ Read File · path: missing.ts/);
-	assert.match(codemodeScreen, /NESTED_FAILURE/);
-	assert.match(codemodeScreen, /Script completed ·/);
-	assert.doesNotMatch(codemodeScreen, /files.map|Wall time|Output:/);
+	// Collapsed, a call is one row: name, summary, sizes — no nested calls or output.
+	assert.match(codemodeScreen, /Code Mode  JavaScript/);
+	assert.doesNotMatch(codemodeScreen, /Read File|NESTED_FAILURE|files.map|Wall time|Output:/);
 	codemodeComponent.setExpanded(true);
 	codemodeScreen = piTui.stripTerminalSequences(codemodeComponent.render(100).join("\n"));
-	assert.match(codemodeScreen, /files.map/);
+	assert.match(codemodeScreen, /files.map/, "expanded shows the script");
+	assert.match(codemodeScreen, /✓ Read File · \d+ms\s*│\n│\s+path: one\.ts/);
+	assert.match(codemodeScreen, /✗ Read File · \d+ms\s*│\n│\s+path: missing\.ts/);
 	assert.match(codemodeScreen, /NESTED_FAILURE/);
+	assert.match(codemodeScreen, /Script completed ·/);
 	codemodeComponent.setExpanded(false);
 	assert.doesNotMatch(piTui.stripTerminalSequences(codemodeComponent.render(100).join("\n")), /files.map/);
 	assert.deepEqual(codemodeResult, savedCodemodeResult);
@@ -426,11 +424,14 @@ void (async () => {
 	assert.match(screen, /ARGUMENT_BODY_MARKER/);
 	assert.match(screen, /arguments capped/);
 	actualTool.updateResult({ content: [{ type: "text", text: "RESULT_STAYS_VISIBLE" }], details: {} });
+	screen = piTui.stripTerminalSequences(actualTool.render(100).join("\n"));
+	assert.match(screen, /RESULT_STAYS_VISIBLE/, "expanded shows the output");
 	actualTool.setExpanded(false);
 	screen = piTui.stripTerminalSequences(actualTool.render(100).join("\n"));
-	assert.match(screen, /RESULT_STAYS_VISIBLE/);
-	assert.doesNotMatch(screen, /ARGUMENT_BODY_MARKER/);
-	assert.ok(screen.split("\n").length < 12);
+	// Collapsed, the output is measured, not shown.
+	assert.match(screen, /1 line, 20 B/);
+	assert.doesNotMatch(screen, /RESULT_STAYS_VISIBLE|ARGUMENT_BODY_MARKER/);
+	assert.ok(screen.split("\n").length < 6);
 	actualTool.updateArgs({ agent: "reviewer", task: "Inspect this module" });
 	screen = piTui.stripTerminalSequences(actualTool.render(100).join("\n"));
 	assert.match(screen, /agent: reviewer/);
@@ -473,6 +474,10 @@ void (async () => {
 			details: {},
 		});
 		assert.equal(imageReadComponent.imageComponents.length, 1);
+		// Collapsed, an image is counted, not drawn; expanding draws it.
+		assert.doesNotMatch(imageReadComponent.render(100).join("\n"), /1337;File=/);
+		assert.match(piTui.stripTerminalSequences(imageReadComponent.render(100).join("\n")), /Read File\s+path: pixel\.png  1 image/);
+		imageReadComponent.setExpanded(true);
 		assert.match(imageReadComponent.render(100).join("\n"), /1337;File=/);
 		const imageCodemodeComponent = new codingAgent.ToolExecutionComponent(
 			"codemode", "image-code", { code: "image(pixel)" }, { showImages: true }, codemodeDefinition,
@@ -485,6 +490,7 @@ void (async () => {
 			details: { calls: [] }, isError: false,
 		});
 		assert.equal(imageCodemodeComponent.imageComponents.length, 1);
+		imageCodemodeComponent.setExpanded(true);
 		assert.match(imageCodemodeComponent.render(100).join("\n"), /1337;File=/);
 	} finally {
 		piTui.setCapabilities(originalCapabilities);

@@ -24,7 +24,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { CALL_LIMITS, compactArguments } from "./arguments.ts";
-import { callArgumentsComponent, paintArgumentLine, paintMeasure, paintSummary } from "./call-rendering.ts";
+import { callArgumentsComponent, paintMeasure, paintSummary } from "./call-rendering.ts";
 import { paint, TOOL_OUTPUT_COLORS } from "./colors.ts";
 import { displayToolName, extractTextOutput, pluralize, toolIcon } from "./rendering.ts";
 import { summarizeToolCall } from "./summaries.ts";
@@ -163,7 +163,11 @@ function memberMeta(member: GroupMember): string {
 	let text: string;
 	if (!member.result) text = "running…";
 	else {
-		const size = sizeText(outputSize(extractTextOutput(member.result)));
+		const content = Array.isArray(member.result.content) ? member.result.content : [];
+		const images = content.filter((block) => record(block)?.type === "image").length;
+		const textSize = sizeText(outputSize(extractTextOutput(member.result)));
+		const imageText = `${images} ${pluralize(images, "image")}`;
+		const size = images === 0 ? textSize : textSize === "no output" ? imageText : `${textSize}${DOT}${imageText}`;
 		if (member.isPartial) text = size === "no output" ? "running…" : `running · ${size}`;
 		else text = member.result.isError ? `failed · ${size}` : size;
 	}
@@ -205,6 +209,7 @@ function memberName(member: GroupMember): string {
 const INDENT = "  ";
 const GAP = "  ";
 const DOT = " · ";
+const MIN_SUMMARY = 16;
 
 function memberHead(member: GroupMember): string {
 	return `${toolIcon(member.toolName)} ${memberName(member)}`;
@@ -232,22 +237,30 @@ function memberInput(member: GroupMember): { field: string; size: string } | und
 	return best && { field: best.field, size: sizeText(outputSize(best.value)) };
 }
 
-const argumentLineCache = new WeakMap<GroupMember, { args: unknown; text: string }>();
-
-/** The arguments the summary and input did not cover, as one `key: value · …` row. */
-function memberArguments(member: GroupMember): string {
-	const cached = argumentLineCache.get(member);
-	if (cached && cached.args === member.args) return cached.text;
-	const input = memberInput(member);
+/**
+ * The arguments an expanded call shows: every field its row did not already
+ * show, with the measured input last. A summary can stand in for a field
+ * without showing it (codemode's `JavaScript` for its `code`), so a string
+ * field counts as shown only when its value appears in the summary text. An
+ * edit's or write's input is the change itself, which its own view shows.
+ */
+function expandedArguments(member: GroupMember): Record<string, unknown> | undefined {
 	const args = record(member.args);
-	const rest = args && input ? Object.fromEntries(Object.entries(args).filter(([field]) => field !== input.field)) : member.args;
-	const restRecord = record(rest);
-	const text =
-		restRecord && Object.keys(restRecord).length === 0
-			? ""
-			: compactArguments(rest, memberSummary(member).fields).text.replace(/^\(no arguments\)$/, "");
-	argumentLineCache.set(member, { args: member.args, text });
-	return text;
+	if (!args) return member.args === undefined ? undefined : { arguments: member.args };
+	const summary = memberSummary(member);
+	const input = memberInput(member);
+	const fileChange = member.toolName === "edit" || member.toolName === "write";
+	const shown = (field: string) => {
+		const value = args[field];
+		return summary.fields.includes(field) && (typeof value !== "string" || summary.text.includes(value.trim()));
+	};
+	const rest: Record<string, unknown> = {};
+	for (const [field, value] of Object.entries(args)) {
+		if (field === input?.field || shown(field) || member.toolName === "edit") continue;
+		rest[field] = value;
+	}
+	if (input && !fileChange) rest[input.field] = args[input.field];
+	return Object.keys(rest).length > 0 ? rest : undefined;
 }
 
 /**
@@ -289,10 +302,9 @@ function changeText({ added, removed }: { added: number; removed: number }): { p
 }
 
 /**
- * One call, one row — plus, when expanded, its leftover arguments:
+ * One call, one row:
  *
  *   icon name  summary  [input size · ]output size
- *   key: value · key: value      (expanded only: arguments the summary does not show)
  *
  * `nameWidth` pads every name in the group to one width so the summaries form
  * a column. The summary yields width first; the sizes are kept whole.
@@ -305,8 +317,12 @@ function toolRows(member: GroupMember, width: number, nameWidth: number, theme: 
 	// An edit shows what it changed, +added -removed, instead of an input and output size.
 	const changes = editChanges(member);
 	const change = changes && !failed ? changeText(changes) : undefined;
-	const input = change ? undefined : memberInput(member);
 	const meta = memberMeta(member);
+	// On a narrow row the summary outranks the input's size: drop the input
+	// size when keeping it would leave the summary under MIN_SUMMARY cells.
+	const measured = change ? undefined : memberInput(member);
+	const fixed = width - visibleWidth(padded) - GAP.length * 2 - visibleWidth(meta);
+	const input = measured && fixed - visibleWidth(measured.size) - DOT.length >= MIN_SUMMARY ? measured : undefined;
 	const sizes = change
 		? change.painted(theme)
 		: (input ? `${paintMeasure(input.size, theme)}${paint(theme, sizeTone, DOT)}` : "") +
@@ -323,12 +339,7 @@ function toolRows(member: GroupMember, width: number, nameWidth: number, theme: 
 		...(shown ? [paintSummary(shown, theme, colors)] : []),
 		sizes,
 	].join(GAP);
-	const rows = [truncateToWidth(first, width, "…")];
-	// Leftover arguments only show expanded, above the output. An edit's
-	// arguments are the changes themselves, which its expanded diff shows.
-	const rest = member.expanded && !changes ? memberArguments(member) : "";
-	if (rest) rows.push(INDENT + truncateToWidth(paintArgumentLine(rest, theme), Math.max(1, width - INDENT.length), "…"));
-	return rows;
+	return [truncateToWidth(first, width, "…")];
 }
 
 const diffCache = new WeakMap<GroupMember, { diff: string; component: Component }>();
@@ -373,30 +384,23 @@ function expandedComponents(member: GroupMember, theme: Theme): Component[] {
 		return [cached.component];
 	}
 	const result = boxInner(member.resultRendererComponent) ?? member.resultRendererComponent;
-	const input = inputComponent(member, theme);
-	return [...(input ? [input, BLANK] : []), ...(result ? [result] : [])];
+	const shown = argumentsComponent(member, theme);
+	return [...(shown ? [shown, BLANK] : []), ...(result ? [result] : [])];
 }
 
 const BLANK_ROWS: string[] = [""];
 const BLANK: Component = { render: () => BLANK_ROWS, invalidate() {} };
-const inputCache = new WeakMap<GroupMember, { args: unknown; component: Component | undefined }>();
+const argumentsCache = new WeakMap<GroupMember, { args: unknown; component: Component | undefined }>();
 
-/**
- * The call's input in full — the script, prompt, or body the first row only
- * measures — in the call's argument tones, bounded like the old expanded
- * arguments. A write's input is the file it wrote, and an edit's is its diff,
- * so neither repeats it.
- */
-function inputComponent(member: GroupMember, theme: Theme): Component | undefined {
-	const cached = inputCache.get(member);
+/** The expanded arguments, wrapped in full in the call's argument tones and bounded like any expanded call. */
+function argumentsComponent(member: GroupMember, theme: Theme): Component | undefined {
+	const cached = argumentsCache.get(member);
 	if (cached && cached.args === member.args) return cached.component;
-	const input = member.toolName === "write" || member.toolName === "edit" ? undefined : memberInput(member);
-	const component = input
-		? callArgumentsComponent(member.toolName, { [input.field]: record(member.args)?.[input.field] }, true, theme, {
-				showSummary: false,
-			})
+	const shown = expandedArguments(member);
+	const component = shown
+		? callArgumentsComponent(member.toolName, shown, true, theme, { showSummary: false })
 		: undefined;
-	inputCache.set(member, { args: member.args, component });
+	argumentsCache.set(member, { args: member.args, component });
 	return component;
 }
 

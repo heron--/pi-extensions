@@ -81,12 +81,6 @@ function paintArguments(preview: ArgumentPreview, theme: Theme, expanded: boolea
 		.join("\n");
 }
 
-/** A one-line `key: value · key: value` argument preview, in the call's argument tones. */
-export function paintArgumentLine(text: string, theme: Theme): string {
-	const { argumentPlain, argumentKey, argumentValue } = TOOL_OUTPUT_COLORS.call;
-	return paintKeyValueLine(text, theme, { plain: argumentPlain, key: argumentKey, value: argumentValue });
-}
-
 /** A size descriptor such as `501 lines, 19.0 KB`, with magnitudes and units tinted apart. */
 export function paintMeasure(text: string, theme: Theme): string {
 	const { valueMeasure, valueUnit, valueSeparator } = TOOL_OUTPUT_COLORS.call;

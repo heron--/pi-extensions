@@ -2,14 +2,13 @@
 // transcript contents. Prints one JSON record: the first frame after every call
 // expands (what Ctrl+O costs) and the mean of later, unchanged frames.
 //
-// npm run profile:tool-output -- <layout> <groups> <toolsPerGroup> <outputLines> <frames> <width>
-// npm run profile:tool-output -- grouped 20 4 200 30 120
+// npm run profile:tool-output -- <groups> <toolsPerGroup> <outputLines> <frames> <width>
+// npm run profile:tool-output -- 20 4 200 30 120
 //
-// Compare `grouped` against `separate` at identical arguments, several runs each.
+// Run several times and compare medians against the figures in AGENTS.md.
 const path=require("node:path");const fs=require("node:fs");const os=require("node:os");const {createRequire}=require("node:module");
-const [layout="grouped", G="20", T="4", L="200", F="30", W="120"] = process.argv.slice(2);
+const [G="20", T="4", L="200", F="30", W="120"] = process.argv.slice(2);
 const agent=fs.mkdtempSync(path.join(os.tmpdir(),"pi-tool-output-profile-"));process.env.PI_CODING_AGENT_DIR=agent;
-fs.mkdirSync(path.join(agent,"pi-tool-output"));fs.writeFileSync(path.join(agent,"pi-tool-output","config.json"),JSON.stringify({layout}));
 (async()=>{
 const paths=JSON.parse(fs.readFileSync("tsconfig.paths.json","utf8")).compilerOptions.paths;
 const piRoot=path.dirname(path.dirname(paths["@earendil-works/pi-coding-agent"][0]));
@@ -37,5 +36,5 @@ chat.render(w);
 let t0=performance.now();for(const c of comps)c.setExpanded(true);const expandMs=performance.now()-t0;
 t0=performance.now();let rows=chat.render(w).length;const firstMs=performance.now()-t0;
 t0=performance.now();for(let i=0;i<+F;i++)rows=chat.render(w).length;const frameMs=(performance.now()-t0)/+F;
-console.log(JSON.stringify({layout,groups:+G,tools:+T,outputLines:+L,rows,expandMs:+expandMs.toFixed(1),firstFrameMs:+firstMs.toFixed(1),steadyFrameMs:+frameMs.toFixed(2)}));
+console.log(JSON.stringify({groups:+G,tools:+T,outputLines:+L,rows,expandMs:+expandMs.toFixed(1),firstFrameMs:+firstMs.toFixed(1),steadyFrameMs:+frameMs.toFixed(2)}));
 })();

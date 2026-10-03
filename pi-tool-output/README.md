@@ -4,28 +4,15 @@ A [pi](https://github.com/earendil-works/pi-coding-agent) extension that puts
 tool calls and results in the same house box as the prompt footer, recap, and
 user messages.
 
-The default presentation uses:
+Neighbouring calls share one box with one row per call — a Nerd Font icon,
+the display name, a semantic summary, and the size of the output rather than
+the output itself — on a dark `userMessageBg` ground with a green frame
+(`success`, the footer's git branch color). Expanding a call shows its full
+arguments and output. Pi's `app.tools.expand` binding (Ctrl+O by default)
+expands every call, and the hints follow any user keybinding override rather
+than hard-coding the key label.
 
-- a dark `userMessageBg` ground;
-- a green `nf-fa-wrench` icon and display-name label in the border, matching
-  the footer's git branch color (`success`);
-- a bold semantic summary of each call — the path and range, search pattern and
-  scope, shell command sketch, subagent mode and declared lanes, or MCP target;
-- bounded accent-key / emphasized-value argument previews instead of walls of scripts or JSON;
-- dimmed result text, with errors kept red and truncation notices visible;
-- an 8-row collapsed preview for read, search, MCP, Code Mode, and known custom
-  tools;
-- up to 10 collapsed rows for bash output.
-
-Collapsed previews count terminal rows after wrapping, so a single very long
-line — minified JSON, a one-line script result — is cut after the row limit and
-marked `… line continues`, rather than filling the screen.
-
-Press Pi's `app.tools.expand` binding—Ctrl+O by default—to expand or collapse
-both call arguments and results, including pending calls. The hint follows any
-user keybinding override rather than hard-coding the key label.
-
-### Grouped layout (default)
+### Grouped calls
 
 Neighbouring tool calls share one house box. The top of the box always reads
 `Ran N tools` (`Running N tools` while any call is still going). Each call's
@@ -77,12 +64,12 @@ Expansion is per call:
 Only the most recent call carries the key hint.
 
 Clicks need Pi's fullscreen TUI (the default `tuiMode`); in `regular` mode the
-terminal does not report the mouse, and the keys still work. Set `"layout":
-"separate"` for one box per call, as described below.
+terminal does not report the mouse, and the keys still work.
 
-### Compact calls
+### Expanded arguments
 
-All calls owned by this extension use the same bounded argument renderer:
+An expanded call's arguments use one bounded renderer, the same descriptors and
+tints as the call rows' sizes:
 
 - Short values (up to 160 characters) stay inline. Multiline or longer strings
   become descriptors such as `workflowScript: 19 KB · 501 lines`, whose
@@ -320,7 +307,6 @@ Missing values use these defaults:
 ```json
 {
   "enabled": true,
-  "layout": "grouped",
   "expandLastKey": "alt+o",
   "registerToolOverrides": {
     "read": true,
@@ -342,9 +328,10 @@ Missing values use these defaults:
 }
 ```
 
-`layout` accepts `grouped` or `separate`; `expandLastKey` is any Pi key id.
-Both take effect after `/reload`. The output modes below shape the expanded
-view in the grouped layout, and both views in the separate layout.
+`expandLastKey` is any Pi key id and takes effect after `/reload`. The output
+modes below shape what an expanded call shows; a collapsed call shows only its
+size. `previewLines` and `bashCollapsedLines` sized the collapsed previews of
+the old one-box-per-call layout and no longer change anything.
 
 `readOutputMode`, `searchOutputMode`, and `mcpOutputMode` accept `hidden`,
 `summary`, or `preview`. `bashOutputMode` accepts `opencode`, `summary`, or

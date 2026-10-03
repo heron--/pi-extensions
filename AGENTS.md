@@ -231,14 +231,14 @@ output rows, so the group render caches at three levels (expanded body, member
 block, whole box), each keyed on the identity of the row arrays beneath it —
 pi-tui components return the same array until their content or width changes.
 Without that, expand-all cost ~1 s per frame at 17k rows (74% in
-`truncateToWidth`); with it, frames match the separate layout. Do not add
-per-row measuring or truncation above `railRow`, which already guards width.
-Measure with the synthetic harness, comparing layouts at identical arguments:
+`truncateToWidth`); with it, an unchanged frame costs ~1 ms and the first frame
+after expand-all ~165 ms (the old one-box-per-call layout, since removed,
+measured ~1 ms and ~115 ms). Do not add per-row measuring or truncation above
+`railRow`, which already guards width. Measure with the synthetic harness:
 
 ```bash
-npm run profile:tool-output -- grouped  20 4 200 30 120
-npm run profile:tool-output -- separate 20 4 200 30 120
-# arguments: layout groups toolsPerGroup outputLines frames columns
+npm run profile:tool-output -- 20 4 200 30 120
+# arguments: groups toolsPerGroup outputLines frames columns
 ```
 
 ## Decorating the editor: pi's render-width assertion
