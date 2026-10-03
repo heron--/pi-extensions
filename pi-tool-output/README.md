@@ -25,6 +25,44 @@ Press Pi's `app.tools.expand` binding—Ctrl+O by default—to expand or collaps
 both call arguments and results, including pending calls. The hint follows any
 user keybinding override rather than hard-coding the key label.
 
+### Grouped layout (default)
+
+Neighbouring tool calls share one house box. The top of the box always reads
+`Ran N tools` (`Running N tools` while any call is still going), and each call
+gets one row — its name, its summary, and the size of its output instead of the
+output itself:
+
+```text
+╭  Ran 3 tools ─────────────────────────────────────────────╮
+│ Read File  path: lib/box.ts  12 lines, 133 B               │
+│ Search Files  pattern: /TODO/ · path: src  2 lines, 31 B   │
+│ Run Command  npm test  1 line, 11 B                        │
+│ alt+o to expand · ctrl+o to expand all                     │
+╰────────────────────────────────────────────────────────────╯
+```
+
+Sizes count raw output lines and bytes, not wrapped rows. Any assistant text or
+thinking between two calls starts a new box; an empty tool-only assistant turn
+does not. pi's built-in tools (including `edit`/`write`, whose expanded view
+keeps their own diff renderer), MCP tools, the tools in the display-name map, and
+decorated or configured custom tools all join a group. Any other tool keeps its
+own renderer and ends the run.
+
+Expansion is per call:
+
+- **Click a row** to expand or collapse just that call.
+- **Alt+O** (`expandLastKey`) expands or collapses just the most recent call. It
+  stays expanded when later calls arrive, until it is clicked or Ctrl+O
+  collapses everything.
+- **Ctrl+O** (Pi's `app.tools.expand`) expands or collapses every call.
+
+Only the most recent call carries the key hint. An expanded call shows the
+arguments its summary row did not already show in full, then its output.
+
+Clicks need Pi's fullscreen TUI (the default `tuiMode`); in `regular` mode the
+terminal does not report the mouse, and the keys still work. Set `"layout":
+"separate"` for one box per call, as described below.
+
 ### Compact calls
 
 All calls owned by this extension use the same bounded argument renderer:
@@ -265,6 +303,8 @@ Missing values use these defaults:
 ```json
 {
   "enabled": true,
+  "layout": "grouped",
+  "expandLastKey": "alt+o",
   "registerToolOverrides": {
     "read": true,
     "grep": true,
@@ -284,6 +324,10 @@ Missing values use these defaults:
   "bashCollapsedLines": 10
 }
 ```
+
+`layout` accepts `grouped` or `separate`; `expandLastKey` is any Pi key id.
+Both take effect after `/reload`. The output modes below shape the expanded
+view in the grouped layout, and both views in the separate layout.
 
 `readOutputMode`, `searchOutputMode`, and `mcpOutputMode` accept `hidden`,
 `summary`, or `preview`. `bashOutputMode` accepts `opencode`, `summary`, or
@@ -392,7 +436,12 @@ PATH and Python's `pyte` installed:
 
 ```bash
 python3 pi-tool-output/tui.test.py
+python3 pi-tool-output/group.tui.test.py
 ```
+
+`group.tui.test.py` checks the grouped layout at 100, 60, and 40 columns:
+one box per run, size lines in place of output, the hint under only the most
+recent call, Alt+O, a real SGR mouse click on a row, and a Ctrl+O round trip.
 
 The PTY check uses scratch settings, inert tool definitions, Pi's built-in
 codemode definition, and synthetic sessions (no model calls), presses Ctrl+O,

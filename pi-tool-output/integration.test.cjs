@@ -62,6 +62,8 @@ void (async () => {
 	assert.equal(
 		configModule.saveToolOutputConfig({
 			...configModule.DEFAULT_TOOL_OUTPUT_CONFIG,
+			// This fixture pins the one-box-per-call layout; group.test.mjs covers the grouped one.
+			layout: "separate",
 			expandedPreviewMaxLines: 2,
 			customToolOverrides: {
 				late_generic: { enabled: true, kind: "generic", outputMode: "summary" },
@@ -87,7 +89,11 @@ void (async () => {
 	const tools = new Map();
 	const commands = new Map();
 	const handlers = new Map();
+	const shortcuts = new Map();
 	const pi = {
+		registerShortcut(key, shortcut) {
+			shortcuts.set(key, shortcut);
+		},
 		registerTool(tool) {
 			tools.set(tool.name, tool);
 		},
@@ -712,6 +718,7 @@ void (async () => {
 			optInTools.set(tool.name, tool);
 		},
 		registerCommand() {},
+		registerShortcut() {},
 		on(name, handler) {
 			const list = optInHandlers.get(name) ?? [];
 			list.push(handler);
@@ -751,7 +758,7 @@ void (async () => {
 		});
 		const modeHandlers = new Map();
 		factory({
-			registerTool() {}, registerCommand() {},
+			registerTool() {}, registerCommand() {}, registerShortcut() {},
 			on(name, handler) { modeHandlers.set(name, handler); },
 		});
 		await modeHandlers.get("session_start")({ type: "session_start" }, { mode: "tui", ui: { theme, notify() {} } });

@@ -210,6 +210,22 @@ definitions catch lifecycle drift; a live MCP status call is still required
 because the current `pi-mcp-adapter` composes its call and result rows in a way
 a unit fixture can easily miss.
 
+### The grouped layout replaces `render`, not the renderers
+
+A tool renderer only sees its own call, so grouping neighbouring calls happens
+one level up: `ToolExecutionComponent.prototype.render` and `handleMouse` are
+wrapped (restored on shutdown with the other three). Each member finds its
+parent through `this.ui` (a shallow search, cached), then either leads its run
+and draws the whole box, or returns `[]`. A run is broken by any sibling that
+renders a row; siblings that render nothing (pi's empty assistant message
+between tool-only turns) are skipped. Leader and followers must use the same
+scan rule or two members both lead. Expansion state is pi's own per-component
+`expanded`, so Ctrl+O, clicks, and the expand-last shortcut stay consistent.
+Pi does not export its live theme instance; the call-renderer wrapper records
+the theme each member's renderer receives. Clicks only arrive in pi's
+fullscreen TUI, which enables mouse tracking. `group.tui.test.py` is the live
+check, including a real SGR click.
+
 ## Decorating the editor: pi's render-width assertion
 
 `TuiMainScreen.doRender` throws if any rendered row's `visibleWidth()` exceeds

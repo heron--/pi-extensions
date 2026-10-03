@@ -58,6 +58,8 @@ def run_case(name, args, summary, width, output_dir, result=None):
         (agent / "settings.json").write_text(json.dumps({"theme": "dark", "quietStartup": True}))
         (agent / "pi-tool-output").mkdir()
         (agent / "pi-tool-output" / "config.json").write_text(json.dumps({
+            # This test pins the one-box-per-call layout; group.tui.test.py covers grouping.
+            "layout": "separate",
             "customToolOverrides": {"unknown_fixture": {"enabled": True, "outputMode": "preview"}}}))
         # Pi intentionally uses raw fallback rendering for historical tool names
         # with no installed definition. Register inert definitions to exercise
