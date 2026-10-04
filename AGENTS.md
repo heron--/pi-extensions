@@ -29,6 +29,11 @@ anything. Beyond being correct, which is a given, a finding is fixed only when:
 
 A finding that fails either test gets a short reply saying why, not a change.
 
+Automated review agents only start once a pull request is marked ready for
+review; a draft gets no review. When polling for review status, check the
+emoji reactions on the PR description as well as comments: a reviewer with
+nothing to report may only react there.
+
 ## Layout
 
 ```
