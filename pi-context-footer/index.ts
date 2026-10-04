@@ -1,4 +1,3 @@
-import type { AssistantMessage, ModelThinkingLevel, Usage } from "@earendil-works/pi-ai";
 import type {
 	CustomEditor as CustomEditorType,
 	ExtensionAPI,
@@ -8,13 +7,10 @@ import type {
 	ThemeColor,
 } from "@earendil-works/pi-coding-agent";
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
-import { execFile } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { hostname as osHostname } from "node:os";
-import { basename } from "node:path";
 import type { TUI } from "@earendil-works/pi-tui";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { pricingOverridesGeneration, refreshPricingOverridesForSession, usageCost } from "../lib/pricing.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { refreshPricingOverridesForSession } from "../lib/pricing.ts";
 import {
 	fgFromBg,
 	groundRow,
@@ -28,581 +24,56 @@ import {
 	frameRuleRow,
 	railVerbatim,
 } from "../lib/box.ts";
-/** The plain footer's segment separator; the framed runs use lib/box.ts. */
-const RULE_RUN = 2;
 import {
 	contextFooterConfigFile,
 	loadThinkingAnimatePreference,
-	paintThinkingLevel,
 	saveThinkingAnimatePreference,
 	THINKING_SHEEN_STEP_MS,
 	updateContextFooterConfig,
 } from "../lib/thinking-colors.ts";
+import {
+	DEFAULT_HOSTNAME_SETTINGS,
+	DEFAULT_LAYOUT,
+	type HostnameSettings,
+	type Layout,
+	REGIONS,
+	type Region,
+	readFooterConfig,
+} from "./config.ts";
+import { createTokenTotalsCache, hostnameLabel, hostnameShown, type ItemData, itemId, renderItem, stripAnsi } from "./items.ts";
+import { fitFramedRow, fitPlainRow, type ShownItem } from "./layout.ts";
+import { PullRequestTracker } from "./pull-request.ts";
 
-const ICON_MODEL = String.fromCodePoint(0xf068c);
-const ICON_FOLDER = "\uf115";
-const ICON_BRANCH = "\uf126";
-const ICON_GAUGE = "\uf1c0";
-const ICON_LOCK = String.fromCodePoint(0xf033e); // nf-md-lock
-const ICON_LOCK_OPEN = String.fromCodePoint(0xf033f); // nf-md-lock_open
-const ICON_SESSION = String.fromCodePoint(0xf04f9); // nf-md-tag
-const ICON_HOST = "\uf233"; // nf-fa-server
-
-const GAUGE_WIDTH = 8;
-const GAUGE_FILLED = "█";
-const GAUGE_EMPTY = "░";
-const GAUGE_WARN_PERCENT = 60;
-const GAUGE_ALERT_PERCENT = 85;
-const WRITE_LOCK_STATUS_KEY = "write-lock";
-const STATUS_KEYS = new Set(["background-tasks", WRITE_LOCK_STATUS_KEY]);
-
-/** OSC 8: wraps a label so terminals treat it as a link to `url`. */
-const LINK_OPEN = "\x1b]8;;";
-const LINK_CLOSE = "\x1b]8;;\x07";
+/** The plain footer's item separator; the framed runs use lib/box.ts. */
+const RULE_RUN = 2;
 
 /** Width of the two rails the frame steals from the editor's own render width. */
 const FRAME_WIDTH = 2;
 /** Columns of air between each rail and the input, paid for the same way. */
 const GUTTER_X = 1;
-/** Below this the frame cannot hold a rule plus a segment, so it is skipped. */
+/** Below this the frame cannot hold a rule plus an item, so plain mode takes over. */
 const MIN_FRAMED_WIDTH = 24;
 
-let footerData: ReadonlyFooterDataProvider | undefined;
-
-/** The TUI the shimmer's repaint loop drives, captured from the editor factory. */
-let tickerTui: TUI | null = null;
-/** The shimmer's repaint driver, held only while its label is on screen. */
-let sheenTicker: ReturnType<typeof setInterval> | null = null;
-
-/**
- * Start or stop the shimmer's repaint loop to match whether its label is being
- * drawn. Called from the editor's render: every transition that could show or
- * hide the gloss — a level change, `/context-footer`, a resize, a model without
- * reasoning — is followed by a render, so this one call keeps the ticker
- * truthful without subscribing to anything.
- */
-function syncSheenTicker(active: boolean): void {
-	if (!active) {
-		if (sheenTicker === null) return;
-		clearInterval(sheenTicker);
-		sheenTicker = null;
-		return;
-	}
-	if (sheenTicker === null) {
-		sheenTicker = setInterval(() => tickerTui?.requestRender(), THINKING_SHEEN_STEP_MS);
-	}
-}
-
-/**
- * Whether the `max` shimmer may animate at all. A machine preference rather
- * than a session choice, so it persists; `/context-footer animate` flips it.
- * One preference for the whole scheme — it governs the model picker's
- * level-list gloss too — persisted through the shared lib helpers.
- */
-let animate = true;
-
 type Paint = (text: string) => string;
+type Regions = Record<Region, ShownItem[]>;
 
-/**
- * Which end of a run the items sit at.
- *
- * The top run is left-aligned and the bottom run right-aligned, so the long
- * unbroken stretch of each rule falls on the opposite corner from the other's.
- * That reads as more room around the input than packing both runs left does.
- */
 /**
  * Whether a blank rail row separates the input from the rule.
  *
  * A terminal row is atomic, so this is a row or nothing. Hugging the rule to a
  * cell edge with `▔`/`▁` would free vertical space without spending a row, but
- * box-drawing `─` is inked at text height, which is what lets a status item
- * read as a break in the line. Move the ink to the top of the cell and the
- * label no longer interrupts the rule, it sits beneath it.
+ * box-drawing `─` is inked at text height, which is what lets an item read as
+ * a break in the line. Move the ink to the top of the cell and the label no
+ * longer interrupts the rule, it sits beneath it.
  */
 type Padding = "full" | "none";
 const PADDINGS = new Set<Padding>(["full", "none"]);
-
-/**
- * The thinking-level label, painted with the shared scheme from
- * lib/thinking-colors.ts so it matches the model picker's level rows exactly —
- * except "off", which paints dim rather than the scheme's thinkingOff color.
- * Themes may map that color to rule shades meant for barely-visible
- * separators, and the frame itself is no longer thinking-tinted (see the
- * editor wrapper), so this badge is the off state's only announcement and
- * has to stay legible. The model picker's DeepSeek toggle rows paint "off"
- * dim for the same reason.
- */
-function thinkingLabel(theme: Theme, level: ModelThinkingLevel, animated: boolean): string {
-	if (level === "off") return theme.fg("dim", `thinking:${level}`);
-	return paintThinkingLevel(theme, level, `thinking:${level}`, animated);
-}
-
-function formatTokens(count: number): string {
-	if (count < 1_000) return count.toString();
-	if (count < 10_000) return `${(count / 1_000).toFixed(1)}k`;
-	if (count < 1_000_000) return `${Math.round(count / 1_000)}k`;
-	return `${(count / 1_000_000).toFixed(1)}M`;
-}
-
-function formatDollars(cost: number): string {
-	return `$${cost.toFixed(2)}`;
-}
-
-interface CostTotals {
-	input: number;
-	output: number;
-	cost: number;
-	hasCost: boolean;
-}
-
-/**
- * Per-response cost, memoized on the message.
- *
- * This runs on every editor render — so on every keystroke — and a price
- * estimate is a dataset lookup that tries several candidate model ids. A
- * response's usage never changes once recorded, so pay for it once per set of
- * loaded pricing overrides.
- */
-const COST_CACHE = new WeakMap<AssistantMessage, { generation: number; cost: number | null }>();
-
-function messageCost(message: AssistantMessage): number | null {
-	const generation = pricingOverridesGeneration();
-	const cached = COST_CACHE.get(message);
-	if (cached?.generation === generation) return cached.cost;
-
-	// A gateway can expose a request alias in `model` and the model that
-	// actually answered in `responseModel`; price the latter when it is there.
-	const priced = message.responseModel ?? message.model;
-	const cost = usageCost(priced, message.usage, message.provider)?.total ?? null;
-	COST_CACHE.set(message, { generation, cost });
-	return cost;
-}
-
-/**
- * Sum every billed entry in the session, using pi's recorded cost where it has
- * one and a public-list-price estimate per response where it does not.
- *
- * This walks `getEntries()` rather than `getBranch()`, and counts the same
- * things pi's own `getUsageCostBreakdown` does: assistant responses, usage
- * reported by a tool, and the calls behind a compaction or a branch summary.
- * An abandoned branch was still billed, and only assistant responses carry a
- * model id, so everything else can only contribute its recorded cost.
- */
-function computeCostTotals(ctx: ExtensionContext): CostTotals {
-	let input = 0;
-	let output = 0;
-	let cost = 0;
-	let hasCost = false;
-
-	function add(usage: Usage, message: AssistantMessage | null): void {
-		input += usage.input + usage.cacheRead + usage.cacheWrite;
-		output += usage.output;
-
-		const total = message ? messageCost(message) : (usage.cost.total > 0 ? usage.cost.total : null);
-		if (total !== null) {
-			cost += total;
-			hasCost = true;
-		}
-	}
-
-	for (const entry of ctx.sessionManager.getEntries()) {
-		if (entry.type === "compaction" || entry.type === "branch_summary") {
-			if (entry.usage) add(entry.usage, null);
-			continue;
-		}
-		if (entry.type !== "message") continue;
-		if (entry.message.role === "assistant") {
-			add(entry.message.usage, entry.message);
-		} else if (entry.message.role === "toolResult" && entry.message.usage) {
-			add(entry.message.usage, null);
-		}
-	}
-
-	return { input, output, cost, hasCost };
-}
-
-interface PullRequest {
-	number: number;
-	url: string;
-}
-
-const PR_LOOKUP_TIMEOUT_MS = 5_000;
-/** How long "no pull request" is trusted before `gh` is asked again. */
-const PR_MISS_TTL_MS = 60_000;
-
-interface PullRequestLookup {
-	pullRequest: PullRequest | null;
-	/** When `gh` answered, for expiring misses. */
-	at: number;
-}
-
-const PR_BY_BRANCH = new Map<string, PullRequestLookup>();
-let prLookupBranch: string | null = null;
-
-/**
- * The live footer's lookup hooks, or null while no footer is installed.
- * Timers and `gh` callbacks read this when they fire, never a copy captured
- * earlier: pi rebuilds the footer on toggle and reload, sometimes while a
- * lookup is still in flight, and a captured copy would belong to a disposed
- * footer.
- */
-let prLookupContext: { cwd: string; currentBranch: () => string | null; onResolved: () => void } | null = null;
-let prRecheckTimer: ReturnType<typeof setTimeout> | undefined;
-
-function cancelPullRequestRecheck(): void {
-	clearTimeout(prRecheckTimer);
-	prRecheckTimer = undefined;
-}
-
-/**
- * Recheck the current branch once the cached miss expires.
- *
- * The timer is armed from the cache, not from the lookup that produced the
- * miss, so a footer rebuilt inside the window re-arms it for the time left.
- */
-function scheduleRecheck(delayMs: number): void {
-	cancelPullRequestRecheck();
-	prRecheckTimer = setTimeout(() => {
-		prRecheckTimer = undefined;
-		const branch = prLookupContext?.currentBranch();
-		if (branch) lookupPullRequest(branch);
-	}, Math.max(0, delayMs));
-	// A pending recheck must not hold pi open at quit.
-	prRecheckTimer.unref?.();
-}
-
-/**
- * Ask `gh` for the pull request on a branch.
- *
- * A found pull request is kept for the session. A miss is kept for
- * PR_MISS_TTL_MS and then rechecked on a timer while a footer is installed,
- * so a branch without a PR spawns `gh` at most once per window and a PR
- * opened mid-session appears without waiting for a repaint. A cached miss
- * still inside its window re-arms that timer and returns; anything found or in
- * flight returns immediately.
- */
-function lookupPullRequest(branch: string): void {
-	const context = prLookupContext;
-	if (!context || prLookupBranch === branch) return;
-	const cached = PR_BY_BRANCH.get(branch);
-	if (cached?.pullRequest) return;
-	if (cached) {
-		const remaining = PR_MISS_TTL_MS - (Date.now() - cached.at);
-		if (remaining > 0) {
-			scheduleRecheck(remaining);
-			return;
-		}
-	}
-	prLookupBranch = branch;
-
-	execFile(
-		"gh",
-		["pr", "view", branch, "--json", "number,url"],
-		{ cwd: context.cwd, timeout: PR_LOOKUP_TIMEOUT_MS },
-		(error, stdout) => {
-			prLookupBranch = null;
-			let found: PullRequest | null = null;
-			if (!error) {
-				try {
-					const parsed = JSON.parse(stdout) as { number?: unknown; url?: unknown };
-					if (typeof parsed.number === "number" && typeof parsed.url === "string") {
-						found = { number: parsed.number, url: parsed.url };
-					}
-				} catch {
-					// `gh` is missing, unauthenticated, or printed something else.
-				}
-			}
-			PR_BY_BRANCH.set(branch, { pullRequest: found, at: Date.now() });
-			// No footer means the session ended or the footer is off; the next
-			// footer re-arms from the cache.
-			if (!prLookupContext) return;
-			if (found) {
-				prLookupContext.onResolved();
-			} else if (prLookupContext.currentBranch() === branch) {
-				scheduleRecheck(PR_MISS_TTL_MS);
-			}
-		},
-	);
-}
-
-function gaugeColor(percent: number): "success" | "warning" | "error" {
-	if (percent >= GAUGE_ALERT_PERCENT) return "error";
-	if (percent >= GAUGE_WARN_PERCENT) return "warning";
-	return "success";
-}
-
-function renderGauge(theme: Theme, percent: number | null): string {
-	if (percent === null) return theme.fg("dim", GAUGE_EMPTY.repeat(GAUGE_WIDTH));
-
-	const clamped = Math.max(0, Math.min(100, percent));
-	const filledCount = Math.round((clamped / 100) * GAUGE_WIDTH);
-	return theme.fg(gaugeColor(clamped), GAUGE_FILLED.repeat(filledCount))
-		+ theme.fg("dim", GAUGE_EMPTY.repeat(GAUGE_WIDTH - filledCount));
-}
-
-/**
- * The hostname segment's settings, from the `hostname` key of the shared
- * config file (`<agent dir>/pi-context-footer/config.json`):
- *
- *   "hostname": {
- *     "show": true,
- *     "match": "^devbox-(.+)$",
- *     "nickname": "box $1",
- *     "nicknames": { "devbox-17.corp.example": "devbox" }
- *   }
- *
- * `match`, when set, decides on its own: the segment shows exactly when the
- * pattern matches the machine's real hostname, whatever `show` says. That is
- * what lets one dotfiles-managed config show the name on remote boxes and hide
- * it on the laptop. Without it, `show` is the switch (default off).
- *
- * `nickname` is a label template expanded from `match`'s captures, which
- * covers machines whose names are not known in advance. An exact `nicknames`
- * entry wins over it.
- */
-interface HostnameSettings {
-	show: boolean;
-	match: RegExp | null;
-	nickname: string | null;
-	nicknames: Map<string, string>;
-}
-
-interface HostnameConfigLoad {
-	settings: HostnameSettings;
-	/** What was wrong with the file, for a one-time warning; null when fine. */
-	problem: string | null;
-}
-
-const DEFAULT_HOSTNAME_SETTINGS: HostnameSettings = { show: false, match: null, nickname: null, nicknames: new Map() };
-
-function loadHostnameSettings(): HostnameConfigLoad {
-	let raw: string;
-	try {
-		raw = readFileSync(contextFooterConfigFile(), "utf8");
-	} catch {
-		// No config file: the defaults are not worth an error.
-		return { settings: DEFAULT_HOSTNAME_SETTINGS, problem: null };
-	}
-
-	let stored: unknown;
-	try {
-		stored = (JSON.parse(raw) as { hostname?: unknown } | null)?.hostname;
-	} catch {
-		return { settings: DEFAULT_HOSTNAME_SETTINGS, problem: "config.json is not valid JSON" };
-	}
-	if (stored === undefined) return { settings: DEFAULT_HOSTNAME_SETTINGS, problem: null };
-	if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
-		return { settings: DEFAULT_HOSTNAME_SETTINGS, problem: "\"hostname\" must be an object" };
-	}
-
-	const { show, match, nickname, nicknames } = stored as {
-		show?: unknown;
-		match?: unknown;
-		nickname?: unknown;
-		nicknames?: unknown;
-	};
-	const problems: string[] = [];
-	const settings: HostnameSettings = { show: show === true, match: null, nickname: null, nicknames: new Map() };
-	if (show !== undefined && typeof show !== "boolean") problems.push("\"hostname.show\" must be true or false");
-
-	if (typeof match === "string" && match.length > 0) {
-		try {
-			// Hostnames are case-insensitive, so the pattern is too.
-			settings.match = new RegExp(match, "i");
-		} catch {
-			problems.push(`"hostname.match" is not a valid regex: ${match}`);
-		}
-	} else if (match !== undefined && match !== null && match !== "") {
-		problems.push("\"hostname.match\" must be a string");
-	}
-
-	if (typeof nickname === "string" && nickname.trim()) {
-		settings.nickname = nickname.trim();
-		if (!settings.match) problems.push("\"hostname.nickname\" needs \"hostname.match\" to expand");
-	} else if (nickname !== undefined && nickname !== null) {
-		problems.push("\"hostname.nickname\" must be a non-empty string");
-	}
-
-	if (nicknames && typeof nicknames === "object" && !Array.isArray(nicknames)) {
-		for (const [host, nickname] of Object.entries(nicknames)) {
-			if (typeof nickname === "string" && nickname.trim()) {
-				settings.nicknames.set(host.toLowerCase(), nickname.trim());
-			} else {
-				problems.push(`"hostname.nicknames.${host}" must be a non-empty string`);
-			}
-		}
-	} else if (nicknames !== undefined) {
-		problems.push("\"hostname.nicknames\" must be an object");
-	}
-
-	return { settings, problem: problems.length > 0 ? problems.join("; ") : null };
-}
-
-let hostnameSettings: HostnameSettings = DEFAULT_HOSTNAME_SETTINGS;
-/** The machine's hostname, read once per session start — it does not move under a running session. */
-let machineHostname = "";
-
-/** Whether the segment shows: the regex decides when there is one, else the switch. */
-function hostnameShown(settings: HostnameSettings, host: string): boolean {
-	if (!host) return false;
-	return settings.match ? settings.match.test(host) : settings.show;
-}
-
-/**
- * Expand a `nickname` template against a match of `hostname.match`, with
- * String.prototype.replace's reference syntax: `$1`…`$99` for numbered
- * groups, `$<name>` for named groups, `$&` for the whole match, and `$$` for a
- * literal dollar sign. A reference to a group that did not participate
- * expands to nothing; anything else after `$` is kept as written.
- */
-function expandNickname(template: string, match: RegExpMatchArray): string {
-	return template.replace(/\$(\$|&|<([^>]*)>|(\d{1,2}))/g, (whole, token: string, name?: string, index?: string) => {
-		if (token === "$") return "$";
-		if (token === "&") return match[0];
-		if (name !== undefined) return match.groups && name in match.groups ? (match.groups[name] ?? "") : whole;
-		const group = Number(index);
-		return group > 0 && group < match.length ? (match[group] ?? "") : whole;
-	});
-}
-
-/**
- * The label for `host`, first of:
- *
- * - its entry in `nicknames`, looked up by the full name and then by its
- *   first label (`devbox-17` for `devbox-17.corp.example`), case-insensitively;
- * - the `nickname` template expanded from `match`'s captures, when the pattern
- *   matches and the expansion is not blank;
- * - the hostname itself.
- */
-function hostnameLabel(settings: HostnameSettings, host: string): string {
-	const full = host.toLowerCase();
-	const short = full.split(".")[0] ?? full;
-	const exact = settings.nicknames.get(full) ?? settings.nicknames.get(short);
-	if (exact) return exact;
-	if (settings.nickname && settings.match) {
-		const match = host.match(settings.match);
-		const label = match ? expandNickname(settings.nickname, match).trim() : "";
-		if (label) return label;
-	}
-	return host;
-}
-
-/**
- * The hostname as a left-anchored bottom segment, or null when hidden. Painted
- * like the session name, so the two identity labels read as a pair at
- * opposite corners of the frame.
- */
-function hostnameSegment(theme: Theme): string | null {
-	if (!hostnameShown(hostnameSettings, machineHostname)) return null;
-	return paintIdentity(theme, `${ICON_HOST} ${hostnameLabel(hostnameSettings, machineHostname)}`);
-}
-
-/**
- * The identity labels' paint — the session name and the hostname, at opposite
- * corners of the frame. `emphasisText` is a theme color pi's ThemeColor union
- * does not know about, defined by the frontier-funds theme. Themes that do
- * not define it (pi's own defaults among them) make `theme.fg` throw
- * "Unknown theme color", which from a render path tears the whole TUI down,
- * so those fall back to the accent color.
- */
-function paintIdentity(theme: Theme, text: string): string {
-	try {
-		return theme.fg("emphasisText" as ThemeColor, text);
-	} catch {
-		return theme.fg("accent", text);
-	}
-}
-
-/** The session name as a right-anchored segment, or null when none is set. */
-function sessionNameSegment(ctx: ExtensionContext, theme: Theme): string | null {
-	const name = ctx.sessionManager.getSessionName();
-	if (!name) return null;
-	return paintIdentity(theme, `${ICON_SESSION} ${name}`);
-}
-
-/** The upper border carries identity and current context health. */
-function buildTopSegments(ctx: ExtensionContext, theme: Theme, animated: boolean): string[] {
-	const model = ctx.model?.name || ctx.model?.id || "no-model";
-	const sessionCwd = ctx.sessionManager.getCwd();
-	const cwd = basename(sessionCwd) || sessionCwd;
-	const usage = ctx.getContextUsage();
-	const contextWindow = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
-	const percent = usage?.percent ?? null;
-	const percentLabel = percent === null ? "?" : `${percent.toFixed(0)}%`;
-	const gaugeTone = percent === null ? "dim" : gaugeColor(percent);
-
-	const segments = [theme.fg("syntaxType", `${ICON_MODEL} ${model}`)];
-	if (ctx.model?.reasoning && ctx.thinkingLevel) {
-		segments.push(thinkingLabel(theme, ctx.thinkingLevel, animated));
-	}
-	segments.push(theme.fg("syntaxFunction", `${ICON_FOLDER} ${cwd}`));
-	segments.push(
-		`${theme.fg(gaugeTone, ICON_GAUGE)} ${renderGauge(theme, percent)} ${theme.fg("text", `${percentLabel}/${formatTokens(contextWindow)}`)}`,
-	);
-	return segments;
-}
-
-/** The lower border carries branch, calculated cost, token totals, and task state. */
-function buildBottomSegments(
-	ctx: ExtensionContext,
-	theme: Theme,
-	provider: ReadonlyFooterDataProvider | undefined,
-): string[] {
-	const totals = computeCostTotals(ctx);
-	const segments: string[] = [];
-	const branch = provider?.getGitBranch() ?? null;
-	if (branch) {
-		const pullRequest = PR_BY_BRANCH.get(branch)?.pullRequest;
-		const label = `${ICON_BRANCH} ${branch}`;
-		segments.push(theme.fg("success", label));
-		if (pullRequest) {
-			segments.push(
-				`${LINK_OPEN}${pullRequest.url}\x07${theme.fg("mdLink", `#${pullRequest.number}`)}${LINK_CLOSE}`,
-			);
-		}
-	}
-
-	// The money glyph is itself a dollar sign, so `formatDollars` supplies the
-	// only one the segment needs.
-	if (totals.hasCost) {
-		segments.push(theme.fg("accent", formatDollars(totals.cost)));
-	}
-	if (totals.input || totals.output) {
-		segments.push(theme.fg("syntaxNumber", `⇡${formatTokens(totals.input)} ⇣${formatTokens(totals.output)}`));
-	}
-
-	for (const [key, status] of provider?.getExtensionStatuses() ?? []) {
-		if (!STATUS_KEYS.has(key)) continue;
-		// Statuses arrive pre-styled for pi's own footer — pi-background-tasks
-		// ships a filled light-blue pill. Strip that and repaint so a borrowed
-		// status reads as part of this border rather than a sticker on it.
-		const plain = stripAnsi(status).trim();
-		if (!plain) continue;
-		if (key === WRITE_LOCK_STATUS_KEY) {
-			// The published text (`write unlocked`) contains "locked", so the
-			// open-lock test has to win.
-			const icon = /unlock/i.test(plain) ? ICON_LOCK_OPEN : ICON_LOCK;
-			segments.push(theme.fg("warning", `${icon} ${plain}`));
-			continue;
-		}
-		segments.push(theme.fg("accent", plain));
-	}
-	return segments;
-}
-
-/** A CSI sequence, or an OSC/APC string up to its BEL or ST terminator. */
-const ANSI_PATTERN = /\x1b\[[0-9;?]*[a-zA-Z]|\x1b[\]_][^\x07\x1b]*(?:\x07|\x1b\\)/g;
-
-function stripAnsi(text: string): string {
-	return text.replace(ANSI_PATTERN, "");
-}
 
 /**
  * Pi's editor emits a full-width horizontal rule as its first and last row,
  * swapping in a `─── ↑ N more ───` marker when the input itself is scrolled.
  * Those two rows are the ones this extension turns into a framed border.
  */
-/** Whether a pre-rendered row is one of pi's full-width rule rows (or a scroll marker, which replaces a rule row) — the footer hunts for these to know where the frame can sit. */
 function isRuleRow(line: string, width: number): boolean {
 	const stripped = stripAnsi(line);
 	if (visibleWidth(stripped) !== width) return false;
@@ -610,23 +81,26 @@ function isRuleRow(line: string, width: number): boolean {
 	return /^─+$/.test(stripped) || /[↑↓]/.test(stripped);
 }
 
-/** Pull `↑ 3 more` out of a scroll marker so the frame can carry it as a segment. */
-function scrollNotice(theme: Theme, line: string): string | null {
+/** Pull `↑ 3 more` out of a scroll marker so the frame can carry it as an item. */
+function scrollNotice(theme: Theme, line: string): ShownItem | null {
 	const match = /([↑↓])\s+(\d+)\s+more/.exec(stripAnsi(line));
 	if (!match) return null;
-	return theme.fg("dim", `${match[1]} ${match[2]} more`);
+	return { id: "scroll-notice", text: theme.fg("dim", `${match[1]} ${match[2]} more`) };
 }
 
 /**
- * Draws a continuous border around pi's prompt editor, with status items set
- * into the top and bottom runs of the rule. This is deliberately not a widget:
- * the labels are part of the prompt's own frame. The rule rows themselves
- * come from ../lib/box.ts — the shared house layout, so the prompt frame, the
- * recap box, and the user-message box are built from the same generators.
+ * Draws a continuous border around pi's prompt editor, with the layout's
+ * regions set into the top and bottom runs of the rule. This is deliberately
+ * not a widget: the labels are part of the prompt's own frame. The rule rows
+ * themselves come from ../lib/box.ts — the shared house layout, so the prompt
+ * frame, the recap box, and the user-message box are built from the same
+ * generators.
  *
  * The editor is rendered narrow so the rails and their gutters have somewhere
  * to live. Prefixing full-width rows instead overflows the terminal, and pi
  * responds to an over-wide row by throwing out of `TuiMainScreen.doRender`.
+ *
+ * Returns the rows and the ids of the items that survived the width.
  */
 function frameEditor(
 	baseRender: (width: number) => string[],
@@ -634,32 +108,29 @@ function frameEditor(
 	theme: Theme,
 	paint: Paint,
 	padding: Padding,
-	topSegments: string[],
-	bottomSegments: string[],
-	topTrail: string[],
-	bottomLead: string[],
-): string[] {
+	regions: Regions,
+): { lines: string[]; visible: Set<string> } {
+	const visible = new Set<string>();
 	const innerWidth = width - FRAME_WIDTH - GUTTER_X * 2;
 	const lines = baseRender(innerWidth);
-	if (lines.length < 2) return lines;
+	if (lines.length < 2) return { lines, visible };
 
 	// Pi appends its autocomplete rows after the editor's lower rule, so the
 	// lower rule is the last rule row rather than the last row.
 	let lowerRuleIndex = lines.length - 1;
 	while (lowerRuleIndex > 0 && !isRuleRow(lines[lowerRuleIndex]!, innerWidth)) lowerRuleIndex--;
-	if (lowerRuleIndex === 0) return lines;
+	if (lowerRuleIndex === 0) return { lines, visible };
 
 	const hasUpperRule = isRuleRow(lines[0]!, innerWidth);
 	const framed: string[] = [];
 	const gutter = railVerbatim({ line: " ".repeat(innerWidth), paint, padX: GUTTER_X });
+	const markVisible = (ids: string[]) => ids.forEach((id) => visible.add(id));
 
+	// The upper rule: top-right is anchored, top-left takes what is left.
 	const upperNotice = hasUpperRule ? scrollNotice(theme, lines[0]!) : null;
-	framed.push(
-		frameRuleRow(width, paint, CORNER_TOP_LEFT, CORNER_TOP_RIGHT, "left", [
-			...(upperNotice ? [upperNotice] : []),
-			...topSegments,
-		], topTrail),
-	);
+	const top = fitFramedRow(width, regions.topRight, [...(upperNotice ? [upperNotice] : []), ...regions.topLeft]);
+	markVisible([...top.anchor.visible, ...top.body.visible]);
+	framed.push(frameRuleRow(width, paint, CORNER_TOP_LEFT, CORNER_TOP_RIGHT, "left", top.body.texts, top.anchor.texts));
 
 	if (padding === "full") framed.push(gutter);
 	for (let index = hasUpperRule ? 1 : 0; index < lowerRuleIndex; index++) {
@@ -671,19 +142,19 @@ function frameEditor(
 	const trailing = lines.slice(lowerRuleIndex + 1);
 	if (trailing.length > 0) {
 		// Keep the completion list inside the frame: the lower rule becomes a
-		// divider and the status run moves below the list.
-		framed.push(
-			frameRuleRow(width, paint, TEE_LEFT, TEE_RIGHT, "right", lowerNotice ? [lowerNotice] : []),
-		);
+		// divider and the bottom regions move below the list.
+		framed.push(frameRuleRow(width, paint, TEE_LEFT, TEE_RIGHT, "right", lowerNotice ? [lowerNotice.text] : []));
 		for (const line of trailing) framed.push(railVerbatim({ line, paint, padX: GUTTER_X }));
 	}
 
-	framed.push(
-		frameRuleRow(width, paint, CORNER_BOTTOM_LEFT, CORNER_BOTTOM_RIGHT, "right", [
-			...(trailing.length === 0 && lowerNotice ? [lowerNotice] : []),
-			...bottomSegments,
-		], [], bottomLead),
-	);
+	// The lower rule: bottom-left is anchored, bottom-right takes what is left.
+	const bottom = fitFramedRow(width, regions.bottomLeft, [
+		...(trailing.length === 0 && lowerNotice ? [lowerNotice] : []),
+		...regions.bottomRight,
+	]);
+	markVisible([...bottom.anchor.visible, ...bottom.body.visible]);
+	framed.push(frameRuleRow(width, paint, CORNER_BOTTOM_LEFT, CORNER_BOTTOM_RIGHT, "right", bottom.body.texts, [], bottom.anchor.texts));
+
 	// The prompt box sits on the same dark ground as the recap and
 	// user-message boxes (userMessageBg), so all three read as one family.
 	// groundRow re-asserts the ground after the full resets inside the row —
@@ -701,53 +172,122 @@ function frameEditor(
 	// the box fades out above whatever follows instead of ending at a hard
 	// rule. Also NOT grounded — same reasoning as the top.
 	const softBottom = `${fgFromBg(theme.getBgAnsi("userMessageBg"))}${"▔".repeat(width)}\x1b[39m`;
-	return [softTop, ...framed.map(ground), softBottom];
+	return { lines: [softTop, ...framed.map(ground), softBottom], visible };
 }
 
 /**
- * The status as a plain footer, for when the frame is not drawing it.
- *
- * Replacing pi's footer and then declining to render is how the model, context
- * and cost vanish entirely on a terminal too narrow to frame.
+ * Plain mode: the layout as two rows, for when the terminal is too narrow to
+ * frame. Replacing pi's footer and then declining to render is how the model
+ * and context would vanish entirely on a narrow terminal.
  */
-function renderPlainFooter(ctx: ExtensionContext, theme: Theme, width: number): string[] {
+function renderPlainFooter(theme: Theme, width: number, regions: Regions): string[] {
 	const separator = theme.fg("borderMuted", `  ${RULE.repeat(RULE_RUN)}  `);
-	// No repaint ticker drives the plain rows, so the gloss never animates here.
-	const sessionName = sessionNameSegment(ctx, theme);
-	const top = sessionName ? [...buildTopSegments(ctx, theme, false), sessionName] : buildTopSegments(ctx, theme, false);
-	const host = hostnameSegment(theme);
-	const bottom = buildBottomSegments(ctx, theme, footerData);
-	const rows = [top, host ? [host, ...bottom] : bottom];
+	return [
+		[...regions.topLeft, ...regions.topRight],
+		[...regions.bottomLeft, ...regions.bottomRight],
+	].map((items) => fitPlainRow(width, items).texts.join(separator));
+}
 
-	return rows.map((segments) => {
-		const row = segments.filter((segment) => segment.trim().length > 0).join(separator);
-		return visibleWidth(row) > width ? truncateToWidth(row, width, "…") + LINK_CLOSE : row;
-	});
+function layoutSelects(layout: Layout, id: string): boolean {
+	return REGIONS.some((region) => layout[region].some((item) => itemId(item) === id));
 }
 
 export default function contextFooterExtension(pi: ExtensionAPI): void {
+	// Every piece of state lives here, not at module level: pi recreates the
+	// extension on new/resume/fork and /reload, and a module can outlive that.
 	let enabled = true;
 	let installed = false;
 	let padding: Padding = "full";
+	/**
+	 * Whether the `max` shimmer may animate at all. A machine preference rather
+	 * than a session choice, so it persists; `/context-footer animate` flips it.
+	 * One preference for the whole scheme — it governs the model picker's
+	 * level-list gloss too — persisted through the shared lib helpers.
+	 */
+	let animate = true;
+	let layout: Layout = DEFAULT_LAYOUT;
+	let hostnameSettings: HostnameSettings = DEFAULT_HOSTNAME_SETTINGS;
+	/** The machine's hostname, re-read with the configuration. */
+	let machineHostname = "";
+
+	/** The footer pi is currently showing, while this extension's footer is enabled. */
+	let footer: { tui: TUI; provider: ReadonlyFooterDataProvider; cwd: string } | null = null;
+	const pullRequests = new PullRequestTracker();
+	const tokenTotals = createTokenTotalsCache();
+
+	/** The TUI the shimmer's repaint loop drives, captured from the editor factory. */
+	let tickerTui: TUI | null = null;
+	/** The shimmer's repaint driver, held only while its label is on screen. */
+	let sheenTicker: ReturnType<typeof setInterval> | null = null;
+
+	/**
+	 * Start or stop the shimmer's repaint loop to match whether its label is
+	 * being drawn. Called from the editor's render: every transition that could
+	 * show or hide the gloss — a level change, `/context-footer`, a resize, a
+	 * model without reasoning, a layout reload — is followed by a render, so
+	 * this one call keeps the ticker truthful without subscribing to anything.
+	 */
+	function syncSheenTicker(active: boolean): void {
+		if (!active) {
+			if (sheenTicker === null) return;
+			clearInterval(sheenTicker);
+			sheenTicker = null;
+			return;
+		}
+		if (sheenTicker === null) {
+			sheenTicker = setInterval(() => tickerTui?.requestRender(), THINKING_SHEEN_STEP_MS);
+		}
+	}
+
+	/** Look up pull requests only while the footer is enabled and its layout selects the item. */
+	function syncPullRequestWatch(): void {
+		const current = footer;
+		if (!current || !layoutSelects(layout, "pull-request")) {
+			pullRequests.watch(null);
+			return;
+		}
+		pullRequests.watch({
+			cwd: current.cwd,
+			currentBranch: () => current.provider.getGitBranch(),
+			onResolved: () => current.tui.requestRender(),
+		});
+	}
+
+	/** Resolve the layout against current data: each region's available items, in order. */
+	function resolveRegions(ctx: ExtensionContext, theme: Theme, animated: boolean): Regions {
+		const provider = footer?.provider;
+		const cwd = ctx.sessionManager.getCwd();
+		const branch = provider?.getGitBranch() ?? null;
+		const data: ItemData = {
+			ctx,
+			theme,
+			branch,
+			pullRequest: branch ? pullRequests.get(cwd, branch) : null,
+			hostname: machineHostname,
+			hostnameSettings,
+			tokens: tokenTotals(ctx.sessionManager),
+			statuses: provider?.getExtensionStatuses() ?? new Map(),
+			animated,
+		};
+		const regions = {} as Regions;
+		for (const region of REGIONS) {
+			regions[region] = [];
+			for (const item of layout[region]) {
+				const text = renderItem(item, data);
+				if (text !== null && visibleWidth(text) > 0) regions[region].push({ id: itemId(item), text });
+			}
+		}
+		return regions;
+	}
 
 	function buildFooter(ctx: ExtensionContext) {
 		return (tui: TUI, _theme: Theme, provider: ReadonlyFooterDataProvider) => {
-			footerData = provider;
-
-			const lookupContext = {
-				cwd: ctx.sessionManager.getCwd(),
-				currentBranch: () => provider.getGitBranch(),
-				onResolved: () => tui.requestRender(),
-			};
-			prLookupContext = lookupContext;
-			const findPullRequest = () => {
-				const branch = provider.getGitBranch();
-				if (branch) lookupPullRequest(branch);
-			};
-			findPullRequest();
+			const self = { tui, provider, cwd: ctx.sessionManager.getCwd() };
+			footer = self;
+			syncPullRequestWatch();
 
 			const unsubscribe = provider.onBranchChange(() => {
-				findPullRequest();
+				pullRequests.sync();
 				tui.requestRender();
 			});
 
@@ -755,15 +295,16 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 				dispose() {
 					unsubscribe();
 					// A footer built before this one was disposed owns the lookup now.
-					if (prLookupContext !== lookupContext) return;
-					cancelPullRequestRecheck();
-					prLookupContext = null;
+					if (footer !== self) return;
+					footer = null;
+					syncPullRequestWatch();
 				},
 				invalidate() {},
 				render(width: number): string[] {
-					// The frame carries the status itself, unless it is not drawing.
+					// The frame carries the layout itself, unless it is not drawing.
 					if (width >= MIN_FRAMED_WIDTH) return [];
-					return renderPlainFooter(ctx, ctx.ui.theme, width);
+					// No repaint ticker drives the plain rows, so the gloss never animates here.
+					return renderPlainFooter(ctx.ui.theme, width, resolveRegions(ctx, ctx.ui.theme, false));
 				},
 			};
 		};
@@ -780,8 +321,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 		const previousFactory = ctx.ui.getEditorComponent();
 		ctx.ui.setEditorComponent((tui, editorTheme, keybindings) => {
 			// The shimmer's repaint loop needs the TUI. The frame this factory wraps
-			// is where the gloss animates; the narrow plain footer draws it too,
-			// but never moving.
+			// is where the gloss animates; plain mode draws it too, but never moving.
 			tickerTui = tui;
 			const editor = previousFactory
 				? previousFactory(tui, editorTheme, keybindings)
@@ -789,57 +329,80 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 			const baseRender = editor.render.bind(editor);
 
 			editor.render = (width: number): string[] => {
+				// Too narrow for a rule plus a label: leave pi's own rows alone.
+				if (!enabled || width < MIN_FRAMED_WIDTH) {
+					syncSheenTicker(false);
+					return baseRender(width);
+				}
+
 				// One predicate drives both the ticker and the gloss: the highlight
 				// advances only while the ticker runs, so a gloss that is not being
 				// driven never jumps to a new position on an unrelated render — it
-				// stays pinned at the head of the label, as in the plain footer.
-				const animated =
-					enabled
-						&& animate
-						&& width >= MIN_FRAMED_WIDTH
-						&& !!ctx.model?.reasoning
-						&& ctx.thinkingLevel === "max";
-				syncSheenTicker(animated);
-				// Too narrow for a rule plus a label: leave pi's own rows alone.
-				if (!enabled || width < MIN_FRAMED_WIDTH) return baseRender(width);
+				// stays pinned at the head of the label, as in plain mode.
+				const animating = animate && !!ctx.model?.reasoning && ctx.thinkingLevel === "max";
 
 				const theme = ctx.ui.theme;
 				// The frame is chrome, not signal: it paints the theme's border
 				// colour and does not follow pi's thinking-level tint, which can be
 				// near-invisible where a theme maps thinkingOff to a rule shade —
-				// the badge in the top run carries the thinking state. Bash mode is
-				// the one exception: it keeps pi's tint, detected with the same
-				// predicate pi applies on every text change ("!" at the head of the
-				// input), because "you are about to run a shell command" is a
-				// frame-level cue pi's own editor still has.
+				// the thinking item carries the thinking state. Bash mode is the one
+				// exception: it keeps pi's tint, detected with the same predicate pi
+				// applies on every text change ("!" at the head of the input),
+				// because "you are about to run a shell command" is a frame-level
+				// cue pi's own editor still has.
 				const bashMode = editor.getText().trimStart().startsWith("!");
 				const paint: Paint = bashMode
 					? (editor.borderColor ?? ((text: string) => theme.fg("syntaxType", text)))
 					: (text: string) => theme.fg("syntaxType", text);
 
-				return frameEditor(
-					baseRender,
-					width,
-					theme,
-					paint,
-					padding,
-					buildTopSegments(ctx, theme, animated),
-					buildBottomSegments(ctx, theme, footerData),
-					[sessionNameSegment(ctx, theme)].filter((s): s is string => s !== null),
-					[hostnameSegment(theme)].filter((s): s is string => s !== null),
-				);
+				const framed = frameEditor(baseRender, width, theme, paint, padding, resolveRegions(ctx, theme, animating));
+				// The ticker runs only while the thinking item is actually on screen.
+				syncSheenTicker(animating && framed.visible.has("thinking"));
+				return framed.lines;
 			};
 
 			return editor as CustomEditorType;
 		});
 	}
 
-	/** Re-read the hostname and its settings, warning once about a bad config. */
+	/** Whether the current theme defines a color, for validating the layout's colors. */
+	function themeHasColor(ctx: ExtensionContext, name: string): boolean {
+		try {
+			ctx.ui.theme.fg(name as ThemeColor, "");
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * Configuration reload: re-read the owner configuration without touching
+	 * the extension runtime. At session start an unusable layout falls back to
+	 * the default; on a reload, the last valid one stays.
+	 */
+	function loadConfig(ctx: ExtensionContext, reloading: boolean): void {
+		machineHostname = osHostname();
+		animate = loadThinkingAnimatePreference();
+		const load = readFooterConfig(contextFooterConfigFile(), (name) => themeHasColor(ctx, name));
+		if (load.layout) layout = load.layout;
+		else if (!reloading) layout = DEFAULT_LAYOUT;
+		if (load.hostname) hostnameSettings = load.hostname;
+		else if (!reloading) hostnameSettings = DEFAULT_HOSTNAME_SETTINGS;
+		syncPullRequestWatch();
+
+		if (load.problems.length > 0) {
+			const fallback = load.layout ? "" : reloading ? " Kept the previous layout." : " Using the default layout.";
+			ctx.ui.notify(`context-footer config: ${load.problems.join("; ")}.${fallback}`, "warning");
+		}
+	}
+
+	/** Re-read only the hostname settings, for `/context-footer host`. */
 	function reloadHostname(ctx: ExtensionContext): void {
 		machineHostname = osHostname();
-		const { settings, problem } = loadHostnameSettings();
-		hostnameSettings = settings;
-		if (problem) ctx.ui.notify(`context-footer hostname: ${problem}`, "warning");
+		const load = readFooterConfig(contextFooterConfigFile());
+		if (load.hostname) hostnameSettings = load.hostname;
+		const problems = load.hostname ? load.problems.filter((problem) => problem.startsWith("\"hostname")) : load.problems;
+		if (problems.length > 0) ctx.ui.notify(`context-footer hostname: ${problems.join("; ")}`, "warning");
 	}
 
 	function describeHostname(): string {
@@ -854,8 +417,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (_event, ctx) => {
 		refreshPricingOverridesForSession(ctx);
-		animate = loadThinkingAnimatePreference();
-		reloadHostname(ctx);
+		loadConfig(ctx, false);
 		if (ctx.mode === "tui") install(ctx);
 	});
 
@@ -863,14 +425,24 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 		// The TUI is going away; a live interval would paint into it after the
 		// session ends and pin the event loop open at quit.
 		syncSheenTicker(false);
-		cancelPullRequestRecheck();
-		prLookupContext = null;
+		footer = null;
+		pullRequests.watch(null);
 	});
 
 	pi.registerCommand("context-footer", {
-		description: "Toggle the context-footer border, set its padding, toggle the thinking shimmer, or show the hostname",
+		description: "Toggle the context-footer border, reload its configuration, set its padding, toggle the thinking shimmer, or show the hostname",
 		handler: async (args, ctx) => {
 			const [verb, value, ...extra] = (args ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+
+			if (verb === "reload") {
+				if (value !== undefined) {
+					ctx.ui.notify("Usage: /context-footer reload", "warning");
+					return;
+				}
+				loadConfig(ctx, true);
+				ctx.ui.notify("Context footer configuration reloaded", "info");
+				return;
+			}
 
 			if (verb === "pad" || verb === "padding") {
 				if (value === undefined) {
@@ -945,7 +517,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 			}
 
 			if (value !== undefined || (verb !== undefined && verb !== "on" && verb !== "off")) {
-				ctx.ui.notify("Usage: /context-footer [on|off|pad full|pad none|animate on|animate off|host on|host off]", "warning");
+				ctx.ui.notify("Usage: /context-footer [on|off|reload|pad full|pad none|animate on|animate off|host on|host off]", "warning");
 				return;
 			}
 
@@ -957,7 +529,8 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 
 			enabled = nextEnabled;
 			// The editor wrapper stays installed but inert; the footer goes back to
-			// pi so the session information does not simply disappear.
+			// pi so the session information does not simply disappear. Disposing
+			// this footer stops its pull-request lookups.
 			ctx.ui.setFooter(enabled ? buildFooter(ctx) : undefined);
 			ctx.ui.notify(enabled ? "Context footer enabled" : "Context footer disabled", "info");
 		},
