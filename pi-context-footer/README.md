@@ -1,8 +1,8 @@
 # context-footer
 
 A small [pi](https://github.com/earendil-works/pi-coding-agent) extension that
-draws a continuous border around the prompt editor and sets session status
-items into the rule itself, inspired by
+draws a continuous border around the prompt editor and sets session state into
+the rule itself, inspired by
 [`pi-powerline-footer`](https://github.com/nicobailon/pi-powerline-footer).
 
 ![Context footer framing the editor with model, thinking level, context, branch, token, and write-lock status](../docs/images/context-footer-prompt-frame.png)
@@ -10,7 +10,7 @@ items into the rule itself, inspired by
 ## Layout
 
 The frame is one unbroken box — `╭──╮`, vertical rails down both sides, `╰──╯` —
-interrupted only where a status item sits in the rule:
+interrupted only where an item sits in the rule:
 
 ```text
 ╭── 󰚌 Claude Sonnet 5 ── thinking:high ──  pi-extensions ──  ░░░░░░░░ 5%/1.0M ── 󰓹 my-feature-work ──╮
@@ -101,6 +101,20 @@ Below 24 columns the frame steps aside and the footer draws two plain rows:
 `topLeft` then `topRight`, and `bottomLeft` then `bottomRight`, each row cut at
 its end.
 
+These are three distinct states. **Framed** draws the layout in the prompt's
+border. **Plain** is only a narrower drawing of the same layout from the same
+data. **Off** (`/context-footer off`) hands the footer back to pi, whose
+standard footer chooses what to show by its own rules.
+
+### Producers
+
+A status's producer — the extension that publishes it — owns its text:
+fetching the data, keeping it current, wording its errors and staleness, and
+choosing any icon. It also owns session attribution: a producer must not
+publish one session's figure as another's, because the footer cannot tell
+from the text. The footer only selects, places, sanitizes, styles and clips.
+None of this is a security boundary; extensions share one process.
+
 ### Validation and reload
 
 The file is read at session start and by `/context-footer reload`, which
@@ -157,7 +171,7 @@ item currently fits on screen. A found pull request is
 kept for the session; a miss is kept for a minute, so a branch without a pull
 request spawns `gh` at most once a minute, and one opened mid-session appears
 within a minute. If `gh` is missing,
-unauthenticated, or slow, the segment is simply absent.
+unauthenticated, or slow, the item is simply absent.
 
 ### Session name
 
@@ -166,7 +180,7 @@ When a session has a display name (set with `pi --name <name>` or the RPC
 marked with the Nerd Font `nf-md-tag` glyph and painted with the theme's
 `emphasisText` color (defined by the frontier-funds theme; the accent
 color in themes without it). A session
-without a name shows no segment at all — the top run stays left-aligned as
+without a name shows nothing there — the top run stays left-aligned as
 before.
 
 ### Hostname
@@ -194,7 +208,7 @@ preference):
 
 - **`show`** — the simple switch. `/context-footer host on|off` writes it.
 - **`match`** — a regex tested against the real hostname, case-insensitively.
-  When set, it decides on its own and `show` is ignored: the segment appears
+  When set, it decides on its own and `show` is ignored: the item appears
   exactly when the pattern matches. One dotfiles-managed config can therefore
   show the name on remote machines and hide it on the laptop.
 - **`nickname`** — a label template expanded from `match`'s captures, for
@@ -218,7 +232,7 @@ The identity color is the theme's `emphasisText`. Themes that do not define
 it, including pi's default themes, fall back to the accent color rather than
 crashing the render.
 
-Items are separated by short rule segments, so the border reads as continuous
+Items are separated by short runs of rule, so the border reads as continuous
 line broken by labels rather than as a line with a separate status bar attached.
 The top run is left-aligned and the bottom run right-aligned, so the long
 unbroken stretch of each rule falls on the opposite corner from the other's —
@@ -235,8 +249,8 @@ truncated with `…` and the frame still closes.
   run closes the box underneath — so the completion popup renders *inside* the
   frame instead of below a dangling border.
 - **A scrolled input.** When the prompt has more lines than fit, pi replaces a
-  rule row with a `↑ N more` marker. That marker is folded into the frame as its
-  own status item rather than displacing the border.
+  rule row with a `↑ N more` marker. That marker is folded into the frame as an
+  item of its own rather than displacing the border.
 - **Narrow terminals.** Below 24 columns there is no room for a rule plus a
   label, so the extension steps aside and returns pi's own editor rows untouched.
 
@@ -346,9 +360,14 @@ to draw is how the model and context would disappear entirely.
 ## Development
 
 ```bash
-npm run typecheck
-pi
+npm run test:context-footer             # unit tests and a fake-pi host, run by npm run check
+python3 pi-context-footer/tui.test.py   # the real pi on PATH in a pty; needs pyte
 ```
+
+The second launches pi with scratch settings, a synthetic session and a
+synthetic status producer, and asserts on decoded screens across widths,
+resizes, both TUI modes, status updates, reloads, session changes and the
+model picker. It makes no model requests.
 
 Run `node scripts/link-extensions.mjs --yes` from the repository root after a
 fresh checkout. It adds both the project-local and global symlinks needed to
