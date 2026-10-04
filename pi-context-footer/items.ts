@@ -16,8 +16,6 @@ const ICON_MODEL = String.fromCodePoint(0xf068c);
 const ICON_FOLDER = "";
 const ICON_BRANCH = "";
 const ICON_GAUGE = "";
-const ICON_LOCK = String.fromCodePoint(0xf033e); // nf-md-lock
-const ICON_LOCK_OPEN = String.fromCodePoint(0xf033f); // nf-md-lock_open
 const ICON_SESSION = String.fromCodePoint(0xf04f9); // nf-md-tag
 const ICON_HOST = ""; // nf-fa-server
 
@@ -30,13 +28,6 @@ const GAUGE_ALERT_PERCENT = 85;
 /** OSC 8: wraps a label so terminals treat it as a link to `url`. */
 const LINK_OPEN = "\x1b]8;;";
 const LINK_CLOSE = "\x1b]8;;\x07";
-
-/** A CSI sequence, or an OSC/APC string up to its BEL or ST terminator. */
-const ANSI_PATTERN = /\x1b\[[0-9;?]*[a-zA-Z]|\x1b[\]_][^\x07\x1b]*(?:\x07|\x1b\\)/g;
-
-export function stripAnsi(text: string): string {
-	return text.replace(ANSI_PATTERN, "");
-}
 
 /** Everything an item may draw from, gathered once per render. */
 export interface ItemData {
@@ -252,19 +243,9 @@ function renderBuiltin(id: BuiltinItemId, data: ItemData): string | null {
 }
 
 /**
- * Pre-existing write-lock presentation, kept until pi-write-lock publishes
- * its own icon. The published text (`write unlocked`) contains "locked", so
- * the open-lock test has to win.
- */
-function legacyWriteLockIcon(key: string, text: string): string {
-	if (key !== "write-lock") return text;
-	return `${/unlock/i.test(stripAnsi(text)) ? ICON_LOCK_OPEN : ICON_LOCK} ${text}`;
-}
-
-/**
  * Present sanitized status text. Normalized mode repaints it in one theme
- * color — statuses arrive styled for pi's own footer, and pi-background-tasks
- * ships a filled pill, so repainting makes them read as part of this border;
+ * color — statuses arrive styled for pi's own footer, some as filled pills,
+ * so repainting makes them read as part of this border;
  * producer mode keeps the producer's colors. Either way the width limit
  * applies last, on what will actually be drawn.
  */
@@ -281,7 +262,7 @@ export function renderItem(item: LayoutItem, data: ItemData): string | null {
 		const published = data.statuses.get(item.key);
 		const text = published === undefined ? "" : sanitizeStatus(published, item.presentation);
 		if (!text) return null;
-		return present(legacyWriteLockIcon(item.key, text), item, data.theme);
+		return present(text, item, data.theme);
 	}
 
 	// Remaining statuses: in key order, independent of publication order.

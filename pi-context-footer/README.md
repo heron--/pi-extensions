@@ -308,22 +308,16 @@ Drawing the rails as background-tinted spaces instead would copy as whitespace,
 but a background fills the whole cell, so the rail becomes a band rather than a
 hairline and joins the corners less cleanly. The hairline won out.
 
-## Borrowed statuses
+## Default status items
 
-The `pi-background-tasks` status is shown on the bottom run, so its
-running/finished-task indicator and its entry keys remain visible instead of
-being lost when this extension replaces pi's standard footer. Statuses arrive
-pre-styled for pi's own footer — `pi-background-tasks` ships a filled
-light-blue pill — so the styling is stripped and repainted in the theme's
-accent color, and the item reads as part of the border rather than a sticker on
-it. Other global footer summaries, such as the MCP server count, are
-intentionally excluded to keep the prompt area quiet.
-
-The `write-lock` status is borrowed too, but not in the accent color: it is
-repainted in the theme's warning color — yellow — with a lock icon that
-follows the state, `󰌾` for `write locked` and `󰌿` for `write unlocked`
-(nf-md-lock and nf-md-lock_open). The label text is whatever write-lock
-published, so the lock state stays visible at a glance even without reading it.
+The default layout selects two statuses other extensions publish, as ordinary
+status items: `background-tasks` from `pi-background-tasks`, repainted in the
+accent color, so its task indicator and entry keys stay visible once this
+footer replaces pi's; and `write-lock` from `pi-write-lock`, repainted in the
+warning color. Producers own their text, icons included — the footer shows it
+as published and reads nothing into it. Other statuses, such as the MCP server
+count, stay off the frame to keep the prompt area quiet, unless the owner
+selects them.
 
 ## Usage
 

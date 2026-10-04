@@ -40,7 +40,7 @@ import {
 	type Region,
 	readFooterConfig,
 } from "./config.ts";
-import { createTokenTotalsCache, hostnameLabel, hostnameShown, type ItemData, itemId, renderItem, stripAnsi } from "./items.ts";
+import { createTokenTotalsCache, hostnameLabel, hostnameShown, type ItemData, itemId, renderItem } from "./items.ts";
 import { fitFramedRow, fitPlainRow, type ShownItem } from "./layout.ts";
 import { sanitizeStatus } from "./status.ts";
 import { PullRequestTracker } from "./pull-request.ts";
@@ -69,6 +69,13 @@ type Regions = Record<Region, ShownItem[]>;
  */
 type Padding = "full" | "none";
 const PADDINGS = new Set<Padding>(["full", "none"]);
+
+/** A CSI sequence, or an OSC/APC string up to its BEL or ST terminator. */
+const ANSI_PATTERN = /\x1b\[[0-9;?]*[a-zA-Z]|\x1b[\]_][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+
+function stripAnsi(text: string): string {
+	return text.replace(ANSI_PATTERN, "");
+}
 
 /**
  * Pi's editor emits a full-width horizontal rule as its first and last row,

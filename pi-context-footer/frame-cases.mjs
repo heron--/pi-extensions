@@ -2,11 +2,13 @@
 // fixtures/frame.json were first captured from the footer as it was before
 // the layout became configurable, so the default layout must reproduce them.
 import { setTimeout as delay } from "node:timers/promises";
+import { writeLockStatusText } from "../pi-write-lock/index.ts";
 
 const IDENTITY = { hostname: { match: ".", nickname: "box" } };
 const STATUSES = {
 	"background-tasks": "\x1b[44m 2 tasks \x1b[0m",
-	"write-lock": "\x1b[2mwrite unlocked\x1b[22m",
+	// As pi-write-lock publishes it: styled for pi's own footer, icon included.
+	"write-lock": `\x1b[2m${writeLockStatusText(false)}\x1b[22m`,
 	"unrelated-status": "should not show",
 };
 const FULL = { sessionName: "naming things", config: IDENTITY, statuses: STATUSES };

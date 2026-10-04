@@ -17,9 +17,11 @@ so it survives `/reload` and `/resume` and follows session-tree branches. A fork
 inherits the state on the branch it was created from.
 
 The lock's state is always published as an extension status under the
-`write-lock` key: `write locked` while on, `write unlocked` while off. Any
-footer that reads extension statuses — pi's own, or a replacement such as
-pi-context-footer — can show it.
+`write-lock` key: `󰌾 write locked` while on, `󰌿 write unlocked` while off
+(nf-md-lock and nf-md-lock_open), so "unlocked" is never confused with "not
+installed". The text is complete display content, icon included, for any
+footer that shows extension statuses — pi's own, or pi-context-footer. It is
+not an API: nothing should parse it.
 
 ## What it does
 

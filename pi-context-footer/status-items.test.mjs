@@ -157,3 +157,31 @@ test("/context-footer statuses lists published keys, their selection, and select
 		await host.shutdown();
 	}
 });
+
+test("write-lock and background-tasks are ordinary status items", async () => {
+	// Text from a producer that publishes no icon is shown as it is: the
+	// footer neither parses it nor invents one.
+	const host = await start({
+		config: { layout: { ...PINNED, topRight: [{ status: "write-lock", presentation: "producer" }], bottomRight: [] } },
+		statuses: { "write-lock": "write unlocked", "background-tasks": "2 tasks" },
+	});
+	try {
+		assert.match(top(host), /── write unlocked ──╮$/);
+		assert.doesNotMatch(bottom(host), /tasks/, "unselected");
+		host.ctx.ui.setStatus("write-lock", undefined);
+		assert.match(top(host), /^╭── 󰚌 Synthetic Model ─+╮$/, "unavailable is not shown as unlocked");
+	} finally {
+		await host.shutdown();
+	}
+});
+
+test("the footer source has no status-specific logic", async () => {
+	const { readFileSync, readdirSync } = await import("node:fs");
+	const dir = new URL("./", import.meta.url);
+	for (const name of readdirSync(dir).filter((file) => file.endsWith(".ts"))) {
+		const source = readFileSync(new URL(name, dir), "utf8");
+		assert.doesNotMatch(source, /unlock/i, name);
+		// The two keys appear only as default-layout data.
+		if (name !== "config.ts") assert.doesNotMatch(source, /write-lock|background-tasks/, name);
+	}
+});
