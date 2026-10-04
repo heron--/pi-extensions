@@ -367,9 +367,13 @@ def editor_states(scratch, mode):
         pi.send("\x03", 0.5)
         assert pi.fg_at("╭") == border
 
+        # A theme switch reaches both the frame and its items, and back again.
+        model = pi.fg_at("GPT-4o")
         pi.command("/fx theme light", 1.0)
+        pi.wait(lambda _: pi.fg_at("╭") != border and pi.fg_at("GPT-4o") != model, "the light theme's colors")
         pi.frame()
         pi.command("/fx theme dark", 1.0)
+        pi.wait(lambda _: pi.fg_at("╭") == border and pi.fg_at("GPT-4o") == model, "the dark theme's colors again")
 
         pi.command("/context-footer off")
         assert not any(row.startswith("╭") for row in pi.rows()), pi.text()
