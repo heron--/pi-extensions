@@ -73,25 +73,30 @@ export interface TokenTotals {
 }
 
 /**
- * Token totals across the whole session: assistant responses, usage a tool
- * reported for itself, and the calls behind a compaction or branch summary.
- * It walks every entry rather than the active branch, because an abandoned
- * branch's requests were still made. Recorded usage is not proof of billing.
+ * Token totals across the whole session: every usage pi records — assistant
+ * responses, usage a tool reported for itself, the calls behind a compaction
+ * or branch summary, and standalone usage entries such as cache warming —
+ * matching what pi's own getUsageCostBreakdown counts. It walks every entry
+ * rather than the active branch, because an abandoned branch's requests were
+ * still made. Recorded usage is not proof of billing.
+ *
+ * Sessions written by older pi versions have no standalone usage entries, and
+ * may lack optional usage fields; missing usage or fields count as zero.
  */
 export function tokenTotals(entries: readonly SessionEntry[]): TokenTotals {
 	const totals: TokenTotals = { input: 0, output: 0 };
-	const add = (usage: Usage) => {
-		totals.input += usage.input + usage.cacheRead + usage.cacheWrite;
-		totals.output += usage.output;
+	const add = (usage: Partial<Usage> | undefined) => {
+		if (!usage) return;
+		totals.input += (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+		totals.output += usage.output ?? 0;
 	};
 	for (const entry of entries) {
-		if (entry.type === "compaction" || entry.type === "branch_summary") {
-			if (entry.usage) add(entry.usage);
+		if (entry.type === "compaction" || entry.type === "branch_summary" || entry.type === "usage") {
+			add(entry.usage);
 			continue;
 		}
 		if (entry.type !== "message") continue;
-		if (entry.message.role === "assistant") add(entry.message.usage);
-		else if (entry.message.role === "toolResult" && entry.message.usage) add(entry.message.usage);
+		if (entry.message.role === "assistant" || entry.message.role === "toolResult") add(entry.message.usage);
 	}
 	return totals;
 }
