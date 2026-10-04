@@ -7,6 +7,28 @@ hard way, instead of rediscovering them by crashing pi.
 Read this before touching anything under `.pi/extensions/`,
 `~/.pi/agent/extensions/`, `lib/`, or `pi-model-picker/`.
 
+## Working principles
+
+### What belongs in documentation
+
+Documentation holds high-level principles and ideas. Its purpose is to align
+every agent around a common way of working. It is not a record of how the code
+in this repo works, and it is not a pull request description. Keep it clean,
+concise, consistent, and generally applicable; when an addition only explains
+one change, it belongs in the commit or the PR instead.
+
+### Evaluating automated review findings
+
+Evaluate every finding from an automated review agent before fixing it. All
+code has bugs, so finding an edge case is not on its own a reason to change
+anything. Beyond being correct, which is a given, a finding is fixed only when:
+
+- it is appropriate to the scale and context of this project; and
+- fixing it costs less than shipping the bug. The cost of a fix includes the
+  complexity and scope it adds to the software.
+
+A finding that fails either test gets a short reply saying why, not a change.
+
 ## Layout
 
 ```
