@@ -1,0 +1,11 @@
+{
+  "layout": {
+    "bottomRight": [
+      "branch",
+      "pull-request",
+      "tokens",
+      { "status": "write-lock", "color": "warning" },
+      { "remainingStatuses": true, "maxWidth": 40 }
+    ]
+  }
+}

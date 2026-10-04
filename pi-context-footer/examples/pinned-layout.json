@@ -1,0 +1,13 @@
+{
+  "layout": {
+    "topLeft": ["model", "thinking", "context"],
+    "topRight": ["session-name"],
+    "bottomLeft": [],
+    "bottomRight": [
+      "branch",
+      "tokens",
+      { "status": "example-session-cost", "color": "success", "maxWidth": 12 },
+      { "status": "write-lock", "color": "warning" }
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "layout": {
+    "topLeft": ["model", "thinking", "directory", "context"],
+    "topRight": ["session-name"],
+    "bottomLeft": ["hostname"],
+    "bottomRight": [
+      "branch",
+      "pull-request",
+      "tokens",
+      { "status": "background-tasks", "color": "accent" },
+      { "status": "write-lock", "color": "warning" }
+    ]
+  }
+}
