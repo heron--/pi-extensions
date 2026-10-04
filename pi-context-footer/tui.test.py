@@ -110,8 +110,11 @@ class Pi:
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.chdir(cwd)
+            # A placeholder key makes the fixture model count as configured, so
+            # the model picker lists it whatever the runner's own credentials.
+            # --offline means it is never sent anywhere.
             os.environ.update({"PI_CODING_AGENT_DIR": str(agent), "TERM": "xterm-256color",
-                               "COLORTERM": "truecolor"})
+                               "COLORTERM": "truecolor", "OPENAI_API_KEY": "placeholder-not-a-key"})
             os.execvp("pi", args)
         self.screen = pyte.Screen(width, height)
         self.stream = pyte.Stream(self.screen)
