@@ -53,6 +53,11 @@ and clear it with `setStatus(key, undefined)` when there is nothing to show.
 By default the footer repaints it in one theme color; the user can keep your
 colors instead.
 
+A producer outside this repository, such as a session cost extension, ships
+as its own pi package and is installed with `pi install`. Nothing here links,
+configures or depends on it: without it, its status item is simply
+unavailable and the footer shows nothing in its place.
+
 ## Padding
 
 A column of air sits between each rail and the input, and by default a blank
