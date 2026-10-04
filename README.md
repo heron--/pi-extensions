@@ -18,7 +18,7 @@ Certainly some extensions had more intellectual engagement from me than others.
 <!-- Keep this alphabetized -->
   - **[pi-context-footer](pi-context-footer/README.md)** — I tried to make a
   footer that is light weight, but has all the info I care about. Displays model,
-  thinking, path, context, git, cost, token, and extension status information directly
+  thinking, path, context, git, token, and extension status information directly
   into the prompt editor's top and bottom border rows.
 - **[pi-model-picker](pi-model-picker/README.md)** — I really just wanted to be
   able to set model and effort level at the same time. This takes over `/model` with a
@@ -208,7 +208,6 @@ time.
 ```ts
 const p = getPricing(model);            // { input, output, source } | null
 formatPricing(p);                       // "$3/$15" | "~$3/$15" | null
-usageCost(modelId, usage, provider);    // { total, source } | null — one response
 ```
 
 - `source: "override"` — from your pricing overrides file. Rendered plain.
@@ -248,18 +247,14 @@ directory. The overrides file maps model ids to USD per million tokens:
   form — `claude-opus-5` does not cover `claude-opus-5-5`.
 - **Fields** are any subset of `input`, `output`, `cacheRead`, `cacheWrite`.
   Each field resolves on its own: the override's rate, else pi's figure, else
-  the dataset's base rate. A cache rate no source knows is charged at the
-  input rate, as the dataset does for models it lists without cache prices.
-- **Override rates are flat.** A response covered by an override is not
-  subject to the dataset's long-context tiers.
+  the dataset's base rate.
 - **Mistakes are loud.** An unreadable or malformed file, an unknown field, or a
   non-numeric rate raises one warning at session start (not one per
   extension). The offending entry is skipped whole; valid entries still apply.
 - **Reloading:** both files are re-read at each session start (`/new`,
   `/resume`, `/reload`, launch).
 
-`pi-model-picker` and `pi-context-footer` both price through this module, so
-both honor the overrides.
+`pi-model-picker` prices through this module, so it honors the overrides.
 
 Estimates match on model id against **public list prices**, so they ignore
 gateway contracts, negotiated rates, cache/batch pricing, and anything

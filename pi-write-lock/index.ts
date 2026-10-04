@@ -3,6 +3,16 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 const STATE_ENTRY_TYPE = "write-lock-state";
 const STATUS_ID = "write-lock";
 const BUILTIN_WRITE_TOOLS = new Set(["edit", "write"]);
+const ICON_LOCKED = String.fromCodePoint(0xf033e); // nf-md-lock
+const ICON_UNLOCKED = String.fromCodePoint(0xf033f); // nf-md-lock_open
+
+/**
+ * The status text for a lock state, icon included. The icon follows the
+ * boolean, never the wording, so a footer can show this text as published.
+ */
+export function writeLockStatusText(locked: boolean): string {
+	return locked ? `${ICON_LOCKED} write locked` : `${ICON_UNLOCKED} write unlocked`;
+}
 
 interface WriteLockState {
 	locked: boolean;
@@ -130,13 +140,9 @@ export default function writeLockExtension(pi: ExtensionAPI): void {
 	function updateStatus(ctx: ExtensionContext): void {
 		// Both states are published, not just the lock: a footer cannot tell
 		// "unlocked" from "extension absent" if the status is cleared when the
-		// lock is off. The wording is the contract other extensions read.
-		ctx.ui.setStatus(
-			STATUS_ID,
-			locked
-				? ctx.ui.theme.fg("warning", "write locked")
-				: ctx.ui.theme.fg("dim", "write unlocked"),
-		);
+		// lock is off. The text is display content, complete with its icon; no
+		// footer should need to parse it.
+		ctx.ui.setStatus(STATUS_ID, ctx.ui.theme.fg(locked ? "warning" : "dim", writeLockStatusText(locked)));
 	}
 
 	function persistState(): void {

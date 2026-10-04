@@ -1,23 +1,23 @@
 # context-footer
 
 A small [pi](https://github.com/earendil-works/pi-coding-agent) extension that
-draws a continuous border around the prompt editor and sets session status
-items into the rule itself, inspired by
+draws a continuous border around the prompt editor and sets session state into
+the rule itself, inspired by
 [`pi-powerline-footer`](https://github.com/nicobailon/pi-powerline-footer).
 
-![Context footer framing the editor with model, thinking level, context, branch, cost, token, and write-lock status](../docs/images/context-footer-prompt-frame.png)
+![Context footer framing the editor with model, thinking level, context, branch, token, and write-lock status](../docs/images/context-footer-prompt-frame.png)
 
 ## Layout
 
 The frame is one unbroken box — `╭──╮`, vertical rails down both sides, `╰──╯` —
-interrupted only where a status item sits in the rule:
+interrupted only where an item sits in the rule:
 
 ```text
 ╭── 󰚌 Claude Sonnet 5 ── thinking:high ──  pi-extensions ──  ░░░░░░░░ 5%/1.0M ── 󰓹 my-feature-work ──╮
 │                                                                                                    │
 │ what shape should the border take?                                                                 │
 │                                                                                                    │
-╰───────────────────────  devin.marsh/context-footer ── #4 ── $0.04 ── ⇡47k ⇣5 ── 󰌿 write unlocked ──╯
+╰────────────────────────────────  devin.marsh/context-footer ── #4 ── ⇡47k ⇣5 ── 󰌿 write unlocked ──╯
 ```
 
 ## Configuration
@@ -75,18 +75,21 @@ label no longer interrupts the rule, it sits beneath it.
 The **top run** carries identity and context health: model, thinking level,
 working directory, context gauge and window, and the session name
 (right-anchored, when one is set). The **bottom run** carries the hostname
-(left-anchored, when enabled) and the remaining session items: git branch, its pull request, session cost, cache-inclusive
-input/output token totals, and background-task state when active.
+(left-anchored, when enabled) and the remaining session items: git branch, its
+pull request, cache-inclusive input/output token totals, and background-task
+and write-lock state.
 
 ### Pull request
 
 When `gh` reports a pull request for the current branch, its number follows the
 branch as an OSC 8 hyperlink — ⌘-click, or whatever the terminal binds. The
-lookup runs in the background, never blocking a render. A found pull request is
+lookup runs in the background, never blocking a render, and only while the
+footer is on and its layout selects the `pull-request` item, whether or not the
+item currently fits on screen. A found pull request is
 kept for the session; a miss is kept for a minute, so a branch without a pull
 request spawns `gh` at most once a minute, and one opened mid-session appears
 within a minute. If `gh` is missing,
-unauthenticated, or slow, the segment is simply absent.
+unauthenticated, or slow, the item is simply absent.
 
 ### Session name
 
@@ -95,7 +98,7 @@ When a session has a display name (set with `pi --name <name>` or the RPC
 marked with the Nerd Font `nf-md-tag` glyph and painted with the theme's
 `emphasisText` color (defined by the frontier-funds theme; the accent
 color in themes without it). A session
-without a name shows no segment at all — the top run stays left-aligned as
+without a name shows nothing there — the top run stays left-aligned as
 before.
 
 ### Hostname
@@ -123,7 +126,7 @@ preference):
 
 - **`show`** — the simple switch. `/context-footer host on|off` writes it.
 - **`match`** — a regex tested against the real hostname, case-insensitively.
-  When set, it decides on its own and `show` is ignored: the segment appears
+  When set, it decides on its own and `show` is ignored: the item appears
   exactly when the pattern matches. One dotfiles-managed config can therefore
   show the name on remote machines and hide it on the laptop.
 - **`nickname`** — a label template expanded from `match`'s captures, for
@@ -147,7 +150,7 @@ The identity color is the theme's `emphasisText`. Themes that do not define
 it, including pi's default themes, fall back to the accent color rather than
 crashing the render.
 
-Items are separated by short rule segments, so the border reads as continuous
+Items are separated by short runs of rule, so the border reads as continuous
 line broken by labels rather than as a line with a separate status bar attached.
 The top run is left-aligned and the bottom run right-aligned, so the long
 unbroken stretch of each rule falls on the opposite corner from the other's —
@@ -164,8 +167,8 @@ truncated with `…` and the frame still closes.
   run closes the box underneath — so the completion popup renders *inside* the
   frame instead of below a dangling border.
 - **A scrolled input.** When the prompt has more lines than fit, pi replaces a
-  rule row with a `↑ N more` marker. That marker is folded into the frame as its
-  own status item rather than displacing the border.
+  rule row with a `↑ N more` marker. That marker is folded into the frame as an
+  item of its own rather than displacing the border.
 - **Narrow terminals.** Below 24 columns there is no room for a rule plus a
   label, so the extension steps aside and returns pi's own editor rows untouched.
 
@@ -176,8 +179,7 @@ not follow pi's thinking-level tint, which can be near-invisible where a theme
 maps `thinkingOff` to a rule shade — the badge in the top run carries the
 thinking state. Bash mode is the one exception: the frame keeps pi's green
 tint, detected with the same predicate pi itself uses — `!` at the head of the
-input. The pull request number uses the theme's link color and the money
-figure the theme's accent color.
+input. The pull request number uses the theme's link color.
 
 The thinking-level scheme lives in
 [`lib/thinking-colors.ts`](../README.md#libthinking-colorsts), shared with
@@ -208,24 +210,18 @@ shimmer cannot shift the layout or leak attributes into the rest of the
 border; below 24 columns the plain footer carries the label with the gloss
 pinned, never moving. The model marker is the Nerd Font `nf-md-skull` glyph.
 
-## Cost
+## Tokens
 
-For each completed response, the footer uses Pi's reported cost when present.
-Otherwise it calls the same bundled `@pydantic/genai-prices` model used by the
-model picker, with input, output, cache-read, and cache-write tokens. This
-calculation is performed per response so long-context price tiers are applied
-correctly. A [pricing override](../README.md#pricing-overrides) for the model
-that answered wins over both, field by field, and applies to the responses
-already in the session as soon as it loads. Estimates are not marked apart from exact totals — the whole figure
-is understood to be approximate. The money glyph is a dollar sign in its own
-right, so the segment is just `$0.04` with no icon in front of it.
+The `tokens` item shows cache-inclusive input and output token totals across
+the whole session: every usage pi records — assistant responses, usage a tool
+reported for itself, the calls behind a compaction or branch summary, and
+standalone usage such as cache warming — including those on abandoned
+branches. Sessions from older pi versions simply have fewer kinds. It counts
+recorded usage; it does not price it.
 
-Totals cover every billed entry in the session, matching what pi's own
-`getUsageCostBreakdown` counts: assistant responses, usage a tool reported for
-itself, and the calls behind a compaction or branch summary. It walks the whole
-session rather than the active branch, because an abandoned branch was still
-billed. Only assistant responses carry a model id, so everything else can
-contribute only the cost pi recorded for it.
+The footer computes no cost. To show one, select a status that another
+extension publishes as a status item; what that figure covers, and how fresh
+it is, is up to its producer. When it is not published, no cost is shown.
 
 ## Copying out of the prompt
 
@@ -238,22 +234,16 @@ Drawing the rails as background-tinted spaces instead would copy as whitespace,
 but a background fills the whole cell, so the rail becomes a band rather than a
 hairline and joins the corners less cleanly. The hairline won out.
 
-## Borrowed statuses
+## Default status items
 
-The `pi-background-tasks` status is shown on the bottom run, so its
-running/finished-task indicator and its entry keys remain visible instead of
-being lost when this extension replaces pi's standard footer. Statuses arrive
-pre-styled for pi's own footer — `pi-background-tasks` ships a filled
-light-blue pill — so the styling is stripped and repainted in the theme's
-accent color, and the item reads as part of the border rather than a sticker on
-it. Other global footer summaries, such as the MCP server count, are
-intentionally excluded to keep the prompt area quiet.
-
-The `write-lock` status is borrowed too, but not in the accent color: it is
-repainted in the theme's warning color — yellow — with a lock icon that
-follows the state, `󰌾` for `write locked` and `󰌿` for `write unlocked`
-(nf-md-lock and nf-md-lock_open). The label text is whatever write-lock
-published, so the lock state stays visible at a glance even without reading it.
+The default layout selects two statuses other extensions publish, as ordinary
+status items: `background-tasks` from `pi-background-tasks`, repainted in the
+accent color, so its task indicator and entry keys stay visible once this
+footer replaces pi's; and `write-lock` from `pi-write-lock`, repainted in the
+warning color. Producers own their text, icons included — the footer shows it
+as published and reads nothing into it. Other statuses, such as the MCP server
+count, stay off the frame to keep the prompt area quiet, unless the owner
+selects them.
 
 ## Usage
 
@@ -264,6 +254,7 @@ discovery directory.
 /context-footer            toggle the decoration
 /context-footer on         enable it
 /context-footer off        disable it
+/context-footer reload     re-read config.json (layout, hostname, animation)
 /context-footer pad none   set the padding (see above)
 /context-footer animate [on|off]   report or toggle the traveling gloss
 /context-footer host [on|off]      report the hostname state, or set its switch
@@ -284,13 +275,13 @@ hands the footer back to pi so the session information does not simply vanish.
 
 For the same reason, the footer renders the status as two plain rows whenever
 the terminal is too narrow to frame — replacing pi's footer and then declining
-to draw is how the model, context and cost disappear entirely.
+to draw is how the model and context would disappear entirely.
 
 ## Development
 
 ```bash
-npm run typecheck
-pi
+npm run test:context-footer             # unit tests and a fake-pi host, run by npm run check
+python3 pi-context-footer/tui.test.py   # the real pi on PATH in a pty; needs pyte
 ```
 
 Run `node scripts/link-extensions.mjs --yes` from the repository root after a
