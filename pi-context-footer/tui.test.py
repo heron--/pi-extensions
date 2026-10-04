@@ -215,7 +215,12 @@ def case(function):
 
 
 def started(pi):
-    pi.wait(lambda text: "GPT-4o" in text, "the footer to draw")
+    """Wait for the footer; a pi that never gets there is closed, not leaked."""
+    try:
+        pi.wait(lambda text: "GPT-4o" in text, "the footer to draw")
+    except BaseException:
+        pi.close(OUTPUT, f"startup-{pi.pid}-FAILED")
+        raise
     return pi
 
 
@@ -425,7 +430,7 @@ def model_picker(scratch, mode):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", type=Path)
-    parser.add_argument("--only")
+    parser.add_argument("--only", choices=list(CASES))
     options = parser.parse_args()
     OUTPUT = options.output_dir or Path(tempfile.mkdtemp(prefix="pi-context-footer-tui-"))
     OUTPUT.mkdir(parents=True, exist_ok=True)
