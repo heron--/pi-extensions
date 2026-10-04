@@ -163,7 +163,7 @@ is silent when there is nothing to do, so pulls that change no extension
 directories print nothing. Worktrees are deliberately excluded: they share
 the main checkout's hooks but skip linking (a transient `/tmp` worktree
 would leave dangling global links behind), so a worktree still needs
-`pi -e` (see AGENTS.md). Removing an extension is still manual: delete
+`pi -e`. Removing an extension is still manual: delete
 its symlinks first, then the directory, in both locations.
 
 ### The `lib` symlink is required, not decorative

@@ -5,7 +5,10 @@
 // npm run profile:tool-output -- <groups> <toolsPerGroup> <outputLines> <frames> <width>
 // npm run profile:tool-output -- 20 4 200 30 120
 //
-// Run several times and compare medians against the figures in AGENTS.md.
+// Run several times and compare medians. Baseline at 20 4 200 30 120 (80
+// calls, ~17k rows, all expanded): ~1 ms per unchanged frame, ~165 ms for the
+// first frame after expand-all. Without the group render's caches it was ~1 s
+// per frame.
 const path=require("node:path");const fs=require("node:fs");const os=require("node:os");const {createRequire}=require("node:module");
 const [G="20", T="4", L="200", F="30", W="120"] = process.argv.slice(2);
 const agent=fs.mkdtempSync(path.join(os.tmpdir(),"pi-tool-output-profile-"));process.env.PI_CODING_AGENT_DIR=agent;
