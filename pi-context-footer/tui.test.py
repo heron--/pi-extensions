@@ -41,6 +41,9 @@ export default function (pi) {
   pi.on("session_start", async (event, ctx) => {
     ctx.ui.setStatus("fx-session", `session ${event.reason}`);
   });
+  pi.on("session_tree", async (_event, ctx) => {
+    ctx.ui.setStatus("fx-session", `tree ${ctx.sessionManager.getLeafId() ?? "root"}`);
+  });
   const decode = (text) => text.replace(/\\e/g, "\x1b").replace(/\\a/g, "\x07").replace(/\\n/g, "\n");
   pi.registerCommand("fx", {
     description: "test status producer",
@@ -196,6 +199,7 @@ class Pi:
         assert b"exceeds terminal width" not in self.raw, "a row overflowed the terminal"
         assert b"Failed to load extension" not in self.raw
         assert b"context-footer config" not in self.raw, "unexpected config warning"
+        assert b"Connection error" not in self.raw, "a keystroke reached the model as a prompt"
 
     def close(self, output_dir, name):
         (output_dir / f"{name}.txt").write_text(self.text() + "\n")
@@ -390,10 +394,21 @@ def lifecycle(scratch, mode):
         pi.wait(lambda text: "session fork" in text, "the forked session's status")
         pi.frame()
 
+        # The fork leaves its message in the editor; clear it, or the next
+        # command would be appended to it and submitted as a prompt.
+        pi.send("\x03", 0.5)
+        assert "second question" not in pi.rows()[pi.rows().index(pi.frame()[0]) + 2], pi.text()
+
+        # Tree navigation keeps the session: the producer reports the new leaf.
         pi.command("/tree", 1.0)
-        pi.send("\x1b[A\r", 1.5)
-        pi.send("\x1b", 0.5)
+        pi.wait(lambda text: "Session Tree" in text, "the session tree")
+        pi.send("\x1b[A\r", 1.0)
+        pi.wait(lambda text: "Summarize branch?" in text, "the branch-summary prompt")
+        pi.send("\r", 1.0)
+        pi.wait(lambda text: re.search(r"── tree \S+ ──╯", text), "the producer's status after tree navigation")
+        assert "Navigated to selected point" in pi.text(), pi.text()
         pi.frame()
+        pi.send("\x03", 0.5)
 
         pi.command("/new", 2.0)
         pi.wait(lambda text: "session new" in text, "the new session's status")
