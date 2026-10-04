@@ -43,6 +43,16 @@ session cost. A region left out keeps its default; one given replaces it.
 `/context-footer statuses` lists the statuses you can select, and
 `/context-footer reload` applies an edited file without restarting pi.
 
+### Showing your extension's status
+
+Publish it with pi's own `ctx.ui.setStatus(key, text)`; there is no footer
+API to call. It appears once the user adds `{ "status": "<key>" }` to their
+layout, and pi's standard footer shows it too. The text is shown as
+published, on one line: put any icon or freshness wording in it yourself,
+and clear it with `setStatus(key, undefined)` when there is nothing to show.
+By default the footer repaints it in one theme color; the user can keep your
+colors instead.
+
 ## Padding
 
 A column of air sits between each rail and the input, and by default a blank
