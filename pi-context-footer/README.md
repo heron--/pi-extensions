@@ -5,7 +5,7 @@ draws a continuous border around the prompt editor and sets session status
 items into the rule itself, inspired by
 [`pi-powerline-footer`](https://github.com/nicobailon/pi-powerline-footer).
 
-![Context footer framing the editor with model, thinking level, context, branch, cost, token, and write-lock status](../docs/images/context-footer-prompt-frame.png)
+![Context footer framing the editor with model, thinking level, context, branch, token, and write-lock status](../docs/images/context-footer-prompt-frame.png)
 
 ## Layout
 
@@ -17,7 +17,7 @@ interrupted only where a status item sits in the rule:
 │                                                                                                    │
 │ what shape should the border take?                                                                 │
 │                                                                                                    │
-╰───────────────────────  devin.marsh/context-footer ── #4 ── $0.04 ── ⇡47k ⇣5 ── 󰌿 write unlocked ──╯
+╰────────────────────────────────  devin.marsh/context-footer ── #4 ── ⇡47k ⇣5 ── 󰌿 write unlocked ──╯
 ```
 
 ## Configuration
@@ -143,8 +143,9 @@ label no longer interrupts the rule, it sits beneath it.
 The **top run** carries identity and context health: model, thinking level,
 working directory, context gauge and window, and the session name
 (right-anchored, when one is set). The **bottom run** carries the hostname
-(left-anchored, when enabled) and the remaining session items: git branch, its pull request, session cost, cache-inclusive
-input/output token totals, and background-task state when active.
+(left-anchored, when enabled) and the remaining session items: git branch, its
+pull request, cache-inclusive input/output token totals, and background-task
+and write-lock state.
 
 ### Pull request
 
@@ -246,8 +247,7 @@ not follow pi's thinking-level tint, which can be near-invisible where a theme
 maps `thinkingOff` to a rule shade — the badge in the top run carries the
 thinking state. Bash mode is the one exception: the frame keeps pi's green
 tint, detected with the same predicate pi itself uses — `!` at the head of the
-input. The pull request number uses the theme's link color and the money
-figure the theme's accent color.
+input. The pull request number uses the theme's link color.
 
 The thinking-level scheme lives in
 [`lib/thinking-colors.ts`](../README.md#libthinking-colorsts), shared with
@@ -278,24 +278,16 @@ shimmer cannot shift the layout or leak attributes into the rest of the
 border; below 24 columns the plain footer carries the label with the gloss
 pinned, never moving. The model marker is the Nerd Font `nf-md-skull` glyph.
 
-## Cost
+## Tokens
 
-For each completed response, the footer uses Pi's reported cost when present.
-Otherwise it calls the same bundled `@pydantic/genai-prices` model used by the
-model picker, with input, output, cache-read, and cache-write tokens. This
-calculation is performed per response so long-context price tiers are applied
-correctly. A [pricing override](../README.md#pricing-overrides) for the model
-that answered wins over both, field by field, and applies to the responses
-already in the session as soon as it loads. Estimates are not marked apart from exact totals — the whole figure
-is understood to be approximate. The money glyph is a dollar sign in its own
-right, so the segment is just `$0.04` with no icon in front of it.
+The `tokens` item shows cache-inclusive input and output token totals across
+the whole session: assistant responses, usage a tool reported for itself, and
+the calls behind a compaction or branch summary, including those on abandoned
+branches. It counts recorded usage; it does not price it.
 
-Totals cover every billed entry in the session, matching what pi's own
-`getUsageCostBreakdown` counts: assistant responses, usage a tool reported for
-itself, and the calls behind a compaction or branch summary. It walks the whole
-session rather than the active branch, because an abandoned branch was still
-billed. Only assistant responses carry a model id, so everything else can
-contribute only the cost pi recorded for it.
+The footer computes no cost. To show one, select a status that another
+extension publishes as a status item; what that figure covers, and how fresh
+it is, is up to its producer. When it is not published, no cost is shown.
 
 ## Copying out of the prompt
 
@@ -349,7 +341,7 @@ hands the footer back to pi so the session information does not simply vanish.
 
 For the same reason, the footer renders the status as two plain rows whenever
 the terminal is too narrow to frame — replacing pi's footer and then declining
-to draw is how the model, context and cost disappear entirely.
+to draw is how the model and context would disappear entirely.
 
 ## Development
 

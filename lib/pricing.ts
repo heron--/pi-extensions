@@ -28,11 +28,10 @@
  *   { "models": { "claude-opus-5-5": { "input": 4, "output": 20, "cacheRead": 0.2, "cacheWrite": 5 } } }
  *
  * Usage:
- *   import { getPricing, formatPricing, usageCost } from "../lib/pricing.ts";
+ *   import { getPricing, formatPricing } from "../lib/pricing.ts";
  *
  *   const p = getPricing(model);   // { input, output, source } | null
  *   formatPricing(p);              // "$3/$15" | "~$3/$15" | null
- *   usageCost(id, usage, provider) // { total, source } | null
  *
  * Requires `@pydantic/genai-prices` in the nearest package.json
  * `dependencies` (pi resolves node_modules from a parent directory). If it's
@@ -104,30 +103,6 @@ type CalcPrice = (
 	total_price?: number;
 	model?: { id?: string };
 } | null;
-
-/** Usage fields pi records for one completed assistant response. */
-export interface PriceableUsage {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-}
-
-/** Usage plus the cost pi recorded for it, which is all-zero when pi had no price. */
-export interface RecordedUsage extends PriceableUsage {
-	cost: Rates & { total: number };
-}
-
-export interface UsageCostEstimate {
-	total: number;
-	matchedId: string;
-}
-
-export interface UsageCost {
-	/** USD for the response. */
-	total: number;
-	source: PriceSource;
-}
 
 let calcPriceFn: CalcPrice | null | undefined;
 
@@ -271,38 +246,6 @@ export function estimatePricing(modelId: string): Pricing | null {
 	const rates = datasetRates(modelId);
 	if (!rates) return null;
 	return { input: rates.input, output: rates.output, source: "estimate", matchedId: rates.matchedId };
-}
-
-/**
- * Estimate one response from the bundled dataset alone.
- *
- * pi stores uncached input separately from cache reads and writes. The price
- * calculator expects `input_tokens` to include all three, then applies cache
- * rates to the corresponding portions. Calls must stay per response because
- * long-context price tiers apply per request, not per session.
- */
-export function estimateUsageCost(modelId: string, usage: PriceableUsage): UsageCostEstimate | null {
-	const calcPrice = getCalcPrice();
-	if (!calcPrice) return null;
-
-	const inputTokens = usage.input + usage.cacheRead + usage.cacheWrite;
-	if (!inputTokens && !usage.output) return { total: 0, matchedId: modelId };
-
-	for (const candidate of idCandidates(modelId)) {
-		try {
-			const result = calcPrice({
-				input_tokens: inputTokens,
-				output_tokens: usage.output,
-				cache_read_tokens: usage.cacheRead,
-				cache_write_tokens: usage.cacheWrite,
-			}, candidate);
-			if (typeof result?.total_price !== "number" || !Number.isFinite(result.total_price)) continue;
-			return { total: result.total_price, matchedId: result.model?.id ?? candidate };
-		} catch {
-			// An unknown model or an unsupported usage shape tries the next id.
-		}
-	}
-	return null;
 }
 
 function round4(n: number): number {
@@ -497,7 +440,7 @@ export function refreshPricingOverrides(configPath = pricingConfigPath()): strin
 	return current.problem;
 }
 
-/** Changes whenever the loaded overrides do; for caching computed costs. */
+/** Changes whenever the loaded overrides do; for callers that cache prices. */
 export function pricingOverridesGeneration(): number {
 	const current = state();
 	if (current.signature === undefined) refreshPricingOverrides();
@@ -598,64 +541,6 @@ export function getPricing(model: PriceableModel): Pricing | null {
 		source,
 		overrideKey: override.key,
 		...(dataset && source === "estimate" ? { matchedId: dataset.matchedId } : {}),
-	};
-}
-
-/**
- * Cost of one response.
- *
- * Without an override this is pi's recorded cost when it has one, else a
- * tier-aware dataset estimate. With an override, each of input, output,
- * cache-read, and cache-write is charged at the override's rate when it sets
- * one, else at pi's recorded cost for that part, else at the dataset's flat
- * base rate; a cache rate no source knows is charged at the resolved input
- * rate, as the dataset itself does for models it lists without cache prices.
- * Override rates are flat, so long-context tiers do not apply to responses an
- * override covers. Null means the response cannot be priced.
- */
-export function usageCost(modelId: string, usage: RecordedUsage, provider?: string): UsageCost | null {
-	const recorded = usage.cost.total > 0;
-	const override = findPricingOverride(modelId, provider);
-	if (!override) {
-		if (recorded) return { total: usage.cost.total, source: "pi" };
-		const estimate = estimateUsageCost(modelId, usage);
-		return estimate ? { total: estimate.total, source: "estimate" } : null;
-	}
-
-	const dataset = recorded ? null : datasetRates(modelId);
-	const sources: PriceSource[] = [];
-	const part = (field: RateField, inputRate?: number): number | null => {
-		const tokens = usage[field];
-		if (!tokens) return 0;
-		const own = override.rates[field];
-		if (own !== undefined) {
-			sources.push("override");
-			return (tokens * own) / 1e6;
-		}
-		if (recorded) {
-			sources.push("pi");
-			return usage.cost[field];
-		}
-		if (dataset) {
-			sources.push("estimate");
-			return (tokens * dataset[field]) / 1e6;
-		}
-		if (inputRate !== undefined) {
-			sources.push("override");
-			return (tokens * inputRate) / 1e6;
-		}
-		return null;
-	};
-
-	const input = part("input");
-	const output = part("output");
-	const inputRate = override.rates.input;
-	const cacheRead = part("cacheRead", inputRate);
-	const cacheWrite = part("cacheWrite", inputRate);
-	if (input === null || output === null || cacheRead === null || cacheWrite === null) return null;
-	return {
-		total: input + output + cacheRead + cacheWrite,
-		source: leastCertain(sources) ?? "override",
 	};
 }
 

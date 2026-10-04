@@ -10,7 +10,6 @@ import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { hostname as osHostname } from "node:os";
 import type { TUI } from "@earendil-works/pi-tui";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { refreshPricingOverridesForSession } from "../lib/pricing.ts";
 import {
 	fgFromBg,
 	groundRow,
@@ -462,7 +461,6 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
-		refreshPricingOverridesForSession(ctx);
 		loadConfig(ctx, false);
 		if (ctx.mode === "tui") install(ctx);
 	});
