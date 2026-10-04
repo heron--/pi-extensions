@@ -31,7 +31,7 @@ def run_case(width, mode, output):
 export default function(pi) {
   let unsubscribe;
   pi.on("session_start", (_event, ctx) => {
-    unsubscribe = pi.events.on("pi-context-footer:cost-request:v1", request => {
+    unsubscribe = pi.events.on("pi:session-cost:request:v1", request => {
       if (request.source !== "meter" || request.sessionId !== ctx.sessionManager.getSessionId()) return;
       const timer = setTimeout(() => {
         if (!request.signal.aborted) request.respond({ costUsd: 3.25, partial: true });

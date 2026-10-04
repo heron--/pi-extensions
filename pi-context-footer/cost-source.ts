@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 /** In-process protocol: providers answer asynchronously without owning the footer. */
-export const COST_REQUEST_EVENT = "pi-context-footer:cost-request:v1";
+export const COST_REQUEST_EVENT = "pi:session-cost:request:v1";
 export const COST_REQUEST_TIMEOUT_MS = 45_000;
 
 export interface CostSnapshot {

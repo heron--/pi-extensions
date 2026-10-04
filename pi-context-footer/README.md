@@ -231,7 +231,7 @@ cover a different set of requests than the local total.
 
 #### Provider protocol
 
-Pi's in-process `pi.events` bus carries `pi-context-footer:cost-request:v1`.
+Pi's in-process `pi.events` bus carries `pi:session-cost:request:v1`.
 There are no package imports between provider and footer. Its payload is:
 
 ```ts
@@ -253,7 +253,7 @@ reply has a whole-session USD total, not a per-model token price:
 
 ```ts
 // Inside a provider's session_start handler; ctx is its active session context.
-const unsubscribe = pi.events.on("pi-context-footer:cost-request:v1", async (data) => {
+const unsubscribe = pi.events.on("pi:session-cost:request:v1", async (data) => {
   const request = data as CostRequest;
   if (request.source !== "meter" || request.signal.aborted
       || request.sessionId !== ctx.sessionManager.getSessionId()) return;
