@@ -264,3 +264,17 @@ test("a status color the current theme lacks falls back instead of crashing the 
 		await host.shutdown();
 	}
 });
+
+test("token totals count every usage pi records, and tolerate older sessions", async () => {
+	const { tokenTotals } = await import("./items.ts");
+	const entries = [
+		{ type: "message", id: "a1", parentId: null, timestamp: "", message: { role: "assistant", usage: { input: 100, output: 10, cacheRead: 50, cacheWrite: 5 } } },
+		// Pi 1.0's standalone usage entries, such as cache warming.
+		{ type: "usage", id: "w1", parentId: "a1", timestamp: "", kind: "cache_warm", provider: "p", model: "m", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 400 } },
+		// Older or partial records: missing usage or fields count as zero.
+		{ type: "message", id: "a2", parentId: "w1", timestamp: "", message: { role: "assistant" } },
+		{ type: "message", id: "a3", parentId: "a2", timestamp: "", message: { role: "assistant", usage: { input: 7, output: 3 } } },
+		{ type: "compaction", id: "k1", parentId: "a3", timestamp: "" },
+	];
+	assert.deepEqual(tokenTotals(entries), { input: 155 + 400 + 7, output: 13 });
+});

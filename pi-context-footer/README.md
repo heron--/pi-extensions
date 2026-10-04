@@ -295,9 +295,11 @@ pinned, never moving. The model marker is the Nerd Font `nf-md-skull` glyph.
 ## Tokens
 
 The `tokens` item shows cache-inclusive input and output token totals across
-the whole session: assistant responses, usage a tool reported for itself, and
-the calls behind a compaction or branch summary, including those on abandoned
-branches. It counts recorded usage; it does not price it.
+the whole session: every usage pi records — assistant responses, usage a tool
+reported for itself, the calls behind a compaction or branch summary, and
+standalone usage such as cache warming — including those on abandoned
+branches. Sessions from older pi versions simply have fewer kinds. It counts
+recorded usage; it does not price it.
 
 The footer computes no cost. To show one, select a status that another
 extension publishes as a status item; what that figure covers, and how fresh
