@@ -16,7 +16,7 @@ import {
 	SettingsManager,
 	ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import type { Component, KeyId, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { Container, Text } from "@earendil-works/pi-tui";
 import {
 	BUILTIN_TOOL_NAMES,
@@ -50,6 +50,7 @@ import { toolCallBox, toolResultBox } from "./tool-box.ts";
 import { callArgumentsComponent } from "./call-rendering.ts";
 import { codemodeCallsComponent, codemodeFullOutputNotice, codemodeOutput } from "./codemode.ts";
 import { rowCappedPreview, type RowCapState } from "./preview.ts";
+import { renderGroup, resolveGroup, type GroupMember } from "./group.ts";
 
 type ResultLike = AgentToolResult<unknown>;
 type DecoratedProperty = "renderCall" | "renderResult" | "renderShell";
@@ -87,15 +88,23 @@ interface PendingDecoration {
 interface ToolExecutionInstanceLike {
 	toolName?: string;
 	toolDefinition?: RuntimeToolDefinition;
+	ui?: { requestRender(): void };
 }
+
+type RenderMethod = (this: ToolExecutionInstanceLike, width: number) => string[];
+type MouseMethod = (this: ToolExecutionInstanceLike, event: TuiMouseEvent) => TuiMouseEventResult | undefined;
 
 interface PatchedToolExecutionPrototype {
 	getCallRenderer(this: ToolExecutionInstanceLike): RuntimeCallRenderer | undefined;
 	getResultRenderer(this: ToolExecutionInstanceLike): RuntimeResultRenderer | undefined;
 	getRenderShell(this: ToolExecutionInstanceLike): "default" | "self";
+	render: RenderMethod;
+	handleMouse: MouseMethod;
 	__toolOutputOriginalGetCallRenderer?: PatchedToolExecutionPrototype["getCallRenderer"];
 	__toolOutputOriginalGetResultRenderer?: PatchedToolExecutionPrototype["getResultRenderer"];
 	__toolOutputOriginalGetRenderShell?: PatchedToolExecutionPrototype["getRenderShell"];
+	__toolOutputOriginalRender?: RenderMethod;
+	__toolOutputOriginalHandleMouse?: MouseMethod;
 	__toolOutputPatchedBy?: symbol;
 }
 
@@ -426,6 +435,7 @@ function installDecorationApi(getConfig: () => ToolOutputConfig): () => void {
 			) =>
 				adapterResult(decorated, result, options, theme, context, getConfig(), mode);
 			decorated.renderShell = "self";
+			markHouseRenderer(decorated.renderCall);
 			return decorated as T;
 		},
 	};
@@ -498,7 +508,62 @@ const TOOL_EXECUTION_PATCH_OWNER = Symbol.for("pi-tool-output.tool-execution-pat
 let installedCallRendererWrapper: PatchedToolExecutionPrototype["getCallRenderer"] | undefined;
 let installedResultRendererWrapper: PatchedToolExecutionPrototype["getResultRenderer"] | undefined;
 let installedRenderShellWrapper: PatchedToolExecutionPrototype["getRenderShell"] | undefined;
+let installedRenderWrapper: RenderMethod | undefined;
+let installedHandleMouseWrapper: MouseMethod | undefined;
 let installedPatchState: { active: boolean } | undefined;
+
+/* -------------------------------------------------------------------------- */
+/* Grouped layout state                                                        */
+/* -------------------------------------------------------------------------- */
+
+const HOUSE_RENDERER = Symbol.for("pi-tool-output.house-renderer.v1");
+
+/** Tag a renderCall this extension installed, so the component holding it joins groups. */
+function markHouseRenderer(renderer: unknown): void {
+	if (typeof renderer === "function") (renderer as unknown as Record<symbol, boolean>)[HOUSE_RENDERER] = true;
+}
+
+/** Pi does not export its live theme; every member's call renderer runs before it draws, so record it there. */
+let groupTheme: Theme | undefined;
+/** The most recently created member: the expand-last shortcut's target, and the only row with the hint. */
+let lastMember: WeakRef<GroupMember> | undefined;
+const seenTools = new WeakSet<object>();
+/** Row owners from each leader's last render, for click routing. */
+const groupRowOwners = new WeakMap<object, (GroupMember | undefined)[]>();
+
+/**
+ * Whether a tool component draws in the house box — and so joins a group.
+ * pi's builtins always do (edit/write keep their own renderer for the
+ * expanded view), as do adapted tools; any other tool keeps its own output and
+ * ends the run.
+ */
+function isGroupMember(instance: ToolExecutionInstanceLike, config: ToolOutputConfig): boolean {
+	const name = instance.toolName;
+	if (name && (BUILTIN_TOOL_NAMES as readonly string[]).includes(name)) return true;
+	const renderCall = instance.toolDefinition?.renderCall as Record<symbol, unknown> | undefined;
+	if (typeof renderCall === "function" && renderCall[HOUSE_RENDERER] === true) return true;
+	return resolveRuntimeRenderingTarget(instance, config) !== undefined;
+}
+
+/**
+ * Record a tool call the first time it is seen. Calls are created in
+ * transcript order, so the newest one decides the expand-last target: a group
+ * member becomes it, and a call outside the groups (a tool that keeps its own
+ * renderer) clears it, so the hint and the shortcut never point past it.
+ */
+function noteTool(instance: ToolExecutionInstanceLike, member: boolean): void {
+	if (seenTools.has(instance)) return;
+	seenTools.add(instance);
+	lastMember = member ? new WeakRef(instance as unknown as GroupMember) : undefined;
+}
+
+/** Expand or collapse only the most recent call. */
+function toggleLastMember(): void {
+	const member = lastMember?.deref();
+	if (!member) return;
+	member.setExpanded(!member.expanded);
+	(member as unknown as ToolExecutionInstanceLike).ui?.requestRender();
+}
 
 /**
  * Pi exposes tool metadata, not registered definitions, through getAllTools().
@@ -519,17 +584,30 @@ function patchToolExecutionRendering(getConfig: () => ToolOutputConfig): void {
 	prototype.__toolOutputOriginalGetCallRenderer ??= prototype.getCallRenderer;
 	prototype.__toolOutputOriginalGetResultRenderer ??= prototype.getResultRenderer;
 	prototype.__toolOutputOriginalGetRenderShell ??= prototype.getRenderShell;
+	prototype.__toolOutputOriginalRender ??= prototype.render;
+	prototype.__toolOutputOriginalHandleMouse ??= prototype.handleMouse;
 	const originalCall = prototype.__toolOutputOriginalGetCallRenderer;
 	const originalResult = prototype.__toolOutputOriginalGetResultRenderer;
 	const originalShell = prototype.__toolOutputOriginalGetRenderShell;
+	const originalRender = prototype.__toolOutputOriginalRender;
+	const originalHandleMouse = prototype.__toolOutputOriginalHandleMouse;
 	const patchState = { active: true };
 	installedPatchState = patchState;
 
 	installedCallRendererWrapper = function (this: ToolExecutionInstanceLike): RuntimeCallRenderer | undefined {
 		if (!patchState.active) return originalCall.call(this);
-		const target = resolveRuntimeRenderingTarget(this, getConfig());
-		if (!target) return originalCall.call(this);
-		return (args, theme, context) => adapterCall(target.tool, args, theme, context);
+		const config = getConfig();
+		const target = resolveRuntimeRenderingTarget(this, config);
+		const renderer: RuntimeCallRenderer | undefined = target
+			? (args, theme, context) => adapterCall(target.tool, args, theme, context)
+			: originalCall.call(this);
+		const member = renderer !== undefined && isGroupMember(this, config);
+		noteTool(this, member);
+		if (!member) return renderer;
+		return (args, theme, context) => {
+			groupTheme = theme;
+			return renderer(args, theme, context);
+		};
 	};
 	installedResultRendererWrapper = function (this: ToolExecutionInstanceLike): RuntimeResultRenderer | undefined {
 		if (!patchState.active) return originalResult.call(this);
@@ -543,9 +621,44 @@ function patchToolExecutionRendering(getConfig: () => ToolOutputConfig): void {
 		return resolveRuntimeRenderingTarget(this, getConfig()) ? "self" : originalShell.call(this);
 	};
 
+	installedRenderWrapper = function (this: ToolExecutionInstanceLike, width: number): string[] {
+		const config = getConfig();
+		if (!patchState.active) return originalRender.call(this, width);
+		const joins = isGroupMember(this, config);
+		// Calls with no definition never reach the call-renderer wrapper; note them here.
+		noteTool(this, joins);
+		if (!groupTheme || !joins) return originalRender.call(this, width);
+		const member = this as unknown as GroupMember;
+		const role = resolveGroup(member, this.ui, width, (component): component is GroupMember =>
+			component instanceof ToolExecutionComponent && isGroupMember(component as unknown as ToolExecutionInstanceLike, config),
+		);
+		if (role.kind === "follower") {
+			groupRowOwners.delete(this);
+			return [];
+		}
+		const group = renderGroup(role.members, width, {
+			theme: groupTheme,
+			lastMember: lastMember?.deref(),
+			expandLastKey: config.expandLastKey,
+		});
+		groupRowOwners.set(this, group.owners);
+		return group.lines;
+	};
+	installedHandleMouseWrapper = function (this: ToolExecutionInstanceLike, event: TuiMouseEvent) {
+		if (!patchState.active || !groupRowOwners.has(this)) return originalHandleMouse.call(this, event);
+		if (event.type !== "click" || event.button !== "left") return undefined;
+		const owner = groupRowOwners.get(this)?.[event.y];
+		if (!owner) return undefined;
+		owner.setExpanded(!owner.expanded);
+		this.ui?.requestRender();
+		return { handled: true };
+	};
+
 	prototype.getCallRenderer = installedCallRendererWrapper;
 	prototype.getResultRenderer = installedResultRendererWrapper;
 	prototype.getRenderShell = installedRenderShellWrapper;
+	prototype.render = installedRenderWrapper;
+	prototype.handleMouse = installedHandleMouseWrapper;
 	prototype.__toolOutputPatchedBy = TOOL_EXECUTION_PATCH_OWNER;
 }
 
@@ -573,16 +686,36 @@ function unpatchToolExecutionRendering(): void {
 	) {
 		prototype.getRenderShell = prototype.__toolOutputOriginalGetRenderShell;
 	}
+	if (
+		installedRenderWrapper !== undefined &&
+		prototype.render === installedRenderWrapper &&
+		prototype.__toolOutputOriginalRender
+	) {
+		prototype.render = prototype.__toolOutputOriginalRender;
+	}
+	if (
+		installedHandleMouseWrapper !== undefined &&
+		prototype.handleMouse === installedHandleMouseWrapper &&
+		prototype.__toolOutputOriginalHandleMouse
+	) {
+		prototype.handleMouse = prototype.__toolOutputOriginalHandleMouse;
+	}
 	if (prototype.__toolOutputPatchedBy === TOOL_EXECUTION_PATCH_OWNER) {
 		delete prototype.__toolOutputOriginalGetCallRenderer;
 		delete prototype.__toolOutputOriginalGetResultRenderer;
 		delete prototype.__toolOutputOriginalGetRenderShell;
+		delete prototype.__toolOutputOriginalRender;
+		delete prototype.__toolOutputOriginalHandleMouse;
 		delete prototype.__toolOutputPatchedBy;
 	}
 	installedCallRendererWrapper = undefined;
 	installedResultRendererWrapper = undefined;
 	installedRenderShellWrapper = undefined;
+	installedRenderWrapper = undefined;
+	installedHandleMouseWrapper = undefined;
 	installedPatchState = undefined;
+	lastMember = undefined;
+	groupTheme = undefined;
 }
 
 function registerBuiltinOverrides(pi: ExtensionAPI, config: ToolOutputConfig): void {
@@ -742,6 +875,13 @@ export default function toolOutputExtension(pi: ExtensionAPI): void {
 		cleanupDecorationApi = undefined;
 		builtinsByCwd.clear();
 	});
+
+	if (config.enabled) {
+		pi.registerShortcut(config.expandLastKey as KeyId, {
+			description: "Expand or collapse the most recent tool call",
+			handler: () => toggleLastMember(),
+		});
+	}
 
 	pi.registerCommand("tool-output", {
 		description: "Toggle compact tool-output rendering",

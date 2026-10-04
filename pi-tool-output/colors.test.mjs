@@ -44,12 +44,19 @@ test("paint returns unstyled text rather than throwing when nothing resolves", (
 	assert.equal(paint(themeWith([]), ["emphasisText", "accent"], "text"), "text");
 });
 
+test("paint renders a literal hex in the theme's color mode", () => {
+	const truecolor = { ...themeWith([]), getColorMode: () => "truecolor" };
+	assert.equal(paint(truecolor, "#57a174", "x"), "\x1b[38;2;87;161;116mx\x1b[39m");
+	const indexed = { ...themeWith([]), getColorMode: () => "256color" };
+	assert.match(paint(indexed, "#57a174", "x"), /^\x1b\[38;5;\d+mx\x1b\[39m$/);
+});
+
 test("every palette entry resolves against Pi's stock theme", () => {
 	// The stock theme lacks `emphasisText`, so each chain must still find a match.
 	const stock = themeWith(stockThemeColors());
 	for (const [region, colors] of Object.entries(TOOL_OUTPUT_COLORS)) {
 		for (const [name, spec] of Object.entries(colors)) {
-			assert.match(paint(stock, spec, "x"), /^<[a-zA-Z]+>x$/, `${region}.${name} did not resolve`);
+			assert.match(paint(stock, spec, "x"), /^(<[a-zA-Z]+>x|\x1b\[38;[\d;]+mx\x1b\[39m)$/, `${region}.${name} did not resolve`);
 		}
 	}
 });
@@ -61,7 +68,8 @@ test("every palette chain ends in a color Pi's stock theme defines", () => {
 	for (const [region, colors] of Object.entries(TOOL_OUTPUT_COLORS)) {
 		for (const [name, spec] of Object.entries(colors)) {
 			const last = typeof spec === "string" ? spec : spec.at(-1);
-			assert.ok(stock.has(last), `${region}.${name} must end in a stock color, got ${last}`);
+			// A literal hex always resolves, so it may end a chain too.
+			assert.ok(stock.has(last) || /^#[0-9a-f]{6}$/i.test(last), `${region}.${name} must end in a stock color or hex, got ${last}`);
 		}
 	}
 });

@@ -4,30 +4,72 @@ A [pi](https://github.com/earendil-works/pi-coding-agent) extension that puts
 tool calls and results in the same house box as the prompt footer, recap, and
 user messages.
 
-The default presentation uses:
+Neighbouring calls share one box with one row per call — a Nerd Font icon,
+the display name, a semantic summary, and the size of the output rather than
+the output itself — on a dark `userMessageBg` ground with a green frame
+(`success`, the footer's git branch color). Expanding a call shows its full
+arguments and output. Pi's `app.tools.expand` binding (Ctrl+O by default)
+expands every call, and the hints follow any user keybinding override rather
+than hard-coding the key label.
 
-- a dark `userMessageBg` ground;
-- a green `nf-fa-wrench` icon and display-name label in the border, matching
-  the footer's git branch color (`success`);
-- a bold semantic summary of each call — the path and range, search pattern and
-  scope, shell command sketch, subagent mode and declared lanes, or MCP target;
-- bounded accent-key / emphasized-value argument previews instead of walls of scripts or JSON;
-- dimmed result text, with errors kept red and truncation notices visible;
-- an 8-row collapsed preview for read, search, MCP, Code Mode, and known custom
-  tools;
-- up to 10 collapsed rows for bash output.
+### Grouped calls
 
-Collapsed previews count terminal rows after wrapping, so a single very long
-line — minified JSON, a one-line script result — is cut after the row limit and
-marked `… line continues`, rather than filling the screen.
+Neighbouring tool calls share one house box. The top of the box always reads
+`Ran N tools` (`Running N tools` while any call is still going). Each call's
+first row is a Nerd Font icon, its display name, the tool's own summary (see
+[Call summaries](#call-summaries)), and the size of its output instead of the
+output itself. A call with an input — a script, a file body, a prompt: its
+largest multi-line or long string argument — measures that first, before a
+` · `. An edit shows its changed lines instead, `+added -removed` in the
+theme's diff colors:
 
-Press Pi's `app.tools.expand` binding—Ctrl+O by default—to expand or collapse
-both call arguments and results, including pending calls. The hint follows any
-user keybinding override rather than hard-coding the key label.
+```text
+╭  Ran 4 tools ──────────────────────────────────────────────────────────╮
+│  Read File     path: lib/box.ts:10-29  12 lines, 133 B                │
+│  Search Files  pattern: /TODO/ · path: src  2 lines, 31 B             │
+│  Run Command   python3 - · heredoc script  42 lines, 379 B · 1 line, 2 B │
+│  Edit File     path: lib/box.ts  +12 -3                               │
+│  MCP Gateway   linear · list_issue_statuses  1 line, 571 B            │
+│   alt+o to expand · ctrl+o to expand all                                │
+╰─────────────────────────────────────────────────────────────────────────╯
+```
 
-### Compact calls
+Names are padded so the summaries form one column. The name keeps the box's
+green; the summary's prose and keys use `group.summaryPlain`/`group.summaryKey`
+(`#57a174`, a subdued green), and its values keep their usual tint. The input
+size uses the argument descriptors' measure/unit tints; the output size is
+muted. Icons come from `TOOL_ICONS` in `rendering.ts`; tools without one get
+the wrench. Expanding a call shows the arguments its row does not (`timeout:
+120`, MCP's `args:`), then its input in full (the script or prompt the row
+only measures), a blank row, and its output. An expanded edit or write keeps
+the view of whichever extension draws it (`pi-tool-display`'s diff view, see
+below); with pi's own renderer, an edit shows its diff and a write does not
+repeat the file it wrote.
 
-All calls owned by this extension use the same bounded argument renderer:
+Sizes count raw output lines and bytes, not wrapped rows. Any assistant text or
+thinking between two calls starts a new box; an empty tool-only assistant turn
+does not. pi's built-in tools (including `edit`/`write`, whose expanded view
+keeps their own diff renderer), MCP tools, the tools in the display-name map, and
+decorated or configured custom tools all join a group. Any other tool keeps its
+own renderer and ends the run.
+
+Expansion is per call:
+
+- **Click a row** to expand or collapse just that call.
+- **Alt+O** (`expandLastKey`) expands or collapses just the most recent call. It
+  stays expanded when later calls arrive, until it is clicked or Ctrl+O
+  collapses everything.
+- **Ctrl+O** (Pi's `app.tools.expand`) expands or collapses every call.
+
+Only the most recent call carries the key hint.
+
+Clicks need Pi's fullscreen TUI (the default `tuiMode`); in `regular` mode the
+terminal does not report the mouse, and the keys still work.
+
+### Expanded arguments
+
+An expanded call's arguments use one bounded renderer, the same descriptors and
+tints as the call rows' sizes:
 
 - Short values (up to 160 characters) stay inline. Multiline or longer strings
   become descriptors such as `workflowScript: 19 KB · 501 lines`, whose
@@ -265,6 +307,7 @@ Missing values use these defaults:
 ```json
 {
   "enabled": true,
+  "expandLastKey": "alt+o",
   "registerToolOverrides": {
     "read": true,
     "grep": true,
@@ -284,6 +327,11 @@ Missing values use these defaults:
   "bashCollapsedLines": 10
 }
 ```
+
+`expandLastKey` is any Pi key id and takes effect after `/reload`. The output
+modes below shape what an expanded call shows; a collapsed call shows only its
+size. `previewLines` and `bashCollapsedLines` sized the collapsed previews of
+the old one-box-per-call layout and no longer change anything.
 
 `readOutputMode`, `searchOutputMode`, and `mcpOutputMode` accept `hidden`,
 `summary`, or `preview`. `bashOutputMode` accepts `opencode`, `summary`, or
@@ -392,7 +440,12 @@ PATH and Python's `pyte` installed:
 
 ```bash
 python3 pi-tool-output/tui.test.py
+python3 pi-tool-output/group.tui.test.py
 ```
+
+`group.tui.test.py` checks the grouped layout at 100, 60, and 40 columns:
+one box per run, size lines in place of output, the hint under only the most
+recent call, Alt+O, a real SGR mouse click on a row, and a Ctrl+O round trip.
 
 The PTY check uses scratch settings, inert tool definitions, Pi's built-in
 codemode definition, and synthetic sessions (no model calls), presses Ctrl+O,

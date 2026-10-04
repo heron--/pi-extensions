@@ -1,0 +1,547 @@
+/**
+ * The grouped layout: neighbouring tool calls share one house box.
+ *
+ * Pi renders each tool call as its own `ToolExecutionComponent`, a sibling in
+ * the chat container, and a renderer only ever sees its own call. So grouping
+ * happens one level up, at the component's `render`: each member finds its
+ * siblings, and the first member of a run (the leader) draws the whole run
+ * while the others (followers) draw nothing. A row that renders nothing — the
+ * empty assistant message between two tool-only turns — does not break a run;
+ * anything that renders a row does.
+ *
+ * The collapsed view shows one row per call — name, summary, and the size of
+ * its output — with no output body. Expansion is per call (pi's own
+ * `expanded` flag on each component), so Ctrl+O, a click on a row, and the
+ * expand-last shortcut all toggle the same state.
+ */
+
+import {
+	createEditToolDefinition,
+	createWriteToolDefinition,
+	keyText,
+	renderDiff,
+	type Theme,
+} from "@earendil-works/pi-coding-agent";
+import { Text, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { CALL_LIMITS, compactArguments } from "./arguments.ts";
+import { callArgumentsComponent, paintMeasure, paintSummary } from "./call-rendering.ts";
+import { paint, TOOL_OUTPUT_COLORS } from "./colors.ts";
+import { displayToolName, extractTextOutput, pluralize, toolIcon } from "./rendering.ts";
+import { summarizeToolCall } from "./summaries.ts";
+import { boxContentWidth, boxInner, boxRows, ICON_TOOL } from "./tool-box.ts";
+
+/** The runtime shape of pi's ToolExecutionComponent this layout reads. Most of it is private in pi's types. */
+export interface GroupMember {
+	toolName: string;
+	args: unknown;
+	expanded: boolean;
+	isPartial: boolean;
+	result?: { content?: unknown; details?: unknown; isError?: boolean };
+	callRendererComponent?: Component;
+	resultRendererComponent?: Component;
+	imageComponents?: Component[];
+	toolDefinition?: Record<string, unknown>;
+	setExpanded(expanded: boolean): void;
+	render(width: number): string[];
+}
+
+interface ContainerLike {
+	children: unknown[];
+}
+
+function isContainer(value: unknown): value is ContainerLike {
+	return typeof value === "object" && value !== null && Array.isArray((value as ContainerLike).children);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Finding siblings                                                            */
+/* -------------------------------------------------------------------------- */
+
+const SEARCH_DEPTH = 4;
+const parents = new WeakMap<object, ContainerLike>();
+const positions = new WeakMap<ContainerLike, Map<unknown, number>>();
+let lastParent: WeakRef<ContainerLike> | undefined;
+
+/** Index of `child` in `parent`, rebuilding the position map only when it went stale. */
+function indexIn(parent: ContainerLike, child: unknown): number {
+	const cached = positions.get(parent)?.get(child);
+	if (cached !== undefined && parent.children[cached] === child) return cached;
+	const rebuilt = new Map<unknown, number>();
+	parent.children.forEach((entry, index) => rebuilt.set(entry, index));
+	positions.set(parent, rebuilt);
+	return rebuilt.get(child) ?? -1;
+}
+
+/** Breadth-first, shallow: the chat container sits a level or two under the TUI root. */
+function searchParent(root: unknown, child: object): ContainerLike | undefined {
+	let level: ContainerLike[] = isContainer(root) ? [root] : [];
+	for (let depth = 0; depth < SEARCH_DEPTH && level.length > 0; depth++) {
+		const next: ContainerLike[] = [];
+		for (const node of level) {
+			if (node.children.includes(child)) return node;
+			for (const entry of node.children) if (isContainer(entry)) next.push(entry);
+		}
+		level = next;
+	}
+	return undefined;
+}
+
+function findParent(member: GroupMember, root: unknown): ContainerLike | undefined {
+	const known = parents.get(member);
+	if (known && indexIn(known, member) >= 0) return known;
+	const recent = lastParent?.deref();
+	const parent = recent && indexIn(recent, member) >= 0 ? recent : searchParent(root, member);
+	if (parent) {
+		parents.set(member, parent);
+		lastParent = new WeakRef(parent);
+	}
+	return parent;
+}
+
+function rendersNothing(component: unknown, width: number): boolean {
+	const render = (component as Component | undefined)?.render;
+	return typeof render === "function" && render.call(component, width).length === 0;
+}
+
+export type GroupRole = { kind: "follower" } | { kind: "leader"; members: GroupMember[] };
+
+/**
+ * The member's place in its run. Leaders and followers scan with the same
+ * rule — members join, empty rows are skipped, anything else ends the run —
+ * so every member agrees on who leads.
+ */
+export function resolveGroup(
+	member: GroupMember,
+	root: unknown,
+	width: number,
+	isMember: (component: unknown) => component is GroupMember,
+): GroupRole {
+	const parent = findParent(member, root);
+	if (!parent) return { kind: "leader", members: [member] };
+	const siblings = parent.children;
+	const index = indexIn(parent, member);
+	for (let i = index - 1; i >= 0; i--) {
+		const sibling = siblings[i];
+		if (isMember(sibling)) return { kind: "follower" };
+		if (!rendersNothing(sibling, width)) break;
+	}
+	const members = [member];
+	for (let i = index + 1; i < siblings.length; i++) {
+		const sibling = siblings[i];
+		if (isMember(sibling)) members.push(sibling);
+		else if (!rendersNothing(sibling, width)) break;
+	}
+	return { kind: "leader", members };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Size line                                                                   */
+/* -------------------------------------------------------------------------- */
+
+export function formatBytes(bytes: number): string {
+	if (bytes < 1024) return `${bytes} B`;
+	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Raw lines, not wrapped rows: the size describes the output, not the terminal. */
+export function outputSize(text: string): { lines: number; bytes: number } {
+	const trimmed = text.replace(/\n+$/, "");
+	if (!trimmed.trim() || trimmed.trim() === "(no output)") return { lines: 0, bytes: 0 };
+	return { lines: trimmed.split("\n").length, bytes: Buffer.byteLength(trimmed, "utf8") };
+}
+
+export function sizeText({ lines, bytes }: { lines: number; bytes: number }): string {
+	return lines === 0 ? "no output" : `${lines} ${pluralize(lines, "line")}, ${formatBytes(bytes)}`;
+}
+
+const metaCache = new WeakMap<GroupMember, { result: unknown; partial: boolean; text: string }>();
+
+function memberMeta(member: GroupMember): string {
+	const cached = metaCache.get(member);
+	if (cached && cached.result === member.result && cached.partial === member.isPartial) return cached.text;
+	let text: string;
+	if (!member.result) text = "running…";
+	else {
+		const content = Array.isArray(member.result.content) ? member.result.content : [];
+		const images = content.filter((block) => record(block)?.type === "image").length;
+		const textSize = sizeText(outputSize(extractTextOutput(member.result)));
+		const imageText = `${images} ${pluralize(images, "image")}`;
+		const size = images === 0 ? textSize : textSize === "no output" ? imageText : `${textSize}${DOT}${imageText}`;
+		if (member.isPartial) text = size === "no output" ? "running…" : `running · ${size}`;
+		else text = member.result.isError ? `failed · ${size}` : size;
+	}
+	metaCache.set(member, { result: member.result, partial: member.isPartial, text });
+	return text;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Rows                                                                        */
+/* -------------------------------------------------------------------------- */
+
+interface MemberSummary {
+	text: string;
+	/** Argument fields the summary stands for; dropped from the expanded view when it shows them in full. */
+	fields: readonly string[];
+	/** The summary clipped or sketched a value, so the full arguments still have something to add. */
+	partial: boolean;
+}
+
+const summaryCache = new WeakMap<GroupMember, { args: unknown; summary: MemberSummary }>();
+
+function memberSummary(member: GroupMember): MemberSummary {
+	const cached = summaryCache.get(member);
+	if (cached && cached.args === member.args) return cached.summary;
+	const found = summarizeToolCall(member.toolName, member.args);
+	const summary: MemberSummary = found
+		? { text: found.text.trim(), fields: found.fields, partial: found.hidden === true }
+		: {
+				text: (compactArguments(member.args).text.split("\n")[0] ?? "").trim().replace(/^\(no arguments\)$/, ""),
+				fields: [],
+				partial: true,
+			};
+	summaryCache.set(member, { args: member.args, summary });
+	return summary;
+}
+
+function memberName(member: GroupMember): string {
+	const label = member.toolDefinition?.label;
+	return displayToolName(member.toolName, typeof label === "string" ? label : undefined);
+}
+
+/** The argument row starts where the name does: one icon cell and a space in. */
+const INDENT = "  ";
+const GAP = "  ";
+const DOT = " · ";
+const MIN_SUMMARY = 16;
+
+function memberHead(member: GroupMember): string {
+	return `${toolIcon(member.toolName)} ${memberName(member)}`;
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
+}
+
+/**
+ * The call's input, when it carries one: its largest multi-line or long string
+ * argument — a script, a file body, a prompt. It is measured on the first row
+ * beside the output size instead of appearing among the arguments.
+ */
+function memberInput(member: GroupMember): { field: string; size: string } | undefined {
+	const args = record(member.args);
+	if (!args) return undefined;
+	let best: { field: string; value: string } | undefined;
+	for (const [field, value] of Object.entries(args)) {
+		if (typeof value !== "string" || (value.length <= CALL_LIMITS.inlineChars && !/[\r\n]/.test(value))) continue;
+		if (!best || value.length > best.value.length) best = { field, value };
+	}
+	return best && { field: best.field, size: sizeText(outputSize(best.value)) };
+}
+
+/**
+ * The arguments an expanded call shows: every field its row did not already
+ * show, with the measured input last. A summary can stand in for a field
+ * without showing it (codemode's `JavaScript` for its `code`), so a string
+ * field counts as shown only when its value appears in the summary text. An
+ * edit's or write's input is the change itself, which its own view shows.
+ */
+function expandedArguments(member: GroupMember): Record<string, unknown> | undefined {
+	const args = record(member.args);
+	if (!args) return member.args === undefined ? undefined : { arguments: member.args };
+	const summary = memberSummary(member);
+	const input = memberInput(member);
+	const fileChange = member.toolName === "edit" || member.toolName === "write";
+	const shown = (field: string) => {
+		const value = args[field];
+		return summary.fields.includes(field) && (typeof value !== "string" || summary.text.includes(value.trim()));
+	};
+	const rest: Record<string, unknown> = {};
+	for (const [field, value] of Object.entries(args)) {
+		if (field === input?.field || shown(field) || member.toolName === "edit") continue;
+		rest[field] = value;
+	}
+	if (input && !fileChange) rest[input.field] = args[input.field];
+	return Object.keys(rest).length > 0 ? rest : undefined;
+}
+
+/**
+ * An edit's change counts: from the diff in its result once it has one,
+ * otherwise from the edits it asks for. Every other tool has none.
+ */
+export function editChanges(member: Pick<GroupMember, "toolName" | "args" | "result">): { added: number; removed: number } | undefined {
+	if (member.toolName !== "edit") return undefined;
+	const diff = record(member.result?.details)?.diff;
+	if (typeof diff === "string") {
+		let added = 0;
+		let removed = 0;
+		for (const line of diff.split("\n")) {
+			if (line.startsWith("+")) added++;
+			else if (line.startsWith("-")) removed++;
+		}
+		return { added, removed };
+	}
+	const args = record(member.args);
+	const edits = Array.isArray(args?.edits) ? args.edits : args ? [args] : [];
+	// A trailing newline ends the last line rather than starting another, as in the result's diff.
+	const lines = (text: unknown) =>
+		typeof text === "string" && text ? text.replace(/\n$/, "").split("\n").length : 0;
+	let added = 0;
+	let removed = 0;
+	for (const edit of edits) {
+		added += lines(record(edit)?.newText);
+		removed += lines(record(edit)?.oldText);
+	}
+	return added || removed ? { added, removed } : undefined;
+}
+
+function changeText({ added, removed }: { added: number; removed: number }): { plain: string; painted: (theme: Theme) => string } {
+	const plus = `+${added.toLocaleString("en-US")}`;
+	const minus = `-${removed.toLocaleString("en-US")}`;
+	return {
+		plain: `${plus} ${minus}`,
+		painted: (theme) =>
+			`${paint(theme, TOOL_OUTPUT_COLORS.group.added, plus)} ${paint(theme, TOOL_OUTPUT_COLORS.group.removed, minus)}`,
+	};
+}
+
+/**
+ * One call, one row:
+ *
+ *   icon name  summary  [input size · ]output size
+ *
+ * `nameWidth` pads every name in the group to one width so the summaries form
+ * a column. The summary yields width first; the sizes are kept whole.
+ */
+function toolRows(member: GroupMember, width: number, nameWidth: number, theme: Theme): string[] {
+	const failed = member.result?.isError === true && !member.isPartial;
+	const { name: nameTone, size: sizeTone, failed: failedTone, summaryPlain, summaryKey } = TOOL_OUTPUT_COLORS.group;
+	// An edit shows what it changed, +added -removed, instead of an input and output size.
+	const changes = editChanges(member);
+	const change = changes && !failed ? changeText(changes) : undefined;
+	const meta = memberMeta(member);
+	// A name is cut only when it would push the output size or status off the
+	// row; nameWidth just pads shorter names so the summaries line up.
+	const head = memberHead(member);
+	const headRoom = Math.max(1, width - GAP.length - visibleWidth(change ? change.plain : meta));
+	const fitted = visibleWidth(head) > headRoom ? truncateToWidth(head, headRoom, "…") : head;
+	const padded = fitted + " ".repeat(Math.max(0, nameWidth - visibleWidth(fitted)));
+	// On a narrow row the summary outranks the input's size: drop the input
+	// size when keeping it would leave the summary under MIN_SUMMARY cells.
+	const measured = change ? undefined : memberInput(member);
+	const fixed = width - visibleWidth(padded) - GAP.length * 2 - visibleWidth(meta);
+	const input = measured && fixed - visibleWidth(measured.size) - DOT.length >= MIN_SUMMARY ? measured : undefined;
+	const sizes = change
+		? change.painted(theme)
+		: (input ? `${paintMeasure(input.size, theme)}${paint(theme, sizeTone, DOT)}` : "") +
+			paint(theme, failed ? failedTone : sizeTone, meta);
+	const sizesWidth = change
+		? visibleWidth(change.plain)
+		: (input ? visibleWidth(input.size) + DOT.length : 0) + visibleWidth(meta);
+	const room = width - visibleWidth(padded) - GAP.length * 2 - sizesWidth;
+	const summary = memberSummary(member).text;
+	const shown = room >= 4 && summary ? truncateToWidth(summary, room, "…") : "";
+	const colors = { plain: summaryPlain, key: summaryKey, value: TOOL_OUTPUT_COLORS.call.summaryValue };
+	const first = [
+		theme.bold(paint(theme, failed ? failedTone : nameTone, padded)),
+		...(shown ? [paintSummary(shown, theme, colors)] : []),
+		sizes,
+	].join(GAP);
+	return [truncateToWidth(first, width, "…")];
+}
+
+const diffCache = new WeakMap<GroupMember, { diff: string; theme: Theme; component: Component }>();
+
+/** Pi's own edit/write call renderers: one shared object spread into every definition. */
+let piFileRenderers: Set<unknown> | undefined;
+
+/**
+ * Whether an edit or write is drawn by another extension (`pi-tool-display`'s
+ * diff view) rather than by pi itself. That view is kept as the expanded body.
+ */
+function drawnElsewhere(member: GroupMember): boolean {
+	const renderCall = member.toolDefinition?.renderCall;
+	if (typeof renderCall !== "function" || boxInner(member.callRendererComponent)) return false;
+	piFileRenderers ??= new Set([
+		createEditToolDefinition(process.cwd()).renderCall,
+		createWriteToolDefinition(process.cwd()).renderCall,
+	]);
+	return !piFileRenderers.has(renderCall);
+}
+
+/**
+ * The call's output, unframed: what its own result renderer drew, without its
+ * arguments. An edit or write drawn by another extension keeps that
+ * extension's view. Otherwise an edit's diff lives in pi's call block (beside an
+ * `edit <path>` header the row already says), so it is drawn here from the
+ * result instead.
+ */
+function expandedComponents(member: GroupMember, theme: Theme): Component[] {
+	if ((member.toolName === "edit" || member.toolName === "write") && drawnElsewhere(member)) {
+		return [member.callRendererComponent, member.resultRendererComponent].filter(
+			(component): component is Component => component !== undefined,
+		);
+	}
+	const diff = record(member.result?.details)?.diff;
+	if (member.toolName === "edit" && typeof diff === "string" && !member.result?.isError) {
+		let cached = diffCache.get(member);
+		// renderDiff bakes the active theme's colors in, so a theme switch rebuilds it too.
+		if (cached?.diff !== diff || cached.theme !== theme) {
+			cached = { diff, theme, component: new Text(renderDiff(diff), 0, 0) };
+			diffCache.set(member, cached);
+		}
+		return [cached.component];
+	}
+	if (member.toolName === "edit") {
+		// No result diff yet (pending, or failed without one): pi's own call view
+		// previews the change from the arguments, and its result view carries
+		// any error. Keep both rather than show nothing.
+		return [member.callRendererComponent, member.resultRendererComponent].filter(
+			(component): component is Component => component !== undefined,
+		);
+	}
+	const result = boxInner(member.resultRendererComponent) ?? member.resultRendererComponent;
+	const shown = argumentsComponent(member, theme);
+	return [...(shown ? [shown, BLANK] : []), ...(result ? [result] : [])];
+}
+
+const BLANK_ROWS: string[] = [""];
+const BLANK: Component = { render: () => BLANK_ROWS, invalidate() {} };
+const argumentsCache = new WeakMap<GroupMember, { args: unknown; theme: Theme; component: Component | undefined }>();
+
+/** The expanded arguments, wrapped in full in the call's argument tones and bounded like any expanded call. */
+function argumentsComponent(member: GroupMember, theme: Theme): Component | undefined {
+	const cached = argumentsCache.get(member);
+	// The component bakes its colors in: a theme switch must rebuild it.
+	if (cached && cached.args === member.args && cached.theme === theme) return cached.component;
+	const shown = expandedArguments(member);
+	const component = shown
+		? callArgumentsComponent(member.toolName, shown, true, theme, { showSummary: false })
+		: undefined;
+	argumentsCache.set(member, { args: member.args, theme, component });
+	return component;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Caching                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Every frame renders every group, and an expanded group can carry thousands
+ * of output rows. pi-tui components hand back the same row array until their
+ * content or width changes, so each level below keys on array identity and
+ * rebuilds (truncating, railing, grounding) only what actually changed.
+ */
+
+function sameKey(left: readonly unknown[] | undefined, right: readonly unknown[]): boolean {
+	return left !== undefined && left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+const expandedCache = new WeakMap<GroupMember, { key: unknown[]; rows: string[] }>();
+
+function expandedRows(member: GroupMember, width: number, theme: Theme): string[] {
+	const inner = Math.max(1, width - INDENT.length);
+	const rendered: string[][] = [];
+	for (const component of expandedComponents(member, theme)) {
+		try {
+			rendered.push(component.render(inner));
+		} catch {
+			// A failing third-party renderer must not take the whole group down.
+		}
+	}
+	const key = [inner, ...rendered];
+	const cached = expandedCache.get(member);
+	if (cached && sameKey(cached.key, key)) return cached.rows;
+	const rows: string[] = [];
+	// Components render at `inner`, and the box's railRow guards the width of
+	// every row it rails, so a row is only indented here, never measured.
+	for (const block of rendered) for (const row of block) rows.push(INDENT + row);
+	while (rows.length > 0 && !rows[rows.length - 1]!.trim()) rows.pop();
+	expandedCache.set(member, { key, rows });
+	return rows;
+}
+
+const memberRowsCache = new WeakMap<GroupMember, { key: unknown[]; rows: string[] }>();
+
+/** A member's whole block: its row, its expanded body, and the hint when it is the most recent call. */
+function memberRows(
+	member: GroupMember,
+	contentWidth: number,
+	nameWidth: number,
+	options: GroupRenderOptions,
+): string[] {
+	const { theme } = options;
+	const isLast = member === options.lastMember;
+	const expanded = member.expanded ? expandedRows(member, contentWidth, theme) : undefined;
+	const key = [
+		contentWidth, nameWidth, theme, member.args, member.result, member.isPartial, member.expanded,
+		isLast, options.expandLastKey, expanded,
+	];
+	const cached = memberRowsCache.get(member);
+	if (cached && sameKey(cached.key, key)) return cached.rows;
+	const rows = toolRows(member, contentWidth, nameWidth, theme);
+	if (expanded) rows.push(...expanded);
+	if (isLast) rows.push(INDENT + hintRow(member, options.expandLastKey, Math.max(1, contentWidth - INDENT.length), theme));
+	memberRowsCache.set(member, { key, rows });
+	return rows;
+}
+
+function hintRow(member: GroupMember, expandLastKey: string, width: number, theme: Theme): string {
+	const key = (text: string) => paint(theme, TOOL_OUTPUT_COLORS.group.hintKey, text);
+	const words = (text: string) => paint(theme, TOOL_OUTPUT_COLORS.group.hintText, text);
+	const all = keyText("app.tools.expand") || "ctrl+o";
+	if (member.expanded) return truncateToWidth(`${key(expandLastKey)}${words(" to collapse")}`, width, "…");
+	const full = `${key(expandLastKey)}${words(" to expand · ")}${key(all)}${words(" to expand all")}`;
+	const short = `${key(expandLastKey)}${words(" expand · ")}${key(all)}${words(" all")}`;
+	return truncateToWidth(visibleWidth(full) <= width ? full : short, width, "…");
+}
+
+export interface GroupRenderOptions {
+	theme: Theme;
+	/** The most recent tool call overall; only it carries the shortcut hint. */
+	lastMember: GroupMember | undefined;
+	expandLastKey: string;
+}
+
+export interface GroupRender {
+	lines: string[];
+	/** Which member owns each returned line, for clicks. */
+	owners: (GroupMember | undefined)[];
+}
+
+export function groupLabel(members: readonly GroupMember[]): string {
+	const running = members.some((member) => !member.result || member.isPartial);
+	const count = `${members.length} ${pluralize(members.length, "tool")}`;
+	return `${ICON_TOOL} ${running ? "Running" : "Ran"} ${count}`;
+}
+
+const groupCache = new WeakMap<GroupMember, { key: unknown[]; render: GroupRender }>();
+
+export function renderGroup(members: readonly GroupMember[], width: number, options: GroupRenderOptions): GroupRender {
+	const { theme } = options;
+	const contentWidth = boxContentWidth(width);
+	// Summaries line up in one column, unless the longest name would crowd them out.
+	const longest = Math.max(...members.map((member) => visibleWidth(memberHead(member))));
+	const nameWidth = Math.min(longest, Math.max(0, Math.floor(contentWidth / 3)));
+	const blocks = members.map((member) => memberRows(member, contentWidth, nameWidth, options));
+	const images = members.map((member) =>
+		member.expanded ? (member.imageComponents ?? []).map((image) => image.render(width)) : [],
+	);
+	const key = [width, theme, ...members, ...blocks, ...images.flat()];
+	const leader = members[0]!;
+	const cached = groupCache.get(leader);
+	if (cached && sameKey(cached.key, key)) return cached.render;
+
+	const body = blocks.flat();
+	const bodyOwners = members.flatMap((member, index) => blocks[index]!.map(() => member));
+	const box = boxRows(theme, width, groupLabel(members), body, { includeTop: true, close: true });
+	// Pi's own self-rendered shell leads with one blank row; keep that spacing.
+	const lines = ["", ...box, ...images.flat(2)];
+	const owners: (GroupMember | undefined)[] = [undefined, undefined, ...bodyOwners];
+	while (owners.length < lines.length) owners.push(undefined);
+	const render = { lines, owners };
+	groupCache.set(leader, { key, render });
+	return render;
+}

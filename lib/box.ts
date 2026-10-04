@@ -229,10 +229,8 @@ export function railRow(opts: {
 }): string {
 	const { line, paint, padX = 1, padTo, bg } = opts;
 	const pad = " ".repeat(padX);
-	const content =
-		visibleWidth(line) > padTo
-			? truncateToWidth(line, padTo, "…")
-			: line + " ".repeat(Math.max(0, padTo - visibleWidth(line)));
+	const width = visibleWidth(line);
+	const content = width > padTo ? truncateToWidth(line, padTo, "…") : line + " ".repeat(padTo - width);
 	const row = `${paint(RAIL)}${pad}${content}${pad}${paint(RAIL)}`;
 	return bg ? bg(row) : row;
 }

@@ -1453,8 +1453,8 @@ export default function modelPickerExtension(pi: ExtensionAPI): void {
 	// register a command literally called "model"). A second command
 	// registered under a different name was pure redundancy: two entries in
 	// autocomplete for the same picker. If interceptModelCommand ever breaks
-	// (see AGENTS.md — it broke once already, silently, when pi-powerline-footer
-	// discarded the editor it composed with), /model falls back to pi's
+	// (it broke once already, silently, when pi-powerline-footer constructed
+	// the editor it composed with and then discarded it), /model falls back to pi's
 	// builtin rather than to this extension — there is no second command to
 	// fall back to anymore. Confirm interception is actually running before
 	// relying on this in a new environment.

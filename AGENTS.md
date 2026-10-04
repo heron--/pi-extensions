@@ -1,411 +1,97 @@
 # AGENTS.md — pi-extensions
 
 Personal [pi](https://github.com/earendil-works/pi-coding-agent) extensions.
-This file exists so an agent editing here inherits the traps already found the
-hard way, instead of rediscovering them by crashing pi.
+This file aligns every agent working here on one way of working. Read it before
+changing anything.
 
-Read this before touching anything under `.pi/extensions/`,
-`~/.pi/agent/extensions/`, `lib/`, or `pi-model-picker/`.
+## Documentation
 
-## Layout
+Documentation holds high-level principles and ideas. It is not a record of how
+the code works, and it is not a pull request description. Keep it clean,
+concise, consistent, and generally applicable. How a piece of code works
+belongs in comments beside that code; why one change was made belongs in its
+commit and pull request.
 
-```
-pi-extensions/
-├── AGENTS.md               # this file
-├── README.md               # setup + rationale (typecheck toolchain, lib/ pattern)
-├── package.json             # dev toolchain only: typescript, sync-pi-types
-├── tsconfig.json             # shared strict config, globs **/*.ts
-├── tsconfig.paths.json       # GENERATED, gitignored — do not hand-edit
-├── scripts/
-│   ├── sync-pi-types.mjs    # points tsconfig at the LIVE pi install
-│   └── link-extensions.mjs  # idempotently links every extension into both
-│                             # discovery locations (by convention, not a list)
-├── lib/
-│   ├── box.ts                # shared box/frame row generation (the house layout)
-│   ├── pricing.ts            # shared helper, imported as "../lib/pricing.ts"
-│   ├── pricing.test.cjs      # jiti-loaded, like pi; `npm run test:pricing`
-│   └── thinking-colors.ts    # shared thinking-level colour scheme + animate pref
-├── pi-user-message/          # extension: the user's message in the house box
-├── pi-recap/                 # extension: durable periodic recap logs, rotating cheap models
-├── pi-context-footer/        # extension: continuous prompt border + status items
-├── pi-model-picker/          # extension: /model-picker, and takes over /model
-│   ├── index.ts
-│   ├── package.json          # name: pi-model-picker
-│   └── README.md
-├── pi-thinking-labels/       # extension: safe, colored thinking-block labels
-├── pi-tool-output/           # extension: house-box built-in/custom tool output
-├── pi-transcript-digest/     # extension: /transcript-digest split conversation pane
-├── pi-typewriter/            # extension: /typewriter
-│   ├── index.ts
-│   ├── package.json
-│   └── README.md
-└── pi-write-lock/            # extension: /write-lock
-    ├── index.ts
-    ├── package.json
-    └── README.md
-```
+## Verify in pi, not in your head
 
-Each `pi-*` directory is an independent pi package (`package.json` with a `pi`
-key). The root `package.json` is deliberately **not** one — it has no `pi` key,
-so pi never mistakes this directory itself for an extension.
+A claim about pi's behaviour is true only once it has been seen on a real
+screen. Reading pi's source and reasoning about what should happen has been
+wrong here more than once. Launch pi in a pty, drive it with real keystrokes,
+and assert on the decoded screen (a `pty` + `pyte` harness is the cheap way),
+at several terminal widths. Unit tests catch drift; they do not prove the UI.
 
-## The symlink checklist (read this before adding an extension)
-
-Extensions here are made runnable via symlinks in **two independent
-locations**, and both are required for different reasons:
-
-| Location | Scope | Trust required? |
-|---|---|---|
-| `.pi/extensions/<name>` (project-local, in this repo) | Only when `cwd` is inside `pi-extensions/` | Yes — directory must be in `~/.pi/agent/trust.json` |
-| `~/.pi/agent/extensions/<name>` (global) | Every directory, every project | No |
-
-**Neither symlink set updates itself on its own**, but `git pull` does it:
-`scripts/link-extensions.mjs` also installs `scripts/hooks/post-merge` into
-`.git/hooks/`, and that hook re-runs the linker after every pull. So an
-extension merged upstream — a PR merged on another machine, then pulled
-here — is linked on the spot instead of silently failing to load. The
-hook is silent when a pull changes nothing extension-shaped, and
-deliberately skips linked worktrees, which share the main checkout's
-hooks but must not link their transient directories globally (a worktree
-still needs manual `pi -e`). Beyond pulls there is no auto-update:
-renaming an extension directory in a local working tree still means
-manually fixing both locations (or just running the linker), and there is
-no discovery of nested directories and no way to point either location at
-a whole parent folder of extensions — confirmed by testing, not assumed.
-The routine fix for all of it is `node scripts/link-extensions.mjs` —
-idempotent, discovers extensions by convention (any root directory whose
-`package.json` has a `pi` key, so no edit is needed per extension), links
-`lib` alongside, and is called from the dotfiles install script rather
-than every shell init (a machine that never pulls and never runs
-install.sh keeps whatever links it has until the next linker run). The
-manual checklist below is the fallback and the explanation of *why* the
-script does what it does. (A single `package.json` with
-a `"pi": { "extensions": [...] }` array *can* bundle several extensions behind
-one `pi install`, but that trades away installing/removing them one at a time,
-which is the current preference here — do not switch to it without asking.)
-
-**Checklist for a new extension `pi-thing`:**
-
-1. `ln -s ../../pi-thing .pi/extensions/pi-thing` — project-local, for testing
-   scoped to this directory.
-2. `ln -s ~/Projects/heron--/pi-extensions/pi-thing ~/.pi/agent/extensions/pi-thing`
-   — global, so it works from any directory.
-3. If `pi-thing/index.ts` imports `../lib/...`, confirm the `lib` symlink
-   already exists in whichever of those two locations you just touched (see
-   below — it is easy to add the extension symlink and forget this one).
-4. Verify from a directory that has never been touched — not this repo, not
-   home. A stale symlink or a missing `lib` link fails **silently** (nothing
-   registers, no error) or **loudly** (`Failed to load extension`), and both
-   have happened here. Neither is caught by testing only from inside
-   `pi-extensions/`.
-
-**Checklist for renaming or removing an extension:** delete the *symlink*
-first, in both locations, before renaming or deleting the target directory —
-otherwise a rename can leave a symlink pointing at nothing, and pi errors on
-next launch (this happened during the `pi-throttle-stream` → `pi-typewriter`
-rename).
-That covers this machine; for every *other* checkout, which only sees the
-rename on pull, add the old → new name to `RENAMED_EXTENSIONS` in
-`scripts/link-extensions.mjs`. The post-merge run then removes the old
-links, but only ones that are dangling and pointed into this repo.
-
-Standard setup links both locations for `pi-recap`, `pi-context-footer`, `pi-model-picker`,
-`pi-thinking-labels`, `pi-tool-output`, `pi-transcript-digest`, `pi-typewriter`, `pi-user-message`, `pi-write-lock`, and `lib`.
-
-## The `lib` symlink rule
-
-**Relative imports resolve against the symlink path, not the real path.**
-
-An extension discovered at `.pi/extensions/pi-model-picker/index.ts` resolves
-`import ... from "../lib/pricing.ts"` as `.pi/extensions/lib/pricing.ts` — not
-against the actual `lib/` next to `pi-model-picker/`. Without a `lib` symlink
-sitting alongside the extension symlink, pi fails outright:
-
-```
-Error: Failed to load extension ".../.pi/extensions/pi-model-picker/index.ts":
-Cannot find module '../lib/pricing.ts'
-```
-
-This is not a quirk of linking a directory specifically — linking the file
-instead (`pi-model-picker.ts -> .../pi-model-picker/index.ts`) hits the exact
-same resolution and the exact same failure. Confirmed by testing both.
-
-Consequence: **`lib/` must never gain an `index.ts`.** If it did, both
-`.pi/extensions/` and `~/.pi/agent/extensions/` would try to discover and load
-it as an extension in its own right.
-
-If you add a second shared helper file, it goes in `lib/` too — no new symlink
-needed, the existing `lib` link already covers the whole directory.
-
-## `pi-model-picker`: the `/model` takeover
-
-`pi-model-picker` does two things: registers `/model-picker` normally, *and*
-takes over the builtin `/model` command. The second part is not obvious from
-reading `pi.registerCommand()` alone, so the mechanism is documented in
-`index.ts` (`interceptModelCommand`) and repeated here because it is easy to
-break without noticing:
-
-- pi **refuses** to let an extension register a command literally named
-  `model` — it's in `BUILTIN_SLASH_COMMANDS`, dropped from autocomplete with a
-  conflict warning, and the TUI's `onSubmit` handler matches
-  `text === "/model"` with a hardcoded `if` before extensions are ever
-  consulted. Verified by reading pi's dispatch code, not assumed.
-- The seam that works: pi routes submitted text through
-  `editor.onSubmit`, and extensions can replace the editor entirely via
-  `ctx.ui.setEditorComponent()`. Wrapping `onSubmit` there runs **before**
-  pi's hardcoded check.
-- **pi assigns `onSubmit` to the editor *after* the factory function
-  returns.** Reading it during construction — or on a `setTimeout(0)` — reads
-  `undefined`, and the wrapper silently never fires. It has to be an
-  `Object.defineProperty` accessor, so it wraps whatever pi assigns, whenever
-  it assigns it. This cost a failed attempt to discover; don't reintroduce a
-  plain assignment as a "simplification."
-- The takeover **composes** with any other extension's editor
-  (`ctx.ui.getEditorComponent()` is called first, wrapped rather than
-  clobbered) — but only if that other extension composes back. It does not,
-  automatically, protect against an extension that discards the previous
-  editor after constructing it.
-
-### This already broke once, silently
-
-`pi-powerline-footer` (previously in this machine's `settings.json` — since
-removed) called `getEditorComponent()`, *constructed* the previous editor, and
-then discarded it, keeping only its autocomplete provider. Our `onSubmit`
-accessor lived on the discarded editor and never ran. Symptom: `/model`
-silently fell back to pi's builtin, with zero errors anywhere. **Load order
-could not have fixed this** — the previous editor's methods were never called
-at all, regardless of who installed first.
-
-Takeaway for any future extension that also wants the editor: **verify with a
-live TUI test that your handler actually fires**, not just that
-`setEditorComponent` was called without throwing. A `pty`-driven test typing
-`/model` and asserting on the *actual* screen content is what caught this —
-grepping for a plausible-sounding string is not enough (an earlier check here
-asserted `"Switch between Claude models" not in screen`, which is Claude
-Code's wording, not pi's; it passed while pi's builtin was in fact open).
-
-If `/model` ever silently stops opening the picker again: check
-`~/.pi/agent/settings.json` → `packages` for anything else calling
-`setEditorComponent`, and confirm interactively — screen content, not string
-guesses — that the wrapper is the one actually installed.
-
-## `pi-tool-output`: late third-party tools
-
-`pi.getAllTools()` returns metadata copies, not the registered executable tool
-definitions, so mutating those entries cannot change an installed adapter's
-renderers. First-party tools should import `pi-tool-output/decorate`; its global
-symbol plus pending queue handles either extension load order.
-
-Installed adapters that cannot opt in are covered in TUI mode by wrapping the
-exported `ToolExecutionComponent` renderer-selection methods. Keep all three
-parts together: replace the call renderer (the MCP adapter hides its own call on
-a compact final result), replace the result renderer, and return the `self`
-shell. The wrappers must select only explicit custom overrides, definitions
-recognized as MCP, or exact names in the display-name map, and restore the
-original prototype methods on shutdown. Their call/result renderers share row
-state so the call draws the house box's top and argument row while the result
-draws dimmed output and the closing rule; Pi's `app.tools.expand` state (Ctrl+O
-by default) controls collapsed versus expanded output. Renderer tests with fake
-definitions catch lifecycle drift; a live MCP status call is still required
-because the current `pi-mcp-adapter` composes its call and result rows in a way
-a unit fixture can easily miss.
-
-## Decorating the editor: pi's render-width assertion
-
-`TuiMainScreen.doRender` throws if any rendered row's `visibleWidth()` exceeds
-the terminal width — it tears the whole TUI down with
-`Rendered line N exceeds terminal width`, which reads as "pi crashes on
-opening". An earlier `pi-context-footer` did exactly that by prefixing a `│ `
-rail onto the editor's content rows.
-
-The reason it is a trap: `CustomEditor.render(width)` returns rows that are
-**already exactly `width` cells wide** — a full-width rule, then
-`leftPad + text + pad + rightPad` per line, then a second full-width rule, then
-the autocomplete rows. Default `editorPaddingX` is `0`, so there is no slack to
-borrow. Anything added to a row has to be paid for.
-
-So a wrapper that wants a border does not prefix — it **renders the inner editor
-narrow** (`baseRender(width - 2)`) and wraps each returned row. Other things
-worth knowing before touching that seam:
-
-- The lower rule is **not** the last row. Pi appends completion rows after it
-  when autocomplete is open, so find it by scanning backwards for a rule row
-  rather than taking `lines.length - 1`.
-- The cursor position is recovered by `indexOf(CURSOR_MARKER)` plus
-  `visibleWidth()` of everything before it, so prefixing a rail shifts the
-  hardware cursor correctly and needs no extra bookkeeping. `visibleWidth()`
-  does understand the marker's APC escape, so it does not distort widths.
-- The frame paints the theme's `border` colour, NOT `editor.borderColor` — the
-  thinking level is the badge's job, not the frame's, and a thinking tint can
-  be near-invisible where a theme maps `thinkingOff` to a rule shade. Bash
-  mode is the exception and does follow `editor.borderColor`: pi reassigns that
-  property on the *active* editor to signal bash mode and thinking level
-  (`updateEditorBorderColor`), so read it per render, and detect bash mode with
-  the same predicate pi applies on every text change — `!` at the head of the
-  input.
-- `autocompleteState` and the row layout are private; do not reach for them.
-  Structure detection off the returned rows is enough and does not break when
-  pi's internals move.
-
-## Pricing overrides stay out of the repo
-
-`lib/pricing.ts` reads `<agent dir>/pi-pricing/config.json`, which names a
-user-owned overrides file (see README "Pricing overrides"). Both live outside
-this checkout on purpose — the rates can be private contract prices. Never add
-a sample with real rates to the repo, and never move either file under
-`<agent dir>/extensions/`, which resolves into this checkout through the
-install symlinks.
-
-Override state lives on `globalThis` under a `Symbol.for` key rather than in
-module scope, so every extension that imports the helper shares one load and
-one problem notification. `pi-context-footer`'s per-message cost cache keys on
-`pricingOverridesGeneration()`; any new cache of computed prices must too, or
-an edited overrides file will not show until restart.
-
-## Calling a model
-
-The one-off model call used by `pi-recap` is not obvious from the extension types.
-
-**A one-off LLM call.** There is no `generate`/`complete` helper on
-`ExtensionContext`. The path is `ctx.modelRegistry`:
-
-```ts
-const model = ctx.modelRegistry.getAvailable().find(/* … */);
-if (!ctx.modelRegistry.hasConfiguredAuth(model)) return;
-const reply = await ctx.modelRegistry.complete(
-  model,
-  { systemPrompt, messages: [{ role: "user", content, timestamp: Date.now() }] },
-  { maxTokens: 400, signal },
-);
-```
-
-`complete()` resolves provider auth and headers itself — do not go looking for
-an API key to pass in. Match models by id pattern rather than
-`provider/id`: the same model shows up under different provider names depending
-on how the gateway is configured, and `ctx.model` is the *session's* model, not
-a way to reach a different one. Always pass a `signal` with a timeout; a
-courtesy feature must not be able to hang a session.
-
-## Typechecking
+Test against the pi that is actually installed. Types and tests resolve from
+the live pi on `PATH`, never from an npm devDependency, because npm can publish
+ahead of what runs. Re-run `npm run typecheck` after upgrading pi.
 
 ```bash
 npm install          # once
-npm run typecheck     # check every extension
-npm run watch         # re-check on save
+npm run check        # typecheck and every test suite
 ```
 
-Globs `**/*.ts`, so a new extension needs no config change. Types resolve from
-the **live pi install on `PATH`** (`scripts/sync-pi-types.mjs`), not from an
-npm devDependency — npm has published ahead of what's actually installed here
-before (0.85.0 vs a running 0.84.x), so a devDependency would silently
-typecheck against APIs that are not the ones executing the code.
-`tsconfig.paths.json` is generated and gitignored; re-run `npm run typecheck`
-after upgrading pi to re-point at the new install.
+## Extensions and linking
 
-## Profiling `pi-transcript-digest`
+Each `pi-*` directory is an independent pi package (a `package.json` with a
+`pi` key). The root `package.json` deliberately has none.
 
-Use the checked-in synthetic profiler instead of a personal session file. It
-exercises the real `ConversationPane`, split layout, fullscreen renderer, ANSI
-wrapping, and scroll path without exposing transcript contents.
+Extensions run from symlinks in two places: `.pi/extensions/` (this repo only)
+and `~/.pi/agent/extensions/` (everywhere). `node scripts/link-extensions.mjs`
+maintains both, finds extensions by convention, and is re-run by a post-merge
+hook on every pull. After adding, renaming, or removing an extension, run it,
+and record renames in its `RENAMED_EXTENSIONS`. Remove symlinks before deleting
+what they point at.
 
-The append scenario measures the work triggered when the active branch gains a
-message. Its cost should stay approximately flat as `initialMessages` grows;
-a linear slope means old conversation rows are being normalized or wrapped
-again:
+Relative imports resolve against the symlink path, not the real path, so shared
+code lives in `lib/` and is linked beside the extensions. `lib/` must never
+contain an `index.ts`, or pi will load it as an extension. A broken link can
+fail silently, so verify a new extension from a directory outside this repo.
 
-```bash
-npm run profile:transcript-digest -- append 2000 200 59
-# arguments: initialMessages appendedMessages paneWidth
-```
+## Changing pi's behaviour
 
-The scroll scenario measures complete fullscreen frames. Always compare the
-split with the fullscreen baseline at identical dimensions. This separates the
-cost of Pi's fullscreen renderer from the split, compositing, and right
-scrollbar:
+Prefer pi's public extension API. When an extension has to wrap or patch
+something pi owns (the editor, a component's prototype), it must:
 
-```bash
-npm run profile:transcript-digest -- scroll baseline 2000 500 120 40
-npm run profile:transcript-digest -- scroll split    2000 500 120 40
-# arguments: variant messageCount frames columns rows
-```
+- compose with whatever is already installed instead of replacing it;
+- restore exactly what it changed on shutdown;
+- never let its own failure take the TUI down.
 
-The hover scenario measures pointer motion over the right pane, which
-terminals report on every cell moved under all-motion mouse tracking. It
-should cost about the same as the baseline at any `messageCount`:
+pi tears the whole TUI down when a rendered row is wider than the terminal.
+Anything that decorates rendered rows pays for its width by rendering the inner
+content narrower, never by prefixing rows that are already full width.
 
-```bash
-npm run profile:transcript-digest -- hover baseline 2000 200 120 40
-npm run profile:transcript-digest -- hover split    2000 200 120 40
-# arguments: variant messageCount events columns rows
-```
+## Performance
 
-Each command warms the component caches before timing and prints one JSON
-record. Run several times and compare medians; terminal dimensions and Node/Pi
-versions are part of the result even though they are not embedded in the JSON.
-The test loader requires a Node release that exports
-`node:module.registerHooks`, just like the extension test suite.
+Measure before optimising, and measure with the checked-in synthetic profilers
+(`npm run profile:*`), never with personal session files. Compare medians of
+several runs, against a baseline at identical arguments. Every frame redraws
+the whole transcript, so work that scales with transcript length belongs behind
+a cache.
 
-For a CPU profile, run the harness directly after syncing the live Pi paths:
+## Private data
 
-```bash
-npm run sync-types
-rm -rf /tmp/pi-transcript-digest-profile
-mkdir -p /tmp/pi-transcript-digest-profile
-node --cpu-prof \
-  --cpu-prof-dir=/tmp/pi-transcript-digest-profile \
-  --cpu-prof-name=append.cpuprofile \
-  --no-warnings --experimental-strip-types \
-  --import ./scripts/pi-test-loader.mjs \
-  pi-transcript-digest/profile.mjs append 2000 200 59
-```
+Nothing private enters the repo: no personal transcripts, and no real pricing
+or contract rates. User-owned configuration lives under pi's agent directory,
+outside the paths the install symlinks resolve into this checkout.
 
-Load the resulting `.cpuprofile` with the **Load profile** action in Chromium
-DevTools' Performance panel. Self time in ANSI wrapping during `append` points
-to lost history reuse. Self time in `compositeTuiLine`, `sliceWithWidth`, or
-scrollbar painting during `scroll` is fullscreen frame composition rather than
-conversation normalization. `PI_TUI_WRITE_LOG` is complementary when the
-question is excess terminal output rather than CPU time.
+## Calling a model
 
-Three pi-tui costs shape `layout.ts`; each was measured, not assumed:
+Use `ctx.modelRegistry`: check `hasConfiguredAuth`, then `complete()`, which
+resolves auth itself. Match models by id pattern, not `provider/id`. Always
+pass a `signal` with a timeout: a courtesy feature must never hang a session.
 
-- **Compositing is per grapheme.** Every box that does not span the full
-  width is composited into its row through `Intl.Segmenter`, and pi-tui's own
-  scrollbar painter rescans the row three times per scrollbar cell. The right
-  column is therefore one box whose rows already carry the divider and
-  scrollbar cell; its ScrollView uses `scrollbar: "hidden"` and drags its own
-  bar. Its content's `render()` stays glyph-free because pi-tui copies
-  selections from it. Do not split the divider or a pi-tui scrollbar back out
-  into separate boxes.
-- **Stacks measure what stretch ignores.** An `HStack` measures each column's
-  natural height every frame even under the default `align: "stretch"`, and a
-  `VStack`'s natural height renders every child. Split columns override
-  `render()` to return `[]` so that measurement is free.
-- **`Container.handleMouse` renders children.** Without a cached
-  `mouseLayout` (which only `Container.render` sets, and the stacks override
-  it), forwarding an event renders every child to find its rows. The renderer
-  already offers each event to every component under the pointer and skips
-  layout nodes that keep the default handler, so an override must not call
-  `super.handleMouse` for events it ignores. Doing so once cost two full
-  conversation re-wraps per pointer move, because the forwarded width
-  differed from the laid-out width and replaced the pane's width-keyed cache.
+## Pull requests and automated review
 
-The synthetic harness is the repeatable regression check, not the final UI
-check. After profiling changes, run `npm run test:transcript-digest`, typecheck, and use
-the pty-plus-pyte live fullscreen check described below.
+Automated review agents only start once a pull request is marked ready for
+review; a draft gets no review. When polling for review status, check the emoji
+reactions on the PR description as well as comments: a reviewer with nothing to
+report may only react there.
 
-## Before claiming something works
+Evaluate every automated finding before fixing it. All code has bugs, so
+finding an edge case is not on its own a reason to change anything. Beyond
+being correct, which is a given, a finding is fixed only when:
 
-Everything above was found by actually running pi in a pty and reading the
-resulting screen — not by reading pi's source and reasoning about what
-*should* happen. Three separate claims in this project's history turned out
-to be wrong under that standard: symlinks resolving `../lib/` (they don't),
-`getEditorComponent()` composing safely by default (it doesn't, if the
-composer discards the result), and a builtin-vs-extension check that read the
-wrong reference string. Prefer the same standard for new claims: launch pi
-for real, type the thing, look at the screen.
+- it is appropriate to the scale and context of this project; and
+- fixing it costs less than shipping the bug. The cost of a fix includes the
+  complexity and scope it adds to the software.
 
-A `pty`-plus-`pyte` harness is the cheap way to do that: fork pi under a pty at
-a fixed winsize, feed it keystrokes, and read the decoded screen back. It is
-what confirmed the prompt frame closes at 100, 60, 40, and 26 columns, steps
-aside at 22, survives an open completion list and a scrolled input, and toggles
-off and on — none of which is visible from reading pi's source.
+A finding that fails either test gets a short reply saying why, not a change.

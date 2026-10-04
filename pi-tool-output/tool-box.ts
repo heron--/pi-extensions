@@ -4,9 +4,23 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { CORNER_BL, CORNER_BR, CORNER_TL, CORNER_TR, groundRow, labelRuleRow, railRow } from "../lib/box.ts";
 import { backgroundAnsi, paint, TOOL_OUTPUT_COLORS } from "./colors.ts";
 
-const ICON_TOOL = "\uf0ad"; // nf-fa-wrench
+export const ICON_TOOL = "\uf0ad"; // nf-fa-wrench
 const PAD_X = 1;
 const FRAME_WIDTH = 2;
+/** Inner width of a house box drawn at `width`: the rails and their padding are paid for here. */
+export function boxContentWidth(width: number): number {
+	return Math.max(1, width - FRAME_WIDTH - PAD_X * 2);
+}
+
+/**
+ * The unframed component each house box wraps. The grouped layout draws one box
+ * around several tool calls, so it renders a call's content without the frame
+ * that tool's own renderer put around it.
+ */
+const boxInners = new WeakMap<Component, Component>();
+export function boxInner(component: unknown): Component | undefined {
+	return typeof component === "object" && component !== null ? boxInners.get(component as Component) : undefined;
+}
 const MIN_BOX_WIDTH = 12;
 const STATE_KEY = "__piToolOutputHouseBox";
 
@@ -29,7 +43,7 @@ function houseBoxState(context: RenderContextState): HouseBoxState {
 	return created;
 }
 
-function boxRows(
+export function boxRows(
 	theme: Theme,
 	width: number,
 	label: string,
@@ -43,9 +57,15 @@ function boxRows(
 		return rows.map((line) => truncateToWidth(line, w, "…"));
 	}
 
-	const paintFrame = (text: string) => paint(theme, TOOL_OUTPUT_COLORS.box.frame, text);
+	// Every railed row paints the same two rails: paint each glyph run once per box.
+	const painted = new Map<string, string>();
+	const paintFrame = (text: string) => {
+		let result = painted.get(text);
+		if (result === undefined) painted.set(text, (result = paint(theme, TOOL_OUTPUT_COLORS.box.frame, text)));
+		return result;
+	};
 	const ground = (row: string) => groundRow(row, backgroundAnsi(theme));
-	const contentWidth = Math.max(1, w - FRAME_WIDTH - PAD_X * 2);
+	const contentWidth = boxContentWidth(w);
 	const rows: string[] = [];
 	if (options.includeTop) {
 		rows.push(
@@ -70,8 +90,7 @@ function boxRows(
 }
 
 function renderInner(component: Component, width: number): string[] {
-	const contentWidth = Math.max(1, width - FRAME_WIDTH - PAD_X * 2);
-	return component.render(contentWidth);
+	return component.render(boxContentWidth(width));
 }
 
 function cachedBoxComponent(
@@ -82,7 +101,7 @@ function cachedBoxComponent(
 	close: () => boolean,
 ): Component {
 	let cached: { width: number; close: boolean; body: string[]; rows: string[] } | undefined;
-	return {
+	const box: Component = {
 		render(width: number): string[] {
 			const shouldClose = close();
 			const body = renderInner(inner, width);
@@ -102,6 +121,8 @@ function cachedBoxComponent(
 			inner.invalidate();
 		},
 	};
+	boxInners.set(box, inner);
+	return box;
 }
 
 export function toolCallBox(
