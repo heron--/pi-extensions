@@ -22,118 +22,26 @@ interrupted only where an item sits in the rule:
 
 ## Configuration
 
-What the frame shows is a **layout**: four fixed **regions** — `topLeft`,
-`topRight`, `bottomLeft`, `bottomRight` — each an ordered list of **items**.
-The layout lives under the `layout` key of
-`<agent dir>/pi-context-footer/config.json`, beside the animation and hostname
-settings. The shipped default is
-[`examples/default-layout.json`](examples/default-layout.json):
+What the frame shows, and where, is set under `layout` in
+`<agent dir>/pi-context-footer/config.json`. Four regions — `topLeft`,
+`topRight`, `bottomLeft` and `bottomRight` — each list their items in order:
 
 ```json
 {
   "layout": {
-    "topLeft": ["model", "thinking", "directory", "context"],
-    "topRight": ["session-name"],
-    "bottomLeft": ["hostname"],
-    "bottomRight": [
-      "branch", "pull-request", "tokens",
-      { "status": "background-tasks", "color": "accent" },
-      { "status": "write-lock", "color": "warning" }
-    ]
+    "bottomRight": ["branch", "tokens", { "status": "write-lock", "color": "warning" }]
   }
 }
 ```
 
-A region left out of `layout` keeps its default list. A region that is given
-replaces its default list outright — it is never merged with items added to
-the default later — and `[]` means no items there, not no border. A layout
-that gives all four regions and has no remaining-statuses item is **pinned**:
-new defaults and newly published statuses cannot change what it selects or in
-what order, though the selected items' text still updates, and a narrow
-terminal can still clip them.
+The built-in items are `model`, `thinking`, `directory`, `context`,
+`session-name`, `hostname`, `branch`, `pull-request` and `tokens`.
+`{ "status": "<key>" }` shows a status another extension publishes, such as a
+session cost. A region left out keeps its default; one given replaces it.
+[`examples/`](examples/) has the default layout and a couple of variations.
 
-### Items
-
-An item is one of three things.
-
-- **A built-in item**, named by a string: `model`, `thinking`, `directory`,
-  `context`, `session-name`, `hostname`, `branch`, `pull-request`, `tokens`.
-  These are implemented by the footer. Any other name is an error.
-- **A status item**, `{ "status": "<key>" }`, which shows the text another
-  extension publishes with `ctx.ui.setStatus(key, text)`. The key is matched
-  exactly. Cost, background tasks and the write lock are all ordinary status
-  items: the footer computes no cost of its own.
-- **The remaining-statuses item**, `{ "remainingStatuses": true }`, which shows
-  every published status not named by a status item, sorted by key. It is
-  absent by default; adding it opens the layout to statuses nobody selected,
-  so a layout with it is never pinned.
-
-An item whose data is unavailable — no session name, no pull request, a status
-that is not published or whose text is blank — shows nothing, not even a
-separator. Text such as `$0.00` or `stale` is ordinary text and is shown as
-published; the footer never reads meaning into a status.
-
-Status and remaining-statuses items take these options:
-
-| Option | Values | Default |
-| -- | -- | -- |
-| `presentation` | `"normalized"` repaints the text in one theme color; `"producer"` keeps the producer's own colors | `"normalized"` |
-| `color` | a theme color name, for `"normalized"` only | `"accent"` (`"muted"` for remaining statuses) |
-| `maxWidth` | the most terminal columns the item may take, a positive integer | none (`40` for remaining statuses) |
-
-Both presentations reduce the text to one safe line: line breaks and tabs
-become spaces, and escape sequences other than colors and `http(s)` OSC 8
-links are removed, so a status cannot move the cursor or bleed its style into
-the frame. Text longer than `maxWidth` is cut with `…`.
-
-### Width
-
-Each region is drawn in the frame's rule — `topLeft` and `topRight` in the
-upper rule, `bottomLeft` and `bottomRight` in the lower — and the right-hand
-top region and the left-hand bottom region are **anchored**: when a rule is
-too narrow they keep their room and the other region is cut first. Within a
-region, items are kept in order and the first item that does not fit is cut
-with `…`; the ones after it are not shown. Cutting an item does not deselect
-it. When an anchored region alone is too wide, it is cut too and the other
-region shows nothing.
-
-Below 24 columns the frame steps aside and the footer draws two plain rows:
-`topLeft` then `topRight`, and `bottomLeft` then `bottomRight`, each row cut at
-its end.
-
-These are three distinct states. **Framed** draws the layout in the prompt's
-border. **Plain** is only a narrower drawing of the same layout from the same
-data. **Off** (`/context-footer off`) hands the footer back to pi, whose
-standard footer chooses what to show by its own rules.
-
-### Producers
-
-A status's producer — the extension that publishes it — owns its text:
-fetching the data, keeping it current, wording its errors and staleness, and
-choosing any icon. It also owns session attribution: a producer must not
-publish one session's figure as another's, because the footer cannot tell
-from the text. The footer only selects, places, sanitizes, styles and clips.
-None of this is a security boundary; extensions share one process.
-
-### Validation and reload
-
-The file is read at session start and by `/context-footer reload`, which
-re-reads it without reloading any extension (unlike pi's `/reload`). A layout
-with any error — malformed JSON, an unknown region, built-in item or option, a
-color the theme does not define, a `maxWidth` that is not a positive integer,
-the same built-in item or status key twice, or more than one remaining-statuses
-item — is rejected as a whole. At session start the default layout is used and
-the problem is reported once; on reload the last valid layout stays in place.
-A status item naming a key that nothing has published yet is valid: it simply
-shows nothing until the status appears.
-
-`/context-footer statuses` lists the statuses currently published, which item
-selects each, and any status item whose status is not currently published.
-
-[`examples/pinned-layout.json`](examples/pinned-layout.json) pins a layout that
-shows a reported cost status, and
-[`examples/remaining-statuses.json`](examples/remaining-statuses.json) opens
-the bottom-right region to every other published status.
+`/context-footer statuses` lists the statuses you can select, and
+`/context-footer reload` applies an edited file without restarting pi.
 
 ## Padding
 
@@ -365,11 +273,6 @@ to draw is how the model and context would disappear entirely.
 npm run test:context-footer             # unit tests and a fake-pi host, run by npm run check
 python3 pi-context-footer/tui.test.py   # the real pi on PATH in a pty; needs pyte
 ```
-
-The second launches pi with scratch settings, a synthetic session and a
-synthetic status producer, and asserts on decoded screens across widths,
-resizes, both TUI modes, status updates, reloads, session changes and the
-model picker. It makes no model requests.
 
 Run `node scripts/link-extensions.mjs --yes` from the repository root after a
 fresh checkout. It adds both the project-local and global symlinks needed to

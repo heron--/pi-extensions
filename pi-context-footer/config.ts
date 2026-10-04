@@ -161,6 +161,11 @@ function parsePresentation(
  * Validate the `layout` key. Any problem rejects the whole layout (null), so
  * a half-applied layout never surprises the owner; the caller decides what to
  * fall back to. An absent key is the default layout, with no problem.
+ *
+ * A region left out keeps its default list; a region given replaces it whole,
+ * never merging with items added to the default later, and `[]` empties it
+ * (its border stays). A layout that gives all four regions therefore pins
+ * what is selected and in what order.
  */
 export function parseLayout(value: unknown, isColor: ColorCheck = () => true): { layout: Layout | null; problems: string[] } {
 	if (value === undefined) value = {};
