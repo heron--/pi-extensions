@@ -79,7 +79,7 @@ def seed(cwd):
     for turn in ("first question", "second question"):
         for message in ({"role": "user", "content": turn, "timestamp": 0},
                         {"role": "assistant", "content": [{"type": "text", "text": f"answer to {turn}"}],
-                         "api": "openai-completions", "provider": "openai", "model": "gpt-4o",
+                         "api": "openai-completions", "provider": "fixture", "model": "gpt-4o",
                          "timestamp": 0, "stopReason": "stop", "usage": USAGE}):
             entry_id = uuid.uuid4().hex[:8]
             entries.append({"type": "message", "id": entry_id, "parentId": parent,
@@ -97,6 +97,12 @@ class Pi:
         cwd.mkdir()
         agent = scratch / "agent"
         (agent / "pi-context-footer").mkdir(parents=True)
+        # The only model is a local fixture whose endpoint nothing listens on, so
+        # a keystroke that ever submits a prompt fails here instead of reaching
+        # a provider. Its key makes it count as configured for the model picker.
+        (agent / "models.json").write_text(json.dumps({"providers": {"fixture": {
+            "baseUrl": "http://127.0.0.1:9/v1", "api": "openai-completions", "apiKey": "fixture",
+            "models": [{"id": "gpt-4o", "name": "GPT-4o", "contextWindow": 128000}]}}}))
         (agent / "settings.json").write_text(json.dumps(
             {"theme": "dark", "quietStartup": True, "tuiMode": tui_mode}))
         self.config_file = agent / "pi-context-footer" / "config.json"
@@ -109,15 +115,12 @@ class Pi:
         for path in extra:
             args += ["-e", str(path)]
         args += ["--offline", "--no-skills", "--no-prompt-templates", "--no-themes",
-                 "--provider", "openai", "--model", "gpt-4o", "--session", str(session)]
+                 "--provider", "fixture", "--model", "gpt-4o", "--session", str(session)]
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.chdir(cwd)
-            # A placeholder key makes the fixture model count as configured, so
-            # the model picker lists it whatever the runner's own credentials.
-            # --offline means it is never sent anywhere.
             os.environ.update({"PI_CODING_AGENT_DIR": str(agent), "TERM": "xterm-256color",
-                               "COLORTERM": "truecolor", "OPENAI_API_KEY": "placeholder-not-a-key"})
+                               "COLORTERM": "truecolor"})
             os.execvp("pi", args)
         self.screen = pyte.Screen(width, height)
         self.stream = pyte.Stream(self.screen)
