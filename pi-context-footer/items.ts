@@ -8,8 +8,9 @@ import type { ModelThinkingLevel, Usage } from "@earendil-works/pi-ai";
 import type { ExtensionContext, SessionEntry, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { basename } from "node:path";
 import { paintThinkingLevel } from "../lib/thinking-colors.ts";
-import type { BuiltinItemId, HostnameSettings, LayoutItem } from "./config.ts";
+import type { BuiltinItemId, HostnameSettings, LayoutItem, StatusPresentation } from "./config.ts";
 import type { PullRequest } from "./pull-request.ts";
+import { clipToWidth, sanitizeStatus } from "./status.ts";
 
 const ICON_MODEL = String.fromCodePoint(0xf068c);
 const ICON_FOLDER = "";
@@ -47,6 +48,8 @@ export interface ItemData {
 	hostnameSettings: HostnameSettings;
 	tokens: TokenTotals;
 	statuses: ReadonlyMap<string, string>;
+	/** Keys named by the layout's status items, which the remaining-statuses item skips. */
+	selectedStatusKeys: { has(key: string): boolean };
 	/** Whether the thinking gloss is being driven by a repaint ticker. */
 	animated: boolean;
 }
@@ -248,27 +251,51 @@ function renderBuiltin(id: BuiltinItemId, data: ItemData): string | null {
 	}
 }
 
+/**
+ * Pre-existing write-lock presentation, kept until pi-write-lock publishes
+ * its own icon. The published text (`write unlocked`) contains "locked", so
+ * the open-lock test has to win.
+ */
+function legacyWriteLockIcon(key: string, text: string): string {
+	if (key !== "write-lock") return text;
+	return `${/unlock/i.test(stripAnsi(text)) ? ICON_LOCK_OPEN : ICON_LOCK} ${text}`;
+}
+
+/**
+ * Present sanitized status text. Normalized mode repaints it in one theme
+ * color — statuses arrive styled for pi's own footer, and pi-background-tasks
+ * ships a filled pill, so repainting makes them read as part of this border;
+ * producer mode keeps the producer's colors. Either way the width limit
+ * applies last, on what will actually be drawn.
+ */
+function present(text: string, style: StatusPresentation, theme: Theme): string {
+	const painted = style.presentation === "normalized" ? paintColor(theme, style.color, text) : text;
+	return clipToWidth(painted, style.maxWidth);
+}
+
 /** One item's display text, or null when its data is unavailable. */
 export function renderItem(item: LayoutItem, data: ItemData): string | null {
 	if (item.kind === "builtin") return renderBuiltin(item.id, data);
 
-	const published = data.statuses.get(item.key);
-	if (published === undefined) return null;
-	// Statuses arrive pre-styled for pi's own footer — pi-background-tasks
-	// ships a filled light-blue pill. Strip that and repaint so a status
-	// reads as part of this border rather than a sticker on it.
-	const plain = stripAnsi(published).trim();
-	if (!plain) return null;
-	if (item.key === "write-lock") {
-		// The published text (`write unlocked`) contains "locked", so the
-		// open-lock test has to win.
-		const icon = /unlock/i.test(plain) ? ICON_LOCK_OPEN : ICON_LOCK;
-		return paintColor(data.theme, item.color, `${icon} ${plain}`);
+	if (item.kind === "status") {
+		const published = data.statuses.get(item.key);
+		const text = published === undefined ? "" : sanitizeStatus(published, item.presentation);
+		if (!text) return null;
+		return present(legacyWriteLockIcon(item.key, text), item, data.theme);
 	}
-	return paintColor(data.theme, item.color, plain);
+
+	// Remaining statuses: in key order, independent of publication order.
+	const texts = [...data.statuses]
+		.filter(([key]) => !data.selectedStatusKeys.has(key))
+		.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+		.map(([, published]) => sanitizeStatus(published, item.presentation))
+		.filter((text) => text.length > 0);
+	if (texts.length === 0) return null;
+	return present(texts.join(" "), item, data.theme);
 }
 
-/** A stable id for visibility checks: a built-in name, or `status:<key>`. */
+/** A stable id for visibility checks: a built-in name, `status:<key>`, or `remaining-statuses`. */
 export function itemId(item: LayoutItem): string {
-	return item.kind === "builtin" ? item.id : `status:${item.key}`;
+	if (item.kind === "builtin") return item.id;
+	return item.kind === "status" ? `status:${item.key}` : "remaining-statuses";
 }

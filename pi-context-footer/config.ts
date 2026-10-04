@@ -32,15 +32,29 @@ export interface BuiltinItem {
 	id: BuiltinItemId;
 }
 
-/** A reference to one Pi status by its exact key. */
-export interface StatusItem {
-	kind: "status";
-	key: string;
-	/** Theme color the text is repainted in. */
+export type Presentation = "normalized" | "producer";
+
+/** How status text is drawn: shared by status items and the remaining-statuses item. */
+export interface StatusPresentation {
+	presentation: Presentation;
+	/** Theme color normalized text is repainted in; unused in producer mode. */
 	color: string;
+	/** Most visible columns the item may take. */
+	maxWidth?: number;
 }
 
-export type LayoutItem = BuiltinItem | StatusItem;
+/** A reference to one Pi status by its exact key. */
+export interface StatusItem extends StatusPresentation {
+	kind: "status";
+	key: string;
+}
+
+/** Every published status no status item names, in key order. */
+export interface RemainingStatusesItem extends StatusPresentation {
+	kind: "remaining-statuses";
+}
+
+export type LayoutItem = BuiltinItem | StatusItem | RemainingStatusesItem;
 export type Layout = Readonly<Record<Region, readonly LayoutItem[]>>;
 
 /** The shipped layout, in the same form an owner writes it. */
@@ -58,7 +72,11 @@ export const DEFAULT_LAYOUT_CONFIG = {
 } as const;
 
 const DEFAULT_STATUS_COLOR = "accent";
-const STATUS_ITEM_KEYS = new Set(["status", "color"]);
+const DEFAULT_REMAINING_COLOR = "muted";
+const DEFAULT_REMAINING_MAX_WIDTH = 40;
+const PRESENTATION_KEYS = ["presentation", "color", "maxWidth"];
+const STATUS_ITEM_KEYS = new Set(["status", ...PRESENTATION_KEYS]);
+const REMAINING_ITEM_KEYS = new Set(["remainingStatuses", ...PRESENTATION_KEYS]);
 
 /** Whether a theme defines a color; injected so parsing does not need a live theme. */
 export type ColorCheck = (name: string) => boolean;
@@ -74,28 +92,69 @@ function parseItem(value: unknown, where: string, isColor: ColorCheck, problems:
 		return null;
 	}
 	if (!isRecord(value)) {
-		problems.push(`${where}: an item must be a built-in item name or a { "status": ... } object`);
+		problems.push(`${where}: an item must be a built-in item name, a { "status": ... } or a { "remainingStatuses": true } object`);
 		return null;
 	}
-	if (!("status" in value)) {
-		problems.push(`${where}: an item object needs "status"`);
+	const remaining = "remainingStatuses" in value;
+	if (!remaining && !("status" in value)) {
+		problems.push(`${where}: an item object needs "status" or "remainingStatuses"`);
 		return null;
 	}
-	const unknown = Object.keys(value).filter((key) => !STATUS_ITEM_KEYS.has(key));
+	const allowed = remaining ? REMAINING_ITEM_KEYS : STATUS_ITEM_KEYS;
+	const unknown = Object.keys(value).filter((key) => !allowed.has(key));
 	if (unknown.length > 0) {
 		problems.push(`${where}: unknown option ${unknown.map((key) => `"${key}"`).join(", ")}`);
 		return null;
 	}
-	const { status, color } = value;
+
+	const presentation = parsePresentation(value, where, isColor, problems, remaining);
+	if (!presentation) return null;
+	if (remaining) {
+		if (value.remainingStatuses !== true) {
+			problems.push(`${where}: "remainingStatuses" must be true`);
+			return null;
+		}
+		return { kind: "remaining-statuses", ...presentation };
+	}
+	const { status } = value;
 	if (typeof status !== "string" || status.length === 0) {
 		problems.push(`${where}: "status" must be a non-empty string`);
 		return null;
 	}
-	if (color !== undefined && (typeof color !== "string" || !isColor(color))) {
-		problems.push(`${where}: "color" must be a theme color name`);
+	return { kind: "status", key: status, ...presentation };
+}
+
+function parsePresentation(
+	value: Record<string, unknown>,
+	where: string,
+	isColor: ColorCheck,
+	problems: string[],
+	remaining: boolean,
+): StatusPresentation | null {
+	const { presentation = "normalized", color, maxWidth } = value;
+	if (presentation !== "normalized" && presentation !== "producer") {
+		problems.push(`${where}: "presentation" must be "normalized" or "producer"`);
 		return null;
 	}
-	return { kind: "status", key: status, color: color ?? DEFAULT_STATUS_COLOR };
+	if (color !== undefined) {
+		if (presentation === "producer") {
+			problems.push(`${where}: "color" applies only to the normalized presentation`);
+			return null;
+		}
+		if (typeof color !== "string" || !isColor(color)) {
+			problems.push(`${where}: "color" must be a theme color name`);
+			return null;
+		}
+	}
+	if (maxWidth !== undefined && !(typeof maxWidth === "number" && Number.isInteger(maxWidth) && maxWidth > 0)) {
+		problems.push(`${where}: "maxWidth" must be a positive integer`);
+		return null;
+	}
+	return {
+		presentation,
+		color: color ?? (remaining ? DEFAULT_REMAINING_COLOR : DEFAULT_STATUS_COLOR),
+		...(maxWidth !== undefined ? { maxWidth } : remaining ? { maxWidth: DEFAULT_REMAINING_MAX_WIDTH } : {}),
+	};
 }
 
 /**
@@ -114,6 +173,7 @@ export function parseLayout(value: unknown, isColor: ColorCheck = () => true): {
 
 	const builtins = new Set<string>();
 	const statusKeys = new Set<string>();
+	let remainingSelected = false;
 	const layout = {} as Record<Region, LayoutItem[]>;
 	for (const region of REGIONS) {
 		const raw: unknown = region in value ? value[region] : DEFAULT_LAYOUT_CONFIG[region];
@@ -126,6 +186,12 @@ export function parseLayout(value: unknown, isColor: ColorCheck = () => true): {
 			const where = `"layout.${region}[${index}]"`;
 			const item = parseItem(entry, where, isColor, problems);
 			if (!item) return;
+			if (item.kind === "remaining-statuses") {
+				if (remainingSelected) problems.push(`${where}: only one remaining-statuses item is allowed`);
+				remainingSelected = true;
+				layout[region].push(item);
+				return;
+			}
 			// Built-in names and status keys are different kinds of reference, so
 			// a status keyed "tokens" does not collide with the built-in item.
 			const seen = item.kind === "builtin" ? builtins : statusKeys;

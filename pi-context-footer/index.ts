@@ -42,6 +42,7 @@ import {
 } from "./config.ts";
 import { createTokenTotalsCache, hostnameLabel, hostnameShown, type ItemData, itemId, renderItem, stripAnsi } from "./items.ts";
 import { fitFramedRow, fitPlainRow, type ShownItem } from "./layout.ts";
+import { sanitizeStatus } from "./status.ts";
 import { PullRequestTracker } from "./pull-request.ts";
 
 /** The plain footer's item separator; the framed runs use lib/box.ts. */
@@ -188,6 +189,15 @@ function renderPlainFooter(theme: Theme, width: number, regions: Regions): strin
 	].map((items) => fitPlainRow(width, items).texts.join(separator));
 }
 
+/** The keys the layout's status items name. */
+function statusKeysOf(layout: Layout): Map<string, Region> {
+	const keys = new Map<string, Region>();
+	for (const region of REGIONS) {
+		for (const item of layout[region]) if (item.kind === "status") keys.set(item.key, region);
+	}
+	return keys;
+}
+
 function layoutSelects(layout: Layout, id: string): boolean {
 	return REGIONS.some((region) => layout[region].some((item) => itemId(item) === id));
 }
@@ -256,6 +266,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 	/** Resolve the layout against current data: each region's available items, in order. */
 	function resolveRegions(ctx: ExtensionContext, theme: Theme, animated: boolean): Regions {
 		const provider = footer?.provider;
+		const selectedStatusKeys = statusKeysOf(layout);
 		const cwd = ctx.sessionManager.getCwd();
 		const branch = provider?.getGitBranch() ?? null;
 		const data: ItemData = {
@@ -267,6 +278,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 			hostnameSettings,
 			tokens: tokenTotals(ctx.sessionManager),
 			statuses: provider?.getExtensionStatuses() ?? new Map(),
+			selectedStatusKeys,
 			animated,
 		};
 		const regions = {} as Regions;
@@ -405,6 +417,33 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 		if (problems.length > 0) ctx.ui.notify(`context-footer hostname: ${problems.join("; ")}`, "warning");
 	}
 
+	/**
+	 * Status-key discovery: the statuses published right now and what selects
+	 * each, plus status items whose status is not published. Read-only: it
+	 * asks no producer for anything and selects nothing.
+	 */
+	function describeStatuses(): string {
+		const statuses = footer?.provider.getExtensionStatuses() ?? new Map<string, string>();
+		const selected = statusKeysOf(layout);
+		const remaining = REGIONS.find((region) => layout[region].some((item) => item.kind === "remaining-statuses"));
+		// Keys are opaque producer strings; keep them to one safe line.
+		const show = (key: string) => JSON.stringify(sanitizeStatus(key, "normalized"));
+		const lines = ["Published statuses:"];
+		if (statuses.size === 0) lines.push("  none");
+		for (const key of [...statuses.keys()].sort()) {
+			const region = selected.get(key);
+			const by = region ? `status item in ${region}` : remaining ? `remaining statuses in ${remaining}` : "not selected";
+			lines.push(`  ${show(key)} — ${by}`);
+		}
+		const unpublished = [...selected].filter(([key]) => !statuses.has(key));
+		if (unpublished.length > 0) {
+			lines.push("Selected but not published:");
+			for (const [key, region] of unpublished) lines.push(`  ${show(key)} — status item in ${region}`);
+		}
+		if (!footer) lines.push("(The footer is off; statuses are read while it is on.)");
+		return lines.join("\n");
+	}
+
 	function describeHostname(): string {
 		const label = hostnameLabel(hostnameSettings, machineHostname);
 		const named = label === machineHostname ? machineHostname : `${machineHostname} as "${label}"`;
@@ -430,7 +469,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("context-footer", {
-		description: "Toggle the context-footer border, reload its configuration, set its padding, toggle the thinking shimmer, or show the hostname",
+		description: "Toggle the context-footer border, reload its configuration, list statuses, set its padding, toggle the thinking shimmer, or show the hostname",
 		handler: async (args, ctx) => {
 			const [verb, value, ...extra] = (args ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean);
 
@@ -441,6 +480,15 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 				}
 				loadConfig(ctx, true);
 				ctx.ui.notify("Context footer configuration reloaded", "info");
+				return;
+			}
+
+			if (verb === "statuses") {
+				if (value !== undefined) {
+					ctx.ui.notify("Usage: /context-footer statuses", "warning");
+					return;
+				}
+				ctx.ui.notify(describeStatuses(), "info");
 				return;
 			}
 
@@ -517,7 +565,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 			}
 
 			if (value !== undefined || (verb !== undefined && verb !== "on" && verb !== "off")) {
-				ctx.ui.notify("Usage: /context-footer [on|off|reload|pad full|pad none|animate on|animate off|host on|host off]", "warning");
+				ctx.ui.notify("Usage: /context-footer [on|off|reload|statuses|pad full|pad none|animate on|animate off|host on|host off]", "warning");
 				return;
 			}
 

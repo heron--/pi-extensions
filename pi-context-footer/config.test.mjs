@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -12,6 +12,14 @@ const ids = (items) => items.map((item) => (item.kind === "builtin" ? item.id : 
 test("the shipped default layout is the documented example", () => {
 	assert.deepEqual(example("default-layout.json").layout, DEFAULT_LAYOUT_CONFIG);
 	assert.deepEqual(parseLayout(example("default-layout.json").layout).layout, DEFAULT_LAYOUT);
+});
+
+test("every example is a valid layout", () => {
+	for (const name of readdirSync(examples)) {
+		const { layout, problems } = parseLayout(example(name).layout);
+		assert.deepEqual(problems, [], name);
+		assert.ok(layout, name);
+	}
 });
 
 test("an omitted region inherits its default; a given one replaces it", () => {
@@ -28,12 +36,25 @@ test("[] empties a region", () => {
 	assert.deepEqual(layout.bottomRight, []);
 });
 
-test("status items take a key and an optional color", () => {
-	const { layout } = parseLayout({ topRight: [{ status: "example-cost" }, { status: "other", color: "warning" }] });
+test("status items take a key and presentation options", () => {
+	const { layout } = parseLayout({
+		topRight: [
+			{ status: "example-cost" },
+			{ status: "other", color: "warning", maxWidth: 12 },
+			{ status: "styled", presentation: "producer" },
+		],
+	});
 	assert.deepEqual(layout.topRight, [
-		{ kind: "status", key: "example-cost", color: "accent" },
-		{ kind: "status", key: "other", color: "warning" },
+		{ kind: "status", key: "example-cost", presentation: "normalized", color: "accent" },
+		{ kind: "status", key: "other", presentation: "normalized", color: "warning", maxWidth: 12 },
+		{ kind: "status", key: "styled", presentation: "producer", color: "accent" },
 	]);
+});
+
+test("the remaining-statuses item has its own defaults and is never in the default layout", () => {
+	const { layout } = parseLayout({ bottomRight: [{ remainingStatuses: true }] });
+	assert.deepEqual(layout.bottomRight, [{ kind: "remaining-statuses", presentation: "normalized", color: "muted", maxWidth: 40 }]);
+	for (const items of Object.values(DEFAULT_LAYOUT)) assert.ok(items.every((item) => item.kind !== "remaining-statuses"));
 });
 
 test("a built-in name and a status key with the same spelling do not collide", () => {
@@ -51,8 +72,14 @@ test("any problem rejects the whole layout", () => {
 	rejected({ middle: [] }, /"layout.middle" is not a region/);
 	rejected({ topLeft: "model" }, /must be an array/);
 	rejected({ topLeft: ["cost"] }, /unknown built-in item "cost"/);
-	rejected({ topLeft: [42] }, /built-in item name or/);
-	rejected({ topLeft: [{ colour: "accent" }] }, /needs "status"/);
+	rejected({ topLeft: [42] }, /built-in item name, a/);
+	rejected({ topLeft: [{ colour: "accent" }] }, /needs "status" or "remainingStatuses"/);
+	rejected({ topLeft: [{ status: "x", presentation: "fancy" }] }, /"presentation" must be/);
+	rejected({ topLeft: [{ status: "x", presentation: "producer", color: "accent" }] }, /only to the normalized/);
+	for (const maxWidth of [0, -1, 1.5, "10"]) rejected({ topLeft: [{ status: "x", maxWidth }] }, /positive integer/);
+	rejected({ topLeft: [{ remainingStatuses: "yes" }] }, /must be true/);
+	rejected({ topLeft: [{ remainingStatuses: true, status: "x" }] }, /unknown option "status"/);
+	rejected({ topLeft: [{ remainingStatuses: true }], bottomLeft: [{ remainingStatuses: true }] }, /only one remaining-statuses/);
 	rejected({ topLeft: [{ status: "" }] }, /non-empty string/);
 	rejected({ topLeft: [{ status: "x", colour: "red" }] }, /unknown option "colour"/);
 	rejected({ topLeft: ["model"], topRight: ["model"] }, /built-in item "model" is already selected/);
