@@ -18,14 +18,15 @@ const SESSION = [
 	entry("t2", "t1", { type: "message", message: { role: "toolResult", toolCallId: "y", toolName: "read", content: [], isError: false, timestamp: 0 } }),
 	entry("k1", "t2", { type: "compaction", summary: "", firstKeptEntryId: "c1", tokensBefore: 0, usage: usageOf(400, 40) }),
 	entry("s1", "k1", { type: "branch_summary", fromId: "b1", summary: "", usage: usageOf(500, 50) }),
-	entry("m1", "s1", { type: "custom", customType: "other", data: {} }),
+	entry("w1", "s1", { type: "usage", kind: "cache_warm", provider: "openai", model: "synthetic", usage: usageOf(600, 0) }),
+	entry("m1", "w1", { type: "custom", customType: "other", data: {} }),
 ];
 
 test("token totals cover the whole session, abandoned branches included", () => {
 	// Input is cache-inclusive: 100+50+5, then 1000 (abandoned), 200, 300 (tool),
-	// 400 (compaction) and 500 (branch summary); the user, tool-without-usage and
-	// custom entries add nothing.
-	assert.deepEqual(tokenTotals(SESSION), { input: 2555, output: 10 + 100 + 20 + 30 + 40 + 50 });
+	// 400 (compaction), 500 (branch summary) and 600 (a standalone usage entry);
+	// the user, tool-without-usage and custom entries add nothing.
+	assert.deepEqual(tokenTotals(SESSION), { input: 3155, output: 10 + 100 + 20 + 30 + 40 + 50 });
 });
 
 test("the cache recomputes when the leaf moves and not otherwise", () => {
@@ -46,7 +47,7 @@ test("the cache recomputes when the leaf moves and not otherwise", () => {
 	totals(manager);
 	assert.equal(reads, 1);
 	manager.leaf = "m1";
-	assert.equal(totals(manager).input, 2555);
+	assert.equal(totals(manager).input, 3155);
 	assert.equal(reads, 2);
 });
 
