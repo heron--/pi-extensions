@@ -82,7 +82,7 @@ export interface TokenTotals {
  * Token totals across the whole session: every usage pi records — assistant
  * responses, usage a tool reported for itself, the calls behind a compaction
  * or branch summary, and standalone usage entries such as cache warming —
- * matching what pi's own getUsageCostBreakdown counts. It walks every entry
+ * the same entries pi's own usage breakdown counts. It walks every entry
  * rather than the active branch, because an abandoned branch's requests were
  * still made. Recorded usage is not proof of billing.
  *
