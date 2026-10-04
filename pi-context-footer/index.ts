@@ -417,8 +417,10 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (_event, ctx) => {
 		refreshPricingOverridesForSession(ctx);
+		// Nothing is drawn outside the TUI, so the configuration is not read there.
+		if (ctx.mode !== "tui") return;
 		loadConfig(ctx, false);
-		if (ctx.mode === "tui") install(ctx);
+		install(ctx);
 	});
 
 	pi.on("session_shutdown", async () => {
