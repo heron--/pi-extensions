@@ -150,7 +150,9 @@ input/output token totals, and background-task state when active.
 
 When `gh` reports a pull request for the current branch, its number follows the
 branch as an OSC 8 hyperlink — ⌘-click, or whatever the terminal binds. The
-lookup runs in the background, never blocking a render. A found pull request is
+lookup runs in the background, never blocking a render, and only while the
+footer is on and its layout selects the `pull-request` item, whether or not the
+item currently fits on screen. A found pull request is
 kept for the session; a miss is kept for a minute, so a branch without a pull
 request spawns `gh` at most once a minute, and one opened mid-session appears
 within a minute. If `gh` is missing,
@@ -332,6 +334,7 @@ discovery directory.
 /context-footer            toggle the decoration
 /context-footer on         enable it
 /context-footer off        disable it
+/context-footer reload     re-read config.json (layout, hostname, animation)
 /context-footer pad none   set the padding (see above)
 /context-footer animate [on|off]   report or toggle the traveling gloss
 /context-footer host [on|off]      report the hostname state, or set its switch
