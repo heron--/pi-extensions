@@ -79,6 +79,21 @@ working directory, context gauge and window, and the session name
 pull request, cache-inclusive input/output token totals, and background-task
 and write-lock state.
 
+### Directory
+
+Outside a Git repository, the directory item is a folder and the working
+directory's name. Inside one, it is a four-pointed star
+(`nf-md-star_four_points_outline`) and the repository's name, followed, below
+the repository root, by a folder and the current directory's name alone — not
+the path in between. The name comes from the repository's shared Git
+directory, so a linked worktree shows the repository it belongs to. `git` runs
+once per working directory, in the background; until it answers, the item
+shows the plain directory.
+
+The repository is painted with the theme's `repoText` color and the directory
+with `directoryText`; themes without them fall back to `syntaxKeyword` and
+`syntaxFunction`.
+
 ### Pull request
 
 When `gh` reports a pull request for the current branch, its number follows the

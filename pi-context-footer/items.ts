@@ -10,10 +10,12 @@ import { basename } from "node:path";
 import { paintThinkingLevel } from "../lib/thinking-colors.ts";
 import type { BuiltinItemId, HostnameSettings, LayoutItem, StatusPresentation } from "./config.ts";
 import type { PullRequest } from "./pull-request.ts";
+import type { Repository } from "./repository.ts";
 import { clipToWidth, sanitizeStatus } from "./status.ts";
 
 const ICON_MODEL = String.fromCodePoint(0xf068c);
 const ICON_FOLDER = "";
+const ICON_REPO = String.fromCodePoint(0xf0ae3); // nf-md-star_four_points_outline
 const ICON_BRANCH = "";
 const ICON_GAUGE = "";
 const ICON_SESSION = String.fromCodePoint(0xf04f9); // nf-md-tag
@@ -35,6 +37,8 @@ export interface ItemData {
 	theme: Theme;
 	branch: string | null;
 	pullRequest: PullRequest | null;
+	/** The repository holding the working directory, or null outside one or until known. */
+	repository: Repository | null;
 	hostname: string;
 	hostnameSettings: HostnameSettings;
 	tokens: TokenTotals;
@@ -49,13 +53,14 @@ export interface ItemData {
  * Paint in a theme color by name. Owner configuration names colors as
  * strings; a theme switched after the configuration was validated may not
  * define one, and `theme.fg` throws on an unknown color, which from a render
- * path tears the TUI down. Fall back to the accent color instead.
+ * path tears the TUI down. Fall back to `fallback`, the accent color unless
+ * given, instead.
  */
-export function paintColor(theme: Theme, color: string, text: string): string {
+export function paintColor(theme: Theme, color: string, text: string, fallback: ThemeColor = "accent"): string {
 	try {
 		return theme.fg(color as ThemeColor, text);
 	} catch {
-		return theme.fg("accent", text);
+		return theme.fg(fallback, text);
 	}
 }
 
@@ -203,6 +208,23 @@ export function hostnameLabel(settings: HostnameSettings, host: string): string 
 	return host;
 }
 
+/**
+ * The directory item. Outside a repository, the folder icon and the directory
+ * name. Inside one, the four-pointed star and the repository name, then —
+ * below the root — the folder icon and the current directory's name only,
+ * not the path between.
+ *
+ * `repoText` and `directoryText` are theme colors pi's ThemeColor union does
+ * not know about, defined by the owner's theme; others fall back to
+ * syntaxKeyword and syntaxFunction.
+ */
+function directoryLabel(theme: Theme, cwd: string, repository: Repository | null): string {
+	const folder = (name: string) => paintColor(theme, "directoryText", `${ICON_FOLDER} ${name}`, "syntaxFunction");
+	if (!repository) return folder(basename(cwd) || cwd);
+	const repo = paintColor(theme, "repoText", `${ICON_REPO} ${repository.name}`, "syntaxKeyword");
+	return repository.subdir ? `${repo} ${folder(basename(repository.subdir))}` : repo;
+}
+
 function renderBuiltin(id: BuiltinItemId, data: ItemData): string | null {
 	const { ctx, theme } = data;
 	switch (id) {
@@ -213,10 +235,8 @@ function renderBuiltin(id: BuiltinItemId, data: ItemData): string | null {
 		case "thinking":
 			if (!ctx.model?.reasoning || !ctx.thinkingLevel) return null;
 			return thinkingLabel(theme, ctx.thinkingLevel, data.animated);
-		case "directory": {
-			const cwd = ctx.sessionManager.getCwd();
-			return theme.fg("syntaxFunction", `${ICON_FOLDER} ${basename(cwd) || cwd}`);
-		}
+		case "directory":
+			return directoryLabel(theme, ctx.sessionManager.getCwd(), data.repository);
 		case "context": {
 			const usage = ctx.getContextUsage();
 			const contextWindow = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;

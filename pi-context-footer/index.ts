@@ -43,6 +43,7 @@ import { createTokenTotalsCache, hostnameLabel, hostnameShown, type ItemData, it
 import { fitFramedRow, fitPlainRow, type ShownItem } from "./layout.ts";
 import { sanitizeStatus } from "./status.ts";
 import { PullRequestTracker } from "./pull-request.ts";
+import { RepositoryTracker } from "./repository.ts";
 
 /** The plain footer's item separator; the framed runs use lib/box.ts. */
 const RULE_RUN = 2;
@@ -229,6 +230,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 	/** The footer pi is currently showing, while this extension's footer is enabled. */
 	let footer: { tui: TUI; provider: ReadonlyFooterDataProvider; cwd: string } | null = null;
 	const pullRequests = new PullRequestTracker();
+	const repositories = new RepositoryTracker();
 	const tokenTotals = createTokenTotalsCache();
 
 	/** The TUI the shimmer's repaint loop drives, captured from the editor factory. */
@@ -280,6 +282,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 			theme,
 			branch,
 			pullRequest: branch ? pullRequests.get(cwd, branch) : null,
+			repository: repositories.get(cwd),
 			hostname: machineHostname,
 			hostnameSettings,
 			tokens: tokenTotals(ctx.sessionManager),
@@ -303,6 +306,9 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 			const self = { tui, provider, cwd: ctx.sessionManager.getCwd() };
 			footer = self;
 			syncPullRequestWatch();
+			repositories.lookup(self.cwd, () => {
+				if (footer === self) tui.requestRender();
+			});
 
 			const unsubscribe = provider.onBranchChange(() => {
 				pullRequests.sync();

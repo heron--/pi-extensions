@@ -19,6 +19,7 @@ from pathlib import Path
 import pty
 import re
 import select
+import subprocess
 import signal
 import struct
 import tempfile
@@ -91,10 +92,16 @@ def seed(cwd):
 class Pi:
     """One pi process in a pty, with a pyte screen fed from its output."""
 
-    def __init__(self, scratch, width, height=36, layout=None, extra=(), tui_mode="fullscreen", config=None):
+    def __init__(self, scratch, width, height=36, layout=None, extra=(), tui_mode="fullscreen", config=None,
+                 subdir=None):
         self.width, self.height = width, height
         cwd = scratch / "demo-repo"
         cwd.mkdir()
+        if subdir:
+            # demo-repo becomes a Git repository and pi starts below its root.
+            subprocess.run(["git", "init", "-q"], cwd=cwd, check=True)
+            cwd = cwd / subdir
+            cwd.mkdir(parents=True)
         agent = scratch / "agent"
         (agent / "pi-context-footer").mkdir(parents=True)
         # The only model is a local fixture whose endpoint nothing listens on, so
@@ -257,6 +264,23 @@ def widths_and_resizes(scratch, mode):
         return pi
     except BaseException:
         pi.close(OUTPUT, f"widths_and_resizes-{mode}-FAILED")
+        raise
+
+
+@case
+def repository_directory(scratch, mode):
+    """Below a repository's root: the star and repository name, then only the current directory."""
+    pi = started(Pi(scratch, 100, tui_mode=mode, subdir="packages/core"))
+    try:
+        pi.wait(lambda text: "demo-repo" in text, "the repository name")
+        top, _ = pi.frame()
+        assert re.search("GPT-4o ── \U000F0AE3 demo-repo . core ── ", top), top
+        assert "packages" not in top, top
+        assert pi.fg_at("\U000F0AE3 demo-repo") != pi.fg_at(" core"), "repository and directory share a color"
+        pi.check_no_errors()
+        return pi
+    except BaseException:
+        pi.close(OUTPUT, f"repository_directory-{mode}-FAILED")
         raise
 
 

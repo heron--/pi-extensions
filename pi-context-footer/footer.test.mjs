@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
@@ -87,6 +88,43 @@ test("configuration reload applies a valid layout and keeps the last valid one o
 		assert.match(topRule(host.renderEditor(120)), /^╭── thinking:high ── 󰚌 Synthetic Model/);
 	} finally {
 		await host.shutdown();
+	}
+});
+
+test("the directory item names the repository, and below its root only the current directory", async () => {
+	const FOLDER = "";
+	const STAR = "\u{f0ae3}";
+	const dirs = scratch({ config: { layout: { topLeft: ["directory"], topRight: [], bottomLeft: [], bottomRight: [] } } });
+	const git = (cwd, ...args) => execFileSync("git", args, { cwd, stdio: "ignore" });
+	git(dirs.cwd, "init", "-q");
+	git(dirs.cwd, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "init");
+	const nested = join(dirs.cwd, "packages", "core");
+	mkdirSync(nested, { recursive: true });
+	const worktree = join(dirs.root, "feature--1234");
+	git(dirs.cwd, "worktree", "add", "-q", worktree);
+	const outside = join(dirs.root, "outside");
+	mkdirSync(outside);
+
+	const cases = [
+		{ cwd: outside, repo: null, folder: "outside" },
+		{ cwd: dirs.cwd, repo: "demo-repo", folder: null },
+		{ cwd: nested, repo: "demo-repo", folder: "core" },
+		{ cwd: worktree, repo: "demo-repo", folder: null },
+	];
+	for (const { cwd, repo, folder } of cases) {
+		const theme = fakeTheme(["repoText", "directoryText"]);
+		const host = await start({ dirs: { ...dirs, cwd }, theme });
+		try {
+			if (repo) assert.ok(await waitFor(() => host.state.renderRequests > 0), `repaints once git answers in ${cwd}`);
+			else await delay(200);
+			const top = host.renderEditor(100)[1];
+			const parts = [repo && theme.fg("repoText", `${STAR} ${repo}`), folder && theme.fg("directoryText", `${FOLDER} ${folder}`)];
+			const label = parts.filter(Boolean).join(" ");
+			assert.ok(top.includes(label), `${cwd}: ${JSON.stringify(plain(top))}`);
+			assert.match(plain(top), /^╭── \S+ [^─]+ ─+╮$/u);
+		} finally {
+			await host.shutdown();
+		}
 	}
 });
 
