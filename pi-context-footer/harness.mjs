@@ -10,7 +10,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 const THEME_COLORS = [
 	"accent", "border", "borderAccent", "borderMuted", "success", "error", "warning", "muted", "dim", "text",
 	"thinkingText", "mdLink", "syntaxType", "syntaxFunction", "syntaxNumber", "thinkingOff", "thinkingMinimal",
-	"thinkingLow", "thinkingMedium", "thinkingHigh", "thinkingXhigh", "thinkingMax", "bashMode",
+	"thinkingLow", "thinkingMedium", "thinkingHigh", "thinkingXhigh", "thinkingMax", "bashMode", "syntaxKeyword",
 ];
 
 /** A theme like pi's in the one way that matters: unknown colors throw. */
