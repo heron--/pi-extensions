@@ -203,7 +203,8 @@ zero-fills the gap**, so the cost reads as `$0` rather than "unknown". This
 helper detects that and falls back to
 [`@pydantic/genai-prices`](https://github.com/pydantic/genai-prices) — a
 community price dataset that ships bundled, so there's no network call at render
-time.
+time. A small static supplement supplies public base rates for models missing
+from the npm bundle; library matches take precedence over supplemental estimates.
 
 ```ts
 const p = getPricing(model);            // { input, output, source } | null
