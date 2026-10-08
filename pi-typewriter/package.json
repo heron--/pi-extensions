@@ -2,7 +2,7 @@
   "name": "pi-typewriter",
   "version": "0.1.0",
   "private": true,
-  "description": "Pi extension: reveals streamed assistant text with a typewriter effect, to avoid motion-sickness from fast models like Opus.",
+  "description": "Pi extension: reveals streamed assistant text with a typewriter effect.",
   "type": "module",
   "main": "index.ts",
   "pi": {

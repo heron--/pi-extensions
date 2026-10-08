@@ -7,7 +7,15 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { settingProblem } from "./settings.mjs";
 
-/** `{ extensions: [{ name, description, settings }], problems }`, sorted by name. */
+/** Listed first, in this order; every other extension follows by name. */
+const FIRST = ["pi-transcript-digest", "pi-tool-output", "pi-recap", "pi-model-picker"];
+
+function rank(name) {
+	const index = FIRST.indexOf(name);
+	return index < 0 ? FIRST.length : index;
+}
+
+/** `{ extensions: [{ name, description, settings }], problems }`, in menu order. */
 export function discoverExtensions(repoRoot) {
 	const extensions = [];
 	const problems = [];
@@ -26,7 +34,7 @@ export function discoverExtensions(repoRoot) {
 		const settings = readSettings(entry.name, manifest.settings, problems);
 		extensions.push({ name: entry.name, description: summary(manifest.description), settings });
 	}
-	extensions.sort((a, b) => a.name.localeCompare(b.name));
+	extensions.sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
 	return { extensions, problems };
 }
 

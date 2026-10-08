@@ -49,6 +49,12 @@ test("an unusable settings entry drops that extension's settings, with the reaso
 	]);
 });
 
+test("the featured extensions come first, then the rest by name", (t) => {
+	const manifest = { pi: { extensions: [] } };
+	const root = repo(t, { "pi-b": manifest, "pi-a": manifest, "pi-recap": manifest, "pi-transcript-digest": manifest });
+	assert.deepEqual(discoverExtensions(root).extensions.map(({ name }) => name), ["pi-transcript-digest", "pi-recap", "pi-a", "pi-b"]);
+});
+
 test("every extension in this checkout has usable settings", () => {
 	const { extensions, problems } = discoverExtensions(checkout);
 	assert.deepEqual(problems, []);

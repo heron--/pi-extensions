@@ -18,6 +18,7 @@ import re
 import select
 import shutil
 import struct
+import subprocess
 import tempfile
 import termios
 import time
@@ -113,11 +114,9 @@ def menu_rows(session):
 
 
 def extension_names(checkout):
-    names = []
-    for manifest in sorted(checkout.glob("*/package.json")):
-        if "extensions" in json.loads(manifest.read_text()).get("pi", {}):
-            names.append(manifest.parent.name)
-    return names
+    """The extensions in menu order, as the installer lists them."""
+    script = "import('./scripts/install/catalog.mjs').then(({ discoverExtensions }) => console.log(JSON.stringify(discoverExtensions('.').extensions.map(({ name }) => name))))"
+    return json.loads(subprocess.run(["node", "-e", script], cwd=checkout, check=True, capture_output=True, text=True).stdout)
 
 
 def check(condition, message):
@@ -164,29 +163,36 @@ def case_install_change_and_remove(checkout, agent_dir):
     footer, recap = "pi-context-footer", "pi-recap"
     down_to = lambda name: DOWN * names.index(name)
 
-    # First run: pick two extensions, decline npm, customize both.
+    def customize_footer():
+        session.answer(f"Customize {footer} settings? [y/N]", "y")
+        session.answer("Animate the gloss on the max thinking level (yes, no) [yes]: ", "no")
+        session.answer("Show the hostname in the frame (yes, no) [no]: ", "")
+        session.expect("Saved animate to")
+
+    def customize_recap():
+        session.answer(f"Customize {recap} settings? [y/N]", "y")
+        session.answer("Recap style (frame, clean) [frame]: ", "box")
+        session.expect("Choose one of: frame, clean.")
+        session.answer("Recap style (frame, clean) [frame]: ", "clean")
+        session.answer("Minutes between recap checks (0.05–240) [5]: ", "")
+        session.answer("Interactions needed for a recap (1–1000) [5]: ", "10")
+        session.expect("Saved style, minimumCompletedInteractions to")
+
+    # First run: pick two extensions, decline npm, customize both. Output follows menu order.
+    chosen = [name for name in names if name in (footer, recap)]
     session = Session(checkout, agent_dir)
     session.expect("↑↓ move")
-    session.send(" " + down_to(recap) + " ")
+    session.send(down_to(chosen[0]) + " " + DOWN * (names.index(chosen[1]) - names.index(chosen[0])) + " ")
     rows = menu_rows(session)
-    check(rows[0].startswith("  [x] " + footer) and rows[names.index(recap)].startswith("> [x] " + recap), "space checks rows\n" + "\n".join(rows))
+    check(rows[names.index(chosen[0])].startswith("  [x] " + chosen[0]) and rows[names.index(chosen[1])].startswith("> [x] " + chosen[1]), "space checks rows\n" + "\n".join(rows))
     session.send(ENTER)
-    session.expect(f"Selected: {footer}, {recap}")
-    session.expect(f"linked   {footer}")
-    session.expect(f"linked   {recap}")
+    session.expect(f"Selected: {chosen[0]}, {chosen[1]}")
+    for name in chosen:
+        session.expect(f"linked   {name}")
     session.expect("linked   lib")
     session.answer("--omit=dev`? [Y/n]", "n")
-    session.answer(f"Customize {footer} settings? [y/N]", "y")
-    session.answer("Animate the gloss on the max thinking level (yes, no) [yes]: ", "no")
-    session.answer("Show the hostname in the frame (yes, no) [no]: ", "")
-    session.expect("Saved animate to")
-    session.answer(f"Customize {recap} settings? [y/N]", "y")
-    session.answer("Recap style (frame, clean) [frame]: ", "box")
-    session.expect("Choose one of: frame, clean.")
-    session.answer("Recap style (frame, clean) [frame]: ", "clean")
-    session.answer("Minutes between recap checks (0.05–240) [5]: ", "")
-    session.answer("Interactions needed for a recap (1–1000) [5]: ", "10")
-    session.expect("Saved style, minimumCompletedInteractions to")
+    for name in chosen:
+        (customize_footer if name == footer else customize_recap)()
     session.expect("Done.")
     check(session.wait() == 0, "a completed run exits 0")
     for name in (footer, recap, "lib"):
