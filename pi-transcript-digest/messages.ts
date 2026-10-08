@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { ExtensionContext, SessionEntry, Theme } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences, truncateToWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { getMarkdownTheme, type ExtensionContext, type SessionEntry, type Theme } from "@earendil-works/pi-coding-agent";
+import { Markdown, stripTerminalSequences, truncateToWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
 export type ConversationMessage = Extract<AgentMessage, { role: "user" | "assistant" }>;
 type SessionSource = Pick<ExtensionContext["sessionManager"], "getBranch" | "getLeafId"> & Partial<Pick<ExtensionContext["sessionManager"], "getEntry">>;
@@ -322,8 +322,9 @@ function renderItems(messages: readonly ConversationItem[], width: number, theme
 		for (const wrapped of wrapTextWithAnsi(theme.fg(color, theme.bold(label)) + model + stamp, contentWidth)) {
 			lines.push(paneRow(wrapped, width));
 		}
-		for (const wrapped of wrapTextWithAnsi(message.text, contentWidth)) {
-			lines.push(paneRow(wrapped, width));
+		const markdown = new Markdown(message.text, 0, 0, getMarkdownTheme());
+		for (const row of markdown.render(contentWidth)) {
+			lines.push(paneRow(row, width));
 		}
 	}
 	return lines;

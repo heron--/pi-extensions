@@ -1,7 +1,10 @@
 import { performance } from "node:perf_hooks";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { Container, ScrollView, Text, TuiAltScreen, VStack } from "@earendil-works/pi-tui";
 import { TranscriptDigestLayout } from "./layout.ts";
 import { ConversationPane } from "./messages.ts";
+
+initTheme("dark");
 
 const theme = {
 	fg(color, text) {
