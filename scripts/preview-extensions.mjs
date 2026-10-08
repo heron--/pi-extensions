@@ -14,8 +14,8 @@
  * for visual inspection, and only a live terminal shows them faithfully.
  *
  * Scoping: `--no-extensions` plus one `-e <path>` per extension (discovered
- * the same way scripts/link-extensions.mjs does — any repo-root directory
- * whose package.json carries a `pi.extensions` array) means ONLY this
+ * the same way install.sh does — any repo-root directory whose package.json
+ * carries a `pi.extensions` array) means ONLY this
  * checkout's extensions load. No `~/.pi/agent/extensions` globals, no
  * duplicates, and edits here take effect on the next run with no re-link.
  *
@@ -54,7 +54,7 @@ import { fileURLToPath } from "node:url";
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 /* -------------------------------------------------------------------------- */
-/* Discover this checkout's extensions — same convention as link-extensions.mjs */
+/* Discover this checkout's extensions — the same convention as install.sh    */
 /* -------------------------------------------------------------------------- */
 
 function discoverExtensionEntries() {

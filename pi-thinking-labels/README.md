@@ -39,6 +39,7 @@ Thinking: first, restate the constraint…
 
 ## Development
 
-Same install conventions as its siblings — the symlink script picks it up
-by convention (it imports [`../lib/thinking-colors.ts`](../README.md#libthinking-colorsts),
-which the existing `lib` link covers). `npm run typecheck` from the repo root.
+Install it like its siblings, with [`install.sh`](../README.md#install), which
+also links the `lib/` it imports
+([`../lib/thinking-colors.ts`](../README.md#libthinking-colorsts)).
+`npm run typecheck` from the repo root.
