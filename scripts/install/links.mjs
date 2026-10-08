@@ -51,9 +51,10 @@ function pointsInto(linkPath, current, root) {
  * The changes that make `extensionsDir` match `selected`, grouped by how much
  * consent they need:
  *
- * - `create` and `repair` (replace a link to nothing) apply without asking.
+ * - `create`, and `repair` (replace a link to nothing in this checkout),
+ *   apply without asking.
  * - `replace` swaps a link that points somewhere else, such as another
- *   checkout; it needs confirmation.
+ *   checkout, even to nothing; it needs confirmation.
  * - `remove` deletes this checkout's links that are no longer wanted: those
  *   of deselected extensions, `lib` when nothing is selected, and broken
  *   links into this checkout, such as one left by a renamed extension. It
@@ -72,8 +73,8 @@ export function planLinks({ repoRoot, extensionsDir, names, selected, hasLib }) 
 		const change = { name, linkPath, target, current: link.current };
 		if (isWanted) {
 			if (link.state === "missing") plan.create.push(change);
-			else if (link.state === "dangling") plan.repair.push(change);
-			else if (link.state === "elsewhere") plan.replace.push(change);
+			else if (link.state === "dangling" && pointsInto(linkPath, link.current, repoRoot)) plan.repair.push(change);
+			else if (link.state === "dangling" || link.state === "elsewhere") plan.replace.push(change);
 			else if (link.state === "occupied") plan.blocked.push({ ...change, kind: link.kind });
 		} else if (link.state === "ok") {
 			plan.remove.push({ ...change, reason: name === LIB ? "unused" : "deselected" });

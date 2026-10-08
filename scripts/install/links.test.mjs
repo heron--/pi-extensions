@@ -55,16 +55,21 @@ test("deselecting offers this checkout's links for removal, and lib with the las
 	assert.deepEqual(plan(), { create: [], repair: [], replace: [], remove: [], blocked: [] });
 });
 
-test("a link to nothing is repaired; one to another checkout needs consent", (t) => {
-	const { repoRoot, otherRoot, extensionsDir, plan } = fixture(t);
+test("a link to nothing in this checkout is repaired; any other link needs consent", (t) => {
+	const { root, repoRoot, otherRoot, extensionsDir, plan } = fixture(t);
 	mkdirSync(extensionsDir, { recursive: true });
 	symlinkSync(join(repoRoot, "pi-gone"), join(extensionsDir, "pi-a"));
 	symlinkSync(join(otherRoot, "pi-b"), join(extensionsDir, "pi-b"));
-	const both = plan("pi-a", "pi-b");
-	assert.deepEqual(names(both.repair), ["pi-a"]);
-	assert.deepEqual(both.replace.map(({ name, current }) => [name, current]), [["pi-b", join(otherRoot, "pi-b")]]);
-	apply(both);
+	symlinkSync(join(root, "unmounted", "lib"), join(extensionsDir, "lib"));
+	const all = plan("pi-a", "pi-b");
+	assert.deepEqual(names(all.repair), ["pi-a"]);
+	assert.deepEqual(all.replace.map(({ name, current }) => [name, current]), [
+		["pi-b", join(otherRoot, "pi-b")],
+		["lib", join(root, "unmounted", "lib")],
+	]);
+	apply(all);
 	assert.equal(inspectLink(join(extensionsDir, "pi-b"), join(repoRoot, "pi-b")).state, "ok");
+	assert.equal(inspectLink(join(extensionsDir, "lib"), join(repoRoot, "lib")).state, "ok");
 });
 
 test("links this checkout does not own are never offered for removal", (t) => {
