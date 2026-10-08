@@ -40,6 +40,7 @@ import {
 	readFooterConfig,
 } from "./config.ts";
 import { createTokenTotalsCache, hostnameLabel, hostnameShown, type ItemData, itemId, renderItem } from "./items.ts";
+import { loadStatusFormatters, type StatusFormatters } from "./formatters.ts";
 import { fitFramedRow, fitPlainRow, type ShownItem } from "./layout.ts";
 import { sanitizeStatus } from "./status.ts";
 import { PullRequestTracker } from "./pull-request.ts";
@@ -224,6 +225,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 	let animate = true;
 	let layout: Layout = DEFAULT_LAYOUT;
 	let hostnameSettings: HostnameSettings = DEFAULT_HOSTNAME_SETTINGS;
+	let statusFormatters: StatusFormatters = new Map();
 	/** The machine's hostname, re-read with the configuration. */
 	let machineHostname = "";
 
@@ -287,6 +289,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 			hostnameSettings,
 			tokens: tokenTotals(ctx.sessionManager),
 			statuses: provider?.getExtensionStatuses() ?? new Map(),
+			statusFormatters,
 			selectedStatusKeys,
 			animated,
 		};
@@ -404,14 +407,23 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 	 * the extension runtime. At session start an unusable layout falls back to
 	 * the default; on a reload, the last valid one stays.
 	 */
-	function loadConfig(ctx: ExtensionContext, reloading: boolean): void {
+	async function loadConfig(ctx: ExtensionContext, reloading: boolean): Promise<void> {
 		machineHostname = osHostname();
 		animate = loadThinkingAnimatePreference();
-		const load = readFooterConfig(contextFooterConfigFile(), (name) => themeHasColor(ctx, name));
+		const file = contextFooterConfigFile();
+		const load = readFooterConfig(file, (name) => themeHasColor(ctx, name));
+		if (!reloading) statusFormatters = new Map();
 		if (load.layout) layout = load.layout;
 		else if (!reloading) layout = DEFAULT_LAYOUT;
 		if (load.hostname) hostnameSettings = load.hostname;
 		else if (!reloading) hostnameSettings = DEFAULT_HOSTNAME_SETTINGS;
+		if (load.statusFormatters !== undefined) {
+			try {
+				statusFormatters = await loadStatusFormatters(load.statusFormatters, file);
+			} catch (error) {
+				load.problems.push(`${error instanceof Error ? error.message : String(error)}; ${reloading ? "kept the previous status formatters" : "using unformatted statuses"}`);
+			}
+		}
 		syncPullRequestWatch();
 
 		if (load.problems.length > 0) {
@@ -469,7 +481,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 	pi.on("session_start", async (_event, ctx) => {
 		// Nothing is drawn outside the TUI, so the configuration is not read there.
 		if (ctx.mode !== "tui") return;
-		loadConfig(ctx, false);
+		await loadConfig(ctx, false);
 		install(ctx);
 	});
 
@@ -491,7 +503,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 					ctx.ui.notify("Usage: /context-footer reload", "warning");
 					return;
 				}
-				loadConfig(ctx, true);
+				await loadConfig(ctx, true);
 				ctx.ui.notify("Context footer configuration reloaded", "info");
 				return;
 			}

@@ -94,6 +94,28 @@ test("colors are checked against the theme", () => {
 	assert.match(parseLayout({ topLeft: [{ status: "x", color: "chartreuse" }] }, isColor).problems[0], /theme color/);
 });
 
+test("statusFormatters is an optional module path; invalid values do not discard the layout", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-context-footer-config-test-"));
+	try {
+		const file = join(dir, "config.json");
+		for (const value of [undefined, null, "./formatters.mjs", "/tmp/formatters.mjs", "~/formatters.mjs"]) {
+			writeFileSync(file, JSON.stringify({ statusFormatters: value }));
+			const load = readFooterConfig(file);
+			assert.equal(load.statusFormatters, value ?? null);
+			assert.deepEqual(load.problems, []);
+		}
+		for (const value of ["", "  ", false, 42, {}, []]) {
+			writeFileSync(file, JSON.stringify({ statusFormatters: value }));
+			const load = readFooterConfig(file);
+			assert.equal(load.statusFormatters, undefined);
+			assert.ok(load.layout);
+			assert.match(load.problems[0], /"statusFormatters" must be/);
+		}
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("hostname settings keep their valid entries", () => {
 	const { settings, problems } = parseHostnameSettings({ show: true, nickname: "x", nicknames: { a: "", b: "bee" } });
 	assert.equal(settings.show, true);
@@ -109,7 +131,7 @@ test("readFooterConfig: missing, malformed and partial files", () => {
 		assert.equal(readFooterConfig(file).layout, DEFAULT_LAYOUT);
 
 		writeFileSync(file, "{ not json");
-		assert.deepEqual(readFooterConfig(file), { layout: null, hostname: null, problems: ["config.json is not valid JSON"] });
+		assert.deepEqual(readFooterConfig(file), { layout: null, hostname: null, statusFormatters: undefined, problems: ["config.json is not valid JSON"] });
 
 		writeFileSync(file, JSON.stringify({ animate: false, layout: { topLeft: ["nope"] }, hostname: { show: true } }));
 		const load = readFooterConfig(file);

@@ -353,6 +353,56 @@ def status_items(scratch, mode):
 
 
 @case
+def custom_status_formatters(scratch, mode):
+    """Owner modules format safely, reload at the same path, and keep layout colors."""
+    module = scratch / "formatters.mjs"
+    module.write_text('export default { "fx-work": text => text === "work ready" ? "✓ready" : undefined };')
+    layout = {"topLeft": ["model"], "topRight": [], "bottomLeft": [],
+              "bottomRight": [{"status": "fx-blue", "color": "syntaxFunction"},
+                              {"status": "fx-work", "color": "syntaxFunction"}]}
+    config = {"statusFormatters": "../../formatters.mjs"}
+    pi = started(Pi(scratch, 100, layout=layout, config=config, tui_mode=mode))
+    try:
+        pi.command("/fx set fx-blue blue")
+        pi.command("/fx set fx-work \\e[31mwork ready\\e[0m")
+        assert "blue ── ✓ready" in pi.frame()[1], pi.text()
+        assert pi.fg_at("blue") == pi.fg_at("✓ready"), "the layout owns the formatter's color"
+        color = pi.fg_at("✓ready")
+        (OUTPUT / f"custom-formatters-{mode}-compact.txt").write_text(pi.text() + "\n")
+        for width in [100, 80, 40, 24, 23, 100]:
+            pi.set_size(width)
+            pi.pump(0.6)
+            assert "✓ready" in pi.text(), pi.text()
+            if width >= 24:
+                pi.frame()
+        pi.command("/fx theme light", 1.0)
+        assert pi.fg_at("blue") == pi.fg_at("✓ready") != color, "theme changes repaint formatted text"
+        pi.command("/fx set fx-work unknown label")
+        assert "unknown label" in pi.frame()[1], pi.text()
+        pi.command("/fx set fx-work work ready")
+
+        # A same-path edit is evaluated by /context-footer reload. Control
+        # sequences and newlines from a formatter cannot damage the screen.
+        module.write_text('export default { "fx-work": () => "\\x1b[2Jshort\\ntext" };')
+        pi.command("/context-footer reload", 1.0)
+        assert "short text" in pi.frame()[1], pi.text()
+        assert "answer to" in pi.text(), "formatter output cleared the transcript"
+        module.write_text('export default { "fx-work": () => { throw new Error("bad rule"); } };')
+        pi.command("/context-footer reload", 1.0)
+        assert "work ready" in pi.frame()[1], "failed callback must retain the status"
+        pi.write_config({"animate": False, "layout": layout, "statusFormatters": None})
+        pi.command("/context-footer reload")
+        assert "work ready" in pi.frame()[1], pi.text()
+        pi.command("/fx clear fx-work")
+        assert "work ready" not in pi.frame()[1], pi.text()
+        pi.check_no_errors()
+        return pi
+    except BaseException:
+        pi.close(OUTPUT, f"custom_status_formatters-{mode}-FAILED")
+        raise
+
+
+@case
 def plain_mode_statuses(scratch, mode):
     """Plain mode keeps the layout's selection and order, and repaints on updates."""
     pi = started(Pi(scratch, 23, layout=PINNED, tui_mode=mode))

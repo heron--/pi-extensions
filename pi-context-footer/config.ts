@@ -1,6 +1,6 @@
 /**
  * The owner configuration in `<agent dir>/pi-context-footer/config.json`:
- * the layout and the hostname settings. Parsing is pure so it can be tested
+ * the layout, hostname settings and status-formatter path. Parsing is pure so it can be tested
  * without pi; reading the file is the one side effect, in readFooterConfig.
  *
  * The animate preference shares the file but is read through
@@ -293,6 +293,8 @@ export interface FooterConfigLoad {
 	layout: Layout | null;
 	/** The hostname settings, or null when the file itself is unusable. */
 	hostname: HostnameSettings | null;
+	/** Module path, null when disabled, or undefined when the setting is invalid. */
+	statusFormatters: string | null | undefined;
 	/** Everything wrong with the file, for one warning. */
 	problems: string[];
 }
@@ -303,18 +305,23 @@ export function readFooterConfig(file: string, isColor?: ColorCheck): FooterConf
 	try {
 		raw = readFileSync(file, "utf8");
 	} catch {
-		return { layout: DEFAULT_LAYOUT, hostname: DEFAULT_HOSTNAME_SETTINGS, problems: [] };
+		return { layout: DEFAULT_LAYOUT, hostname: DEFAULT_HOSTNAME_SETTINGS, statusFormatters: null, problems: [] };
 	}
 
 	let stored: unknown;
 	try {
 		stored = JSON.parse(raw);
 	} catch {
-		return { layout: null, hostname: null, problems: ["config.json is not valid JSON"] };
+		return { layout: null, hostname: null, statusFormatters: undefined, problems: ["config.json is not valid JSON"] };
 	}
-	if (!isRecord(stored)) return { layout: null, hostname: null, problems: ["config.json must hold an object"] };
+	if (!isRecord(stored)) return { layout: null, hostname: null, statusFormatters: undefined, problems: ["config.json must hold an object"] };
 
 	const layout = parseLayout(stored.layout, isColor);
 	const hostname = parseHostnameSettings(stored.hostname);
-	return { layout: layout.layout, hostname: hostname.settings, problems: [...layout.problems, ...hostname.problems] };
+	const problems = [...layout.problems, ...hostname.problems];
+	let statusFormatters: string | null | undefined;
+	if (stored.statusFormatters === undefined || stored.statusFormatters === null) statusFormatters = null;
+	else if (typeof stored.statusFormatters === "string" && stored.statusFormatters.trim()) statusFormatters = stored.statusFormatters;
+	else problems.push('"statusFormatters" must be a non-empty path string or null');
+	return { layout: layout.layout, hostname: hostname.settings, statusFormatters, problems };
 }
