@@ -8,7 +8,8 @@
  *   2. pi's figure — the model definition's `cost` block, or the cost pi
  *      recorded on a response
  *   3. an estimate from @pydantic/genai-prices, a community-maintained public
- *      list-price dataset that ships bundled (no network call at render time)
+ *      list-price dataset, plus static public base-rate fallbacks (no network
+ *      call at render time)
  *
  * pi zero-fills `cost` when a definition omits it (custom/gateway providers in
  * models.json usually do), so an all-zero pi cost is "unknown", not "free", and
@@ -188,6 +189,16 @@ interface DatasetRates extends Rates {
 	matchedId?: string;
 }
 
+/**
+ * Public base-rate fallbacks for ids absent from the bundled npm catalog.
+ * Library matches take precedence over these estimates.
+ * Source (prices_checked: 2026-09-29):
+ * https://github.com/pydantic/genai-prices/blob/065fe719aaf17ad54eb6648cbc111521a25461a6/prices/providers/openai.yml
+ */
+const DATASET_FALLBACKS: ReadonlyMap<string, DatasetRates> = new Map([
+	["gpt-6.1-sol", { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5, matchedId: "gpt-6.1-sol" }],
+]);
+
 const datasetCache = new Map<string, DatasetRates | null>();
 
 /**
@@ -203,8 +214,9 @@ function datasetRates(modelId: string): DatasetRates | null {
 	if (cached !== undefined) return cached;
 
 	const calcPrice = getCalcPrice();
+	const candidates = calcPrice ? idCandidates(modelId) : [];
 	let result: DatasetRates | null = null;
-	for (const candidate of calcPrice ? idCandidates(modelId) : []) {
+	for (const candidate of candidates) {
 		try {
 			const r = calcPrice!({ input_tokens: PROBE_TOKENS, output_tokens: PROBE_TOKENS }, candidate);
 			if (!r) continue;
@@ -229,6 +241,16 @@ function datasetRates(modelId: string): DatasetRates | null {
 			break;
 		} catch {
 			// Unknown id / malformed entry: try the next candidate.
+		}
+	}
+
+	if (!result) {
+		for (const candidate of candidates) {
+			const fallback = DATASET_FALLBACKS.get(candidate.replace(/-\d{4}-\d{2}-\d{2}$/, ""));
+			if (fallback) {
+				result = fallback;
+				break;
+			}
 		}
 	}
 
