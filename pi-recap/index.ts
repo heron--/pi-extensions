@@ -46,7 +46,6 @@ import {
 	normalizeRecapSettings,
 } from "./settings.ts";
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
 /**
@@ -89,14 +88,8 @@ const RECAP_MAX_TOKENS = 2_000;
 const RECAP_TIMEOUT_MS = 30_000;
 const GENERATION_LOCK_STALE_MS = RECAP_TIMEOUT_MS * 4;
 
-/** `PI_AGENT_DIR` when set, else pi's agent directory, which follows `PI_CODING_AGENT_DIR`. */
-function agentDirectory(): string {
-	const configured = process.env.PI_AGENT_DIR;
-	return configured ? configured.replace(/^~(?=$|\/)/, homedir()) : getAgentDir();
-}
-
 function configFile(): string {
-	return join(agentDirectory(), "pi-recap", "config.json");
+	return join(getAgentDir(), "pi-recap", "config.json");
 }
 
 /**
@@ -105,11 +98,11 @@ function configFile(): string {
  * machines, including through a symlink into a dotfiles checkout.
  */
 function rotationFile(): string {
-	return join(agentDirectory(), "pi-recap", "rotation.json");
+	return join(getAgentDir(), "pi-recap", "rotation.json");
 }
 
 function recapDataDirectory(): string {
-	return join(agentDirectory(), "pi-recap");
+	return join(getAgentDir(), "pi-recap");
 }
 
 function applyStoredConfig(stored: StoredRecapConfig, reset: boolean): void {
