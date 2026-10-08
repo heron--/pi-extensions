@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Container, HStack, ScrollView, TuiAltScreen, VStack, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
+import { Container, HStack, Markdown, ScrollView, TuiAltScreen, VStack, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import transcriptDigestExtension from "./index.ts";
 import { TranscriptDigestLayout, MIN_SPLIT_COLUMNS } from "./layout.ts";
 import { ConversationPane, conversationItem, conversationItems, formatElapsed } from "./messages.ts";
+
+initTheme("dark");
 
 const theme = {
 	fg(color, text) {
@@ -70,6 +73,95 @@ test("conversation shows user and agent text with summaries for hidden activity"
 	]);
 	entries.push(entry("4", streamed));
 	assert.equal(conversationItems(entries, streamed).length, 3, "the persisted live message appears once");
+});
+
+const markdownSample = [
+	"# Heading",
+	"",
+	"**bold** *italic* ~~removed~~ `inline` [Docs](https://example.com/docs)",
+	"",
+	"- first",
+	"- second",
+	"",
+	"> quoted",
+	"",
+	"```ts",
+	'const answer = "中文🙂 examplewithnobreaksinthemiddlebutplentyofletters";',
+	"```",
+	"",
+	"| Name | State |",
+	"| --- | --- |",
+	"| digest | ready |",
+].join("\n");
+
+test("user and agent bodies use Pi Markdown while labels and gutters stay separate", () => {
+	for (const message of [user(markdownSample), assistant([{ type: "text", text: markdownSample }])]) {
+		const pane = new ConversationPane(session([entry("1", { ...message, timestamp: undefined })]), theme);
+		for (const width of [18, 24, 40, 80]) {
+			const lines = pane.render(width);
+			const body = lines.slice(2);
+			const expected = new Markdown(markdownSample, 0, 0, getMarkdownTheme()).render(width - 4);
+			assert.deepEqual(body.map((row) => row.slice(2, -2)), expected, "Markdown receives only the body width");
+			assert(lines.every((row) => visibleWidth(row) === width));
+			assert(lines.every((row) => row.startsWith("  ") && row.endsWith("  ")), "painted gutters stay outside styled text");
+			assert.equal(stripTerminalSequences(lines[1]).trim(), message.role === "user" ? "User" : "Agent");
+		}
+		const body = pane.render(80).slice(2).join("\n");
+		const plain = stripTerminalSequences(body);
+		assert(plain.includes("Heading") && !plain.includes("# Heading"));
+		assert(plain.includes("bold italic removed inline Docs") && !plain.includes("**bold**"));
+		assert(body.includes(getMarkdownTheme().code("inline")), "inline code uses the active Markdown theme");
+		assert(plain.includes("│ quoted") && plain.includes("┌"), "quotes and tables are rendered");
+		assert(plain.includes("const answer") && plain.includes("中文🙂"), "code content survives rendering");
+	}
+});
+
+test("streamed Markdown reuses history and settles into persisted output without duplication", () => {
+	const entries = [entry("1", user("**history**"))];
+	const pane = new ConversationPane(session(entries), theme);
+	const render = Markdown.prototype.render;
+	let markdownRenders = 0;
+	Markdown.prototype.render = function (width) {
+		markdownRenders++;
+		return render.call(this, width);
+	};
+	try {
+		const history = [...pane.render(40)];
+		const live = assistant([]);
+		for (const text of ["**par", "**partial**", "**partial**\n\n```ts\nconst value = 1;", "**partial**\n\n```ts\nconst value = 1;\n```\n\nDone."]) {
+			live.content = [{ type: "text", text }];
+			pane.setLive(live);
+			const before = markdownRenders;
+			const rows = pane.render(40);
+			assert.deepEqual(rows.slice(0, history.length), history);
+			assert(rows.every((row) => visibleWidth(row) === 40));
+			assert.equal(markdownRenders, before + 1, "streaming renders only the live body");
+			assert.equal(pane.render(40), rows);
+			assert.equal(markdownRenders, before + 1, "unchanged frames reuse rendered Markdown");
+		}
+		const streamed = [...pane.render(40)];
+		entries.push(entry("2", live));
+		assert.deepEqual(pane.render(40), streamed);
+		pane.setLive(undefined);
+		assert.deepEqual(pane.render(40), streamed);
+		assert.equal(pane.render(40).filter((row) => stripTerminalSequences(row).includes("Done.")).length, 1);
+	} finally {
+		Markdown.prototype.render = render;
+	}
+});
+
+test("invalidating the pane refreshes Markdown colors from the active theme", () => {
+	const pane = new ConversationPane(session([entry("1", user(markdownSample))]), theme);
+	const dark = [...pane.render(60)];
+	try {
+		initTheme("light");
+		pane.invalidate();
+		const light = pane.render(60);
+		assert.notDeepEqual(light, dark);
+		assert.deepEqual(light.map(stripTerminalSequences), dark.map(stripTerminalSequences));
+	} finally {
+		initTheme("dark");
+	}
 });
 
 test("agent labels show stored models before timestamps in the agent color", () => {
