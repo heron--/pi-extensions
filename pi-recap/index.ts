@@ -1,5 +1,5 @@
 import type { Api, AssistantMessage, Model, UserMessage } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
@@ -89,11 +89,10 @@ const RECAP_MAX_TOKENS = 2_000;
 const RECAP_TIMEOUT_MS = 30_000;
 const GENERATION_LOCK_STALE_MS = RECAP_TIMEOUT_MS * 4;
 
+/** `PI_AGENT_DIR` when set, else pi's agent directory, which follows `PI_CODING_AGENT_DIR`. */
 function agentDirectory(): string {
 	const configured = process.env.PI_AGENT_DIR;
-	return configured
-		? configured.replace(/^~(?=$|\/)/, homedir())
-		: join(homedir(), ".pi", "agent");
+	return configured ? configured.replace(/^~(?=$|\/)/, homedir()) : getAgentDir();
 }
 
 function configFile(): string {

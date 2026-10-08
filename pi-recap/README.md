@@ -75,9 +75,9 @@ Each pi session has its own directory:
 └── recap-log-20260812T174011882Z.json
 ```
 
-`<agent dir>` is `~/.pi/agent` unless `PI_AGENT_DIR` overrides it. Recap keys are
-UTC timestamps in a filename-safe, lexically sortable form. Each log is named
-`recap-log-{key}.json`.
+`<agent dir>` is pi's agent directory (`~/.pi/agent`, or `$PI_CODING_AGENT_DIR`)
+unless `PI_AGENT_DIR` overrides it. Recap keys are UTC timestamps in a
+filename-safe, lexically sortable form. Each log is named `recap-log-{key}.json`.
 
 ### Manifest
 
