@@ -34,10 +34,13 @@ import {
 import {
 	DEFAULT_INTERVAL_MINUTES,
 	DEFAULT_MINIMUM_COMPLETED_INTERACTIONS,
+	DEFAULT_RECAP_STYLE,
 	MAX_COMPLETED_INTERACTIONS,
 	MAX_INTERVAL_MINUTES,
 	MIN_COMPLETED_INTERACTIONS,
 	MIN_INTERVAL_MINUTES,
+	RECAP_STYLES,
+	isRecapStyle,
 	isValidIntervalMinutes,
 	isValidMinimumCompletedInteractions,
 	normalizeRecapSettings,
@@ -56,7 +59,7 @@ const DEFAULT_MARKER_NEXT = "\uf10c";
 
 const config = {
 	markers: { recap: DEFAULT_MARKER_RECAP, next: DEFAULT_MARKER_NEXT },
-	style: "frame" as Style,
+	style: DEFAULT_RECAP_STYLE,
 	rotationIndex: 0,
 	intervalMinutes: DEFAULT_INTERVAL_MINUTES,
 	minimumCompletedInteractions: DEFAULT_MINIMUM_COMPLETED_INTERACTIONS,
@@ -86,10 +89,6 @@ const RECAP_MAX_TOKENS = 2_000;
 const RECAP_TIMEOUT_MS = 30_000;
 const GENERATION_LOCK_STALE_MS = RECAP_TIMEOUT_MS * 4;
 
-/** `frame` draws the box; `clean` sets the same content flush left. */
-type Style = "frame" | "clean";
-const STYLES = new Set<Style>(["frame", "clean"]);
-
 function agentDirectory(): string {
 	const configured = process.env.PI_AGENT_DIR;
 	return configured
@@ -118,14 +117,14 @@ function applyStoredConfig(stored: StoredRecapConfig, reset: boolean): void {
 	if (reset) {
 		config.markers.recap = DEFAULT_MARKER_RECAP;
 		config.markers.next = DEFAULT_MARKER_NEXT;
-		config.style = "frame";
+		config.style = DEFAULT_RECAP_STYLE;
 	}
 
 	const recap = stored.markers?.recap;
 	const next = stored.markers?.next;
 	if (typeof recap === "string" && recap) config.markers.recap = recap;
 	if (typeof next === "string" && next) config.markers.next = next;
-	if (typeof stored.style === "string" && STYLES.has(stored.style as Style)) config.style = stored.style as Style;
+	if (isRecapStyle(stored.style)) config.style = stored.style;
 	const settings = normalizeRecapSettings(stored);
 	config.intervalMinutes = settings.intervalMinutes;
 	config.minimumCompletedInteractions = settings.minimumCompletedInteractions;
@@ -1124,11 +1123,11 @@ export default function recapExtension(pi: ExtensionAPI): void {
 					ctx.ui.notify(`Recap style is ${config.style}`, "info");
 					return;
 				}
-				if (extra.length > 0 || !STYLES.has(value as Style)) {
-					ctx.ui.notify(`Style must be one of: ${[...STYLES].join(", ")}`, "warning");
+				if (extra.length > 0 || !isRecapStyle(value)) {
+					ctx.ui.notify(`Style must be one of: ${RECAP_STYLES.join(", ")}`, "warning");
 					return;
 				}
-				config.style = value as Style;
+				config.style = value;
 				const saved = saveConfig({ style: config.style });
 				ctx.ui.notify(
 					saved ? `Recap style set to ${config.style}, saved` : `Recap style set to ${config.style}, but could not be saved`,

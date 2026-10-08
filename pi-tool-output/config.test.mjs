@@ -3,7 +3,15 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { loadToolOutputConfig, normalizeKeyId, normalizeToolOutputConfig, saveToolOutputConfig } from "./config.ts";
+import {
+	BASH_OUTPUT_MODES,
+	DEFAULT_TOOL_OUTPUT_CONFIG,
+	OUTPUT_MODES,
+	loadToolOutputConfig,
+	normalizeKeyId,
+	normalizeToolOutputConfig,
+	saveToolOutputConfig,
+} from "./config.ts";
 
 test("expandLastKey accepts any pi key ID and rejects anything else", () => {
 	for (const [input, expected] of [
@@ -34,5 +42,20 @@ test("saveToolOutputConfig writes through a symlinked config file", () => {
 		assert.equal(loadToolOutputConfig(link).config.bashCollapsedLines, 3);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("the settings install.sh offers match the configuration defaults", () => {
+	const { settings } = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
+	for (const setting of settings) {
+		assert.equal(setting.default, DEFAULT_TOOL_OUTPUT_CONFIG[setting.key], setting.key);
+		if (setting.type === "choice") {
+			const modes = setting.key === "bashOutputMode" ? BASH_OUTPUT_MODES : OUTPUT_MODES;
+			assert.deepEqual(setting.choices, [...modes], setting.key);
+		}
+		if (setting.type === "integer") {
+			assert.equal(normalizeToolOutputConfig({ [setting.key]: setting.min - 1 })[setting.key], setting.min, setting.key);
+			assert.equal(normalizeToolOutputConfig({ [setting.key]: setting.max + 1 })[setting.key], setting.max, setting.key);
+		}
 	}
 });

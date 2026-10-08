@@ -14,8 +14,9 @@
 		"test:transcript-digest": "npm run sync-types && node --no-warnings --experimental-strip-types --import ./scripts/pi-test-loader.mjs --test pi-transcript-digest/*.test.mjs",
 		"profile:transcript-digest": "npm run sync-types && node --no-warnings --experimental-strip-types --import ./scripts/pi-test-loader.mjs pi-transcript-digest/profile.mjs",
 		"test:context-footer": "npm run sync-types && node --no-warnings --experimental-strip-types --import ./scripts/pi-test-loader.mjs --test pi-context-footer/*.test.mjs",
+		"test:install": "node --test scripts/install/*.test.mjs",
 		"test:write-lock": "npm run sync-types && node --no-warnings --experimental-strip-types --import ./scripts/pi-test-loader.mjs --test pi-write-lock/*.test.mjs",
-		"check": "npm run typecheck && npm run test:tool-output && npm run test:context-footer && npm run test:write-lock && npm run test:pricing && npm run test:recap && npm run test:transcript-digest",
+		"check": "npm run typecheck && npm run test:tool-output && npm run test:context-footer && npm run test:write-lock && npm run test:pricing && npm run test:recap && npm run test:transcript-digest && npm run test:install",
 		"watch": "npm run sync-types && tsc -p tsconfig.json --watch --preserveWatchOutput",
 		"postinstall": "node scripts/sync-pi-types.mjs || true"
 	},

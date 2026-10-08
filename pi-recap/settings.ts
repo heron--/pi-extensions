@@ -1,3 +1,12 @@
+/** `frame` draws the box; `clean` sets the same content flush left. */
+export const RECAP_STYLES = ["frame", "clean"] as const;
+export type RecapStyle = (typeof RECAP_STYLES)[number];
+export const DEFAULT_RECAP_STYLE: RecapStyle = "frame";
+
+export function isRecapStyle(value: unknown): value is RecapStyle {
+	return typeof value === "string" && (RECAP_STYLES as readonly string[]).includes(value);
+}
+
 export const DEFAULT_INTERVAL_MINUTES = 5;
 export const MIN_INTERVAL_MINUTES = 0.05;
 export const MAX_INTERVAL_MINUTES = 240;

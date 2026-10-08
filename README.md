@@ -55,6 +55,28 @@ Certainly some extensions had more intellectual engagement from me than others.
   read-only mode that removes write tools, injects a read-only instruction, and
   blocks common mutating shell commands while the lock is on.
 
+## Install
+
+These extensions are not published to npm. Clone the repository and run its
+installer:
+
+```
+git clone https://github.com/heron--/pi-extensions.git
+cd pi-extensions
+./install.sh
+```
+
+`install.sh` asks which extensions to link into pi's extension directory,
+`~/.pi/agent/extensions` (or `$PI_CODING_AGENT_DIR/extensions`). It then offers
+to customize each linked extension's main settings; the extension's README
+describes the rest. Links rather than copies mean `git pull` updates the
+extensions; run `/reload` in pi afterwards.
+
+Run the installer again at any time to change the selection. It starts from
+what is already linked and offers to remove the links of extensions you
+deselect. It never replaces a real file or directory, and it only removes links
+that point into this checkout.
+
 ## Typechecking
 
 ```
@@ -97,7 +119,10 @@ pi-extensions/
 ├── package.json           # typescript (dev) + shared runtime deps
 ├── tsconfig.json          # shared strict config, globs all extensions
 ├── tsconfig.paths.json    # GENERATED, gitignored
+├── install.sh             # the installer for people who clone the repo
 ├── scripts/
+│   ├── install.mjs        # what install.sh runs
+│   ├── install/           # its modules and tests (npm run test:install)
 │   ├── sync-pi-types.mjs
 │   ├── link-extensions.mjs
 │   └── hooks/
@@ -377,3 +402,7 @@ copy changes only when a setting does.
    key (copy `pi-model-picker/package.json` as a starting point).
 2. `npm run typecheck` — no config change needed.
 3. Test it: `pi -e ./pi-my-thing/index.ts`
+4. If it has settings that one answer can set, declare them under `settings` in
+   its `package.json` so `install.sh` offers them
+   (`scripts/install/settings.mjs` describes the format), and test that each
+   declared default matches the code's.

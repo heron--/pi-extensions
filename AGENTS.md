@@ -46,6 +46,11 @@ code lives in `lib/` and is linked beside the extensions. `lib/` must never
 contain an `index.ts`, or pi will load it as an extension. A broken link can
 fail silently, so verify a new extension from a directory outside this repo.
 
+`install.sh` is how someone who clones the repo installs it: it links only the
+extensions they choose, into the global directory, and offers the settings each
+one declares under `settings` in its `package.json`. A declared default must
+match the code's default, and the extension's tests check that.
+
 ## Changing pi's behaviour
 
 Prefer pi's public extension API. When an extension has to wrap or patch

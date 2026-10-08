@@ -3,7 +3,15 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { DEFAULT_LAYOUT, DEFAULT_LAYOUT_CONFIG, parseHostnameSettings, parseLayout, readFooterConfig } from "./config.ts";
+import { loadThinkingAnimatePreference } from "../lib/thinking-colors.ts";
+import {
+	DEFAULT_HOSTNAME_SETTINGS,
+	DEFAULT_LAYOUT,
+	DEFAULT_LAYOUT_CONFIG,
+	parseHostnameSettings,
+	parseLayout,
+	readFooterConfig,
+} from "./config.ts";
 
 const examples = new URL("./examples/", import.meta.url);
 const example = (name) => JSON.parse(readFileSync(new URL(name, examples), "utf8"));
@@ -140,5 +148,20 @@ test("readFooterConfig: missing, malformed and partial files", () => {
 		assert.equal(load.problems.length, 1);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("the settings install.sh offers match the defaults without a config file", () => {
+	const { settings } = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
+	const agentDir = mkdtempSync(join(tmpdir(), "pi-context-footer-agent-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	try {
+		const defaults = { animate: loadThinkingAnimatePreference(), "hostname.show": DEFAULT_HOSTNAME_SETTINGS.show };
+		assert.deepEqual(Object.fromEntries(settings.map((setting) => [setting.key, setting.default])), defaults);
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(agentDir, { recursive: true, force: true });
 	}
 });

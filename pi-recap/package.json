@@ -10,6 +10,11 @@
       "./index.ts"
     ]
   },
+  "settings": [
+    { "key": "style", "prompt": "Recap style", "type": "choice", "choices": ["frame", "clean"], "default": "frame" },
+    { "key": "intervalMinutes", "prompt": "Minutes between recap checks", "type": "number", "min": 0.05, "max": 240, "default": 5 },
+    { "key": "minimumCompletedInteractions", "prompt": "Interactions needed for a recap", "type": "integer", "min": 1, "max": 1000, "default": 5 }
+  ],
   "keywords": [
     "pi",
     "pi-package",

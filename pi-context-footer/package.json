@@ -10,6 +10,10 @@
       "./index.ts"
     ]
   },
+  "settings": [
+    { "key": "animate", "prompt": "Animate the gloss on the max thinking level", "type": "boolean", "default": true },
+    { "key": "hostname.show", "prompt": "Show the hostname in the frame", "type": "boolean", "default": false }
+  ],
   "keywords": [
     "pi",
     "pi-package",
