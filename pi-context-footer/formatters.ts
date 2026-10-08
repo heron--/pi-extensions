@@ -1,5 +1,6 @@
 /** Owner-supplied, synchronous status display functions, loaded outside render. */
 
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -9,6 +10,9 @@ export type StatusFormatter = (text: string) => string | null | undefined;
 export type StatusFormatters = ReadonlyMap<string, StatusFormatter>;
 
 let revision = 0;
+// Pi's TypeScript loader rewrites import(). Keep the native importer in a
+// Node-loaded module so URL queries retain their cache-busting semantics.
+const importModule = createRequire(import.meta.url)("./import-module.cjs") as (url: string) => Promise<{ default: unknown }>;
 
 /** Paths are relative to config.json; absolute paths and ~/ are also accepted. */
 export async function loadStatusFormatters(path: string | null, configFile: string): Promise<StatusFormatters> {
@@ -17,7 +21,7 @@ export async function loadStatusFormatters(path: string | null, configFile: stri
 	const url = pathToFileURL(resolve(dirname(configFile), expanded));
 	// Each explicit reload evaluates the entry module again, even at the same path.
 	url.searchParams.set("revision", `${Date.now()}-${++revision}`);
-	const { default: exported } = await import(url.href);
+	const { default: exported } = await importModule(url.href);
 	if (!exported || typeof exported !== "object" || Array.isArray(exported)) {
 		throw new Error("statusFormatters module must default-export an object of functions");
 	}
