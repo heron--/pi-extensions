@@ -53,6 +53,36 @@ and clear it with `setStatus(key, undefined)` when there is nothing to show.
 By default the footer repaints it in one theme color; the user can keep your
 colors instead.
 
+### Custom status formatters
+
+`statusFormatters` names a trusted JavaScript module outside the extension.
+Relative paths resolve beside `config.json`; absolute paths and `~/` work too:
+
+```json
+{ "statusFormatters": "./status-formatters.mjs" }
+```
+
+The module default-exports an object keyed by exact status name:
+
+```js
+export default {
+  "example-work": (text) => text === "work ready" ? "ready" : undefined,
+};
+```
+
+Functions receive sanitized status text and run synchronously when that status
+is drawn, including in `remainingStatuses`. Return a string to replace it,
+`""` to hide it, or `null`/`undefined` to keep it unchanged. Thrown errors and
+invalid return values also keep the original. Output is sanitized again before
+the layout's existing color and width settings apply; published statuses and
+other consumers are untouched.
+
+The module loads at startup and is re-evaluated by `/context-footer reload`.
+An invalid module warns once per load; reload keeps the last valid formatters.
+Omit the setting or set it to `null` to disable formatting. These modules run
+with Pi's permissions: load only trusted code and keep callbacks fast and
+side-effect-free.
+
 ## Padding
 
 A column of air sits between each rail and the input, and by default a blank
@@ -269,7 +299,7 @@ discovery directory.
 /context-footer            toggle the decoration
 /context-footer on         enable it
 /context-footer off        disable it
-/context-footer reload     re-read config.json (layout, hostname, animation)
+/context-footer reload     re-read config.json and the status formatter module
 /context-footer pad none   set the padding (see above)
 /context-footer animate [on|off]   report or toggle the traveling gloss
 /context-footer host [on|off]      report the hostname state, or set its switch
