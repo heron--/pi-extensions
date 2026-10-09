@@ -131,3 +131,20 @@ test("writeConfig updates a symlinked file at its target and leaves a broken fil
 	assert.match(writeConfig(link, [["hostname.show", true]]).error, /"hostname" is not an object/);
 	assert.deepEqual(JSON.parse(readFileSync(shared, "utf8")), { hostname: "laptop" });
 });
+
+test("a link to a missing config file is refused, before any question and on save", (t) => {
+	const root = scratch(t);
+	const link = join(root, "agent", "pi-recap", "config.json");
+	mkdirSync(join(root, "agent", "pi-recap"), { recursive: true });
+	symlinkSync(join(root, "dotfiles", "config.json"), link);
+	assert.match(readConfig(link).error, /link to a missing file/);
+	assert.match(writeConfig(link, [["style", "clean"]]).error, /link to a missing file/);
+	assert.ok(lstatSync(link).isSymbolicLink());
+	assert.throws(() => lstatSync(join(root, "dotfiles", "config.json")), /ENOENT/);
+});
+
+test("a config directory that cannot be created is reported, not thrown", (t) => {
+	const root = scratch(t);
+	writeFileSync(join(root, "pi-recap"), "a file where the directory belongs");
+	assert.match(writeConfig(join(root, "pi-recap", "config.json"), [["style", "clean"]]).error, /^Could not write/);
+});

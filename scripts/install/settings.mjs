@@ -19,7 +19,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export const SETTING_TYPES = ["boolean", "choice", "number", "integer", "string"];
@@ -166,13 +166,22 @@ export function configPath(agentDir, extensionName) {
 	return join(agentDir, extensionName, "config.json");
 }
 
+function isSymlink(path) {
+	try {
+		return lstatSync(path).isSymbolicLink();
+	} catch {
+		return false;
+	}
+}
+
 /**
- * Read a config file. A missing file is an empty config; one that does not
+ * Read a config file. A missing file is an empty config. One that does not
  * parse to an object is an error, so a hand edit in progress is never
- * overwritten.
+ * overwritten, and so is a link to a missing file, so a shared config's link
+ * is never replaced by a local copy.
  */
 export function readConfig(path) {
-	if (!existsSync(path)) return { config: {} };
+	if (!existsSync(path)) return isSymlink(path) ? { error: "is a link to a missing file" } : { config: {} };
 	let parsed;
 	try {
 		parsed = JSON.parse(readFileSync(path, "utf8"));
@@ -195,16 +204,17 @@ export function writeConfig(path, changes) {
 	} catch (error) {
 		return { error: `${path}: ${error.message}` };
 	}
-	mkdirSync(dirname(path), { recursive: true });
-	const target = existsSync(path) ? realpathSync(path) : path;
-	const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
+	let temporary;
 	try {
+		mkdirSync(dirname(path), { recursive: true });
+		const target = existsSync(path) ? realpathSync(path) : path;
+		temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
 		writeFileSync(temporary, `${JSON.stringify(read.config, null, 2)}\n`, "utf8");
 		renameSync(temporary, target);
 		return {};
 	} catch (error) {
 		return { error: `Could not write ${path}: ${error.message}` };
 	} finally {
-		rmSync(temporary, { force: true });
+		if (temporary) rmSync(temporary, { force: true });
 	}
 }
