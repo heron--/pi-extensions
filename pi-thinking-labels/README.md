@@ -26,9 +26,10 @@ Thinking: first, restate the constraint…
 - **Sanitization is unconditional.** The toggle only governs whether new
   labels are painted; the `context` cleanup strips stored labels (ours or
   upstream's) before every LLM call even when the extension is off.
-- **Idempotent under a double pass.** It replaces `pi-tool-display`'s
-  always-on labelling (part 02 of retiring it); while both run, the artifact
-  stripper removes whichever label landed first, so exactly one shows.
+- **Idempotent under a double pass.** With another extension that labels
+  thinking blocks too (`pi-tool-display` always does), the artifact stripper
+  removes whichever label landed first, so exactly one shows: the label of
+  whichever extension runs last.
 
 ## Usage
 

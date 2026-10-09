@@ -50,7 +50,10 @@ import { toolCallBox, toolResultBox } from "./tool-box.ts";
 import { callArgumentsComponent } from "./call-rendering.ts";
 import { codemodeCallsComponent, codemodeFullOutputNotice, codemodeOutput } from "./codemode.ts";
 import { rowCappedPreview, type RowCapState } from "./preview.ts";
-import { renderGroup, resolveGroup, type GroupMember } from "./group.ts";
+import { fileChanges, renderGroup, resolveGroup, type GroupMember } from "./group.ts";
+import { diffViewOptions, type DiffViewOptions } from "./diff.ts";
+import { readBeforeWrite, writeDetails } from "./file-changes.ts";
+import { fileCallComponent } from "./file-view.ts";
 
 type ResultLike = AgentToolResult<unknown>;
 type DecoratedProperty = "renderCall" | "renderResult" | "renderShell";
@@ -67,6 +70,7 @@ interface ToolRenderContextLike {
 	args: Record<string, unknown>;
 	isError: boolean;
 	state: Record<string, unknown>;
+	cwd?: string;
 }
 
 interface StoredDescriptors {
@@ -640,6 +644,7 @@ function patchToolExecutionRendering(getConfig: () => ToolOutputConfig): void {
 			theme: groupTheme,
 			lastMember: lastMember?.deref(),
 			expandLastKey: config.expandLastKey,
+			diff: diffOptions(config),
 		});
 		groupRowOwners.set(this, group.owners);
 		return group.lines;
@@ -819,24 +824,83 @@ function registerBuiltinOverrides(pi: ExtensionAPI, config: ToolOutputConfig): v
 		});
 	}
 
-	// Opt-in escape hatch: use Pi's built-in diff renderers until a richer
-	// replacement is sourced. These remain false in the default config.
 	if (config.registerToolOverrides.edit) {
 		pi.registerTool({
 			...bootstrap.edit,
+			renderShell: "self",
 			async execute(id, params, signal, onUpdate, ctx) {
 				return getBuiltinTools(ctx.cwd, ctx.isProjectTrusted()).edit.execute(id, params, signal, onUpdate, ctx);
+			},
+			renderCall(args, theme, context) {
+				return adapterCall({ name: "edit" }, args, theme, context);
+			},
+			renderResult(result, options, theme, context) {
+				return toolResultBox(fileResult("edit", result, options, theme, context, config), theme, context);
 			},
 		});
 	}
 	if (config.registerToolOverrides.write) {
 		pi.registerTool({
 			...bootstrap.write,
+			renderShell: "self",
+			// The file as it was is gone once the write lands, so read it first and
+			// record the change in the result, where it survives a reload.
 			async execute(id, params, signal, onUpdate, ctx) {
-				return getBuiltinTools(ctx.cwd, ctx.isProjectTrusted()).write.execute(id, params, signal, onUpdate, ctx);
+				const before = readBeforeWrite(params.path, ctx.cwd);
+				const result = await getBuiltinTools(ctx.cwd, ctx.isProjectTrusted()).write.execute(id, params, signal, onUpdate, ctx);
+				return { ...result, details: writeDetails(before, params.content) };
+			},
+			renderCall(args, theme, context) {
+				return adapterCall({ name: "write" }, args, theme, context);
+			},
+			renderResult(result, options, theme, context) {
+				return toolResultBox(fileResult("write", result, options, theme, context, config), theme, context);
 			},
 		});
 	}
+}
+
+const diffOptionsCache = new WeakMap<ToolOutputConfig, DiffViewOptions>();
+
+/** One options object per configuration, so caches keyed on it hold across frames. */
+function diffOptions(config: ToolOutputConfig): DiffViewOptions {
+	let options = diffOptionsCache.get(config);
+	if (!options) diffOptionsCache.set(config, (options = diffViewOptions(config)));
+	return options;
+}
+
+/**
+ * An edit's or write's own result view, outside a group: the change counts
+ * while collapsed, the diff view expanded, and the error when it failed.
+ */
+function fileResult(
+	toolName: "edit" | "write",
+	result: ResultLike,
+	options: ToolRenderResultOptions,
+	theme: Theme,
+	context: ToolRenderContextLike,
+	config: ToolOutputConfig,
+): Component {
+	const failed = isErrorResult(result, context);
+	if (options.expanded || failed) {
+		const view = fileCallComponent(
+			{
+				toolName,
+				args: context.args,
+				result: { ...result, isError: failed },
+				isPartial: options.isPartial === true,
+				argsComplete: true,
+				cwd: context.cwd ?? process.cwd(),
+			},
+			theme,
+			diffOptions(config),
+		);
+		if (view) return view;
+	}
+	const changes = fileChanges({ toolName, args: context.args, result });
+	if (!changes || options.isPartial) return renderModeContent(result, options, theme, context, config, "summary", (lines) => `↳ ${lines[0] ?? "done"}`);
+	const color = TOOL_OUTPUT_COLORS.result.summary;
+	return textResult(paint(theme, color, `↳ +${changes.added} -${changes.removed} · ${keyHint("app.tools.expand", "to expand")}`));
 }
 
 function configSummary(config: ToolOutputConfig): string {

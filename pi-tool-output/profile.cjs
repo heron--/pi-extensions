@@ -2,15 +2,19 @@
 // transcript contents. Prints one JSON record: the first frame after every call
 // expands (what Ctrl+O costs) and the mean of later, unchanged frames.
 //
-// npm run profile:tool-output -- <groups> <toolsPerGroup> <outputLines> <frames> <width>
+// npm run profile:tool-output -- <groups> <toolsPerGroup> <outputLines> <frames> <width> [<editDiffLines>]
 // npm run profile:tool-output -- 20 4 200 30 120
+//
+// <editDiffLines>, when given, adds one edit per group whose diff has that
+// many changed lines, half removed and half added, between context lines.
 //
 // Run several times and compare medians. Baseline at 20 4 200 30 120 (80
 // calls, ~17k rows, all expanded): ~1 ms per unchanged frame, ~165 ms for the
 // first frame after expand-all. Without the group render's caches it was ~1 s
-// per frame.
+// per frame. At 20 4 200 30 120 400 (another 20 edits, ~29k rows): ~2 ms per
+// unchanged frame, ~740 ms for the first.
 const path=require("node:path");const fs=require("node:fs");const os=require("node:os");const {createRequire}=require("node:module");
-const [G="20", T="4", L="200", F="30", W="120"] = process.argv.slice(2);
+const [G="20", T="4", L="200", F="30", W="120", E="0"] = process.argv.slice(2);
 const agent=fs.mkdtempSync(path.join(os.tmpdir(),"pi-tool-output-profile-"));process.env.PI_CODING_AGENT_DIR=agent;
 (async()=>{
 const paths=JSON.parse(fs.readFileSync("tsconfig.paths.json","utf8")).compilerOptions.paths;
@@ -32,6 +36,12 @@ for(let g=0;g<+G;g++){
     const args=name==="bash"?{command:"python3 - <<'PY'\n"+"print(1)\n".repeat(30)+"PY",timeout:90}:name==="read"?{path:`f${g}.ts`}:name==="grep"?{pattern:"x",path:"src"}:{path:"."};
     const c=new ca.ToolExecutionComponent(name,`${g}-${t}`,args,{showImages:false},tools.get(name),ui,process.cwd());
     chat.addChild(c);c.setArgsComplete();c.markExecutionStarted();c.updateResult({content:[{type:"text",text:out}],details:{}});comps.push(c);
+  }
+  if(+E>0){
+    const half=Math.floor(+E/2),diff=[];
+    for(let i=0;i<half;i++)diff.push(` ${3*i+1} const keep${i} = ${i};`,`-${3*i+2} const value${i} = compute(${i}, "old");`,`+${3*i+2} const value${i} = compute(${i}, "new", options);`);
+    const c=new ca.ToolExecutionComponent("edit",`${g}-edit`,{path:`f${g}.ts`,edits:[{oldText:"a",newText:"b"}]},{showImages:false},tools.get("edit"),ui,process.cwd());
+    chat.addChild(c);c.setArgsComplete();c.markExecutionStarted();c.updateResult({content:[{type:"text",text:"Successfully replaced 1 block(s)."}],details:{diff:diff.join("\n")}});comps.push(c);
   }
 }
 const w=+W;

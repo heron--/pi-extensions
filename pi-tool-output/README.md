@@ -20,8 +20,8 @@ first row is a Nerd Font icon, its display name, the tool's own summary (see
 [Call summaries](#call-summaries)), and the size of its output instead of the
 output itself. A call with an input — a script, a file body, a prompt: its
 largest multi-line or long string argument — measures that first, before a
-` · `. An edit shows its changed lines instead, `+added -removed` in the
-theme's diff colors:
+` · `. An edit, and a write once it has run, shows its changed lines
+instead, `+added -removed` in the theme's diff colors:
 
 ```text
 ╭  Ran 4 tools ──────────────────────────────────────────────────────────╮
@@ -41,10 +41,8 @@ size uses the argument descriptors' measure/unit tints; the output size is
 muted. Icons come from `TOOL_ICONS` in `rendering.ts`; tools without one get
 the wrench. Expanding a call shows the arguments its row does not (`timeout:
 120`, MCP's `args:`), then its input in full (the script or prompt the row
-only measures), a blank row, and its output. An expanded edit or write keeps
-the view of whichever extension draws it (`pi-tool-display`'s diff view, see
-below); with pi's own renderer, an edit shows its diff and a write does not
-repeat the file it wrote.
+only measures), a blank row, and its output. An expanded edit or write shows
+its diff instead (see [Edits and writes](#edits-and-writes)).
 
 Sizes count raw output lines and bytes, not wrapped rows. Any assistant text or
 thinking between two calls starts a new box; an empty tool-only assistant turn
@@ -287,10 +285,52 @@ them and what recognizes them, so a literal value that merely looks like one (a
 span kinds to colors. Spans always rebuild the original string exactly, which
 `arguments.test.mjs` asserts.
 
-The richer `edit`/`write` diff renderer is deliberately not reimplemented here.
-Their ownership flags default to `false`, leaving those tools to
-`pi-tool-display` until a separate diff renderer is sourced. Setting either flag
-to `true` opts into Pi's built-in renderer as an escape hatch.
+### Edits and writes
+
+An expanded edit or write shows its diff, laid out for the width it has:
+
+- **Side by side** (`split`) once the diff has `diffSplitMinWidth` columns
+  (120 by default): old lines on the left and new on the right, each side
+  numbered, every removed line facing the line that replaced it.
+- **One column** (`unified`) below that: each line numbered where it lives, the
+  removed lines before the lines that replace them.
+- Without line numbers below 18 columns, and as bare `+added -removed` below 8.
+
+```text
+  old                                │   new
+▌   1 │ function greet(name) {       │ ▌   1 │ function greet(name, mark) {
+    2 │   return "hi " + name;       │     2 │   return "hi " + name;
+      │                              │ ▌   3 │   // the mark goes last
+```
+
+`diffViewMode` pins a layout; `split` still falls back to one column where two
+do not fit. Code takes its file's syntax colors. Changed rows are tinted with
+the theme's diff colors over the box's ground, and where a removed line faces
+its replacement, the words that changed are tinted more strongly (`DIFF_TINTS`
+in `colors.ts`). `diffIndicatorMode` picks what else marks a changed line: a
+bar in the gutter (`bars`), a `+`/`-` sign (`classic`), or nothing (`none`).
+Long lines wrap at word boundaries, or are cut with an ellipsis when
+`diffWordWrap` is off. A diff longer than `expandedPreviewMaxLines` rows is
+capped with a notice.
+
+While a call is pending, its change is previewed against the file as it is
+now. A `pending edit` applies the edits by pi's own rules (each `oldText`
+matches exactly one place, and none overlap); a write previews as `pending
+create` or `pending overwrite`. A preview that cannot be worked out says why
+instead. Previews read only files inside the working directory, and only up to
+1 MB.
+
+Once the call has run, the diff comes from its result. Pi's edit tool records
+its own. This extension's write reads the file before replacing it and records
+the change, so a reloaded session still shows what an overwrite replaced; a new
+file's contents are the call's own arguments, so it records nothing more. A
+failed call shows its error.
+
+This applies while this extension draws `edit` and `write`
+(`registerToolOverrides`, on by default). With either turned off, pi's own tool
+runs in its place: an edit still shows its diff here, and a write shows its
+result. When another extension draws them, an expanded call keeps that
+extension's view.
 
 ## Usage
 
@@ -314,8 +354,8 @@ Missing values use these defaults:
     "find": true,
     "ls": true,
     "bash": true,
-    "edit": false,
-    "write": false
+    "edit": true,
+    "write": true
   },
   "customToolOverrides": {},
   "readOutputMode": "preview",
@@ -324,7 +364,11 @@ Missing values use these defaults:
   "previewLines": 8,
   "expandedPreviewMaxLines": 4000,
   "bashOutputMode": "opencode",
-  "bashCollapsedLines": 10
+  "bashCollapsedLines": 10,
+  "diffViewMode": "auto",
+  "diffIndicatorMode": "bars",
+  "diffSplitMinWidth": 120,
+  "diffWordWrap": true
 }
 ```
 
@@ -336,31 +380,17 @@ the old one-box-per-call layout and no longer change anything.
 `readOutputMode`, `searchOutputMode`, and `mcpOutputMode` accept `hidden`,
 `summary`, or `preview`. `bashOutputMode` accepts `opencode`, `summary`, or
 `preview`. Expanded output remains available in `summary` and `preview` modes;
-`hidden` intentionally suppresses it. Ownership and mode edits take effect
-after `/reload`.
+`hidden` intentionally suppresses it. `diffViewMode` accepts `auto`, `split`,
+or `unified`, `diffIndicatorMode` accepts `bars`, `classic`, or `none`, and
+`diffSplitMinWidth` is at least 51, the narrowest that fits two columns.
+Ownership, mode, and diff edits take effect after `/reload`.
 
-### Coexisting with `pi-tool-display`
+### With another tool renderer installed
 
-Pi rejects duplicate tool names, so the old renderer must release the five tools
-this extension owns while it remains installed. Its
-`<agent-dir>/extensions/pi-tool-display/config.json` should contain:
-
-```json
-{
-  "registerToolOverrides": {
-    "read": false,
-    "grep": false,
-    "find": false,
-    "ls": false,
-    "bash": false,
-    "edit": true,
-    "write": true
-  }
-}
-```
-
-That is the current local migration state: `pi-tool-output` owns compact and
-hidden rows; `pi-tool-display` owns only the unsourced diff renderers.
+Pi rejects two tools of the same name. Another extension that overrides the
+built-in tools, such as `pi-tool-display`, must leave the ones this extension
+draws (every built-in, by default) to it, or this extension's
+`registerToolOverrides` must leave them to the other.
 
 ## Decorator API
 
@@ -441,11 +471,15 @@ PATH and Python's `pyte` installed:
 ```bash
 python3 pi-tool-output/tui.test.py
 python3 pi-tool-output/group.tui.test.py
+python3 pi-tool-output/diff.tui.test.py
 ```
 
 `group.tui.test.py` checks the grouped layout at 100, 60, and 40 columns:
 one box per run, size lines in place of output, the hint under only the most
 recent call, Alt+O, a real SGR mouse click on a row, and a Ctrl+O round trip.
+`diff.tui.test.py` checks an edit, a created file, and an overwrite at 80, 130,
+and 170 columns: one column below the split width and side by side above it,
+removed lines facing their replacements, and the row and word tints.
 
 The PTY check uses scratch settings, inert tool definitions, Pi's built-in
 codemode definition, and synthetic sessions (no model calls), presses Ctrl+O,
@@ -461,8 +495,8 @@ shows a long enough tool result to exercise Ctrl+O:
 node scripts/preview-extensions.mjs
 ```
 
-For a minimal tool-output-only session, disable ambient extensions so
-`pi-tool-display` cannot claim the same built-ins:
+For a minimal tool-output-only session, disable ambient extensions so no other
+extension claims the same built-ins:
 
 ```bash
 pi --no-extensions -e ./pi-tool-output/index.ts

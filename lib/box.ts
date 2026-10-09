@@ -217,6 +217,43 @@ export function labelRuleRow(opts: {
  * background alone (groundRow at the caller re-asserts it after full resets,
  * including the ellipsis cut's).
  */
+/**
+ * Characters `rowWidth` measures itself, one column each: the box-drawing and
+ * block elements house boxes are drawn with, `·`, `…`, and `⋯`. box.test.mjs
+ * checks every one against pi-tui's own measure.
+ */
+export function measuredDirectly(code: number): boolean {
+	return (code >= 0x20 && code <= 0x7e) || (code >= 0x2500 && code <= 0x259f) || code === 0xb7 || code === 0x2026 || code === 0x22ef;
+}
+
+const SGR_AT = /\x1b\[[0-9;:]*m/y;
+
+/**
+ * A row's visible width. pi-tui's `visibleWidth` sends any row with a
+ * non-ASCII character through grapheme segmentation, and nearly every house
+ * box row has a rail or a rule in it, which made measuring most of the cost
+ * of drawing a large box. Rows of printable ASCII, SGR sequences, and the
+ * characters `measuredDirectly` names are counted here; anything else is
+ * left to `visibleWidth`.
+ */
+export function rowWidth(row: string): number {
+	let width = 0;
+	for (let index = 0; index < row.length; index++) {
+		const code = row.charCodeAt(index);
+		if (code === 0x1b) {
+			SGR_AT.lastIndex = index;
+			const sequence = SGR_AT.exec(row);
+			if (!sequence) return visibleWidth(row);
+			index += sequence[0].length - 1;
+		} else if (measuredDirectly(code)) {
+			width++;
+		} else {
+			return visibleWidth(row);
+		}
+	}
+	return width;
+}
+
 export function railRow(opts: {
 	line: string;
 	paint: BoxPaint;
@@ -229,7 +266,7 @@ export function railRow(opts: {
 }): string {
 	const { line, paint, padX = 1, padTo, bg } = opts;
 	const pad = " ".repeat(padX);
-	const width = visibleWidth(line);
+	const width = rowWidth(line);
 	const content = width > padTo ? truncateToWidth(line, padTo, "…") : line + " ".repeat(padTo - width);
 	const row = `${paint(RAIL)}${pad}${content}${pad}${paint(RAIL)}`;
 	return bg ? bg(row) : row;

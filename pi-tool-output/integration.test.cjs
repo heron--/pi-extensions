@@ -106,7 +106,7 @@ void (async () => {
 	};
 
 	factory(pi);
-	assert.deepEqual([...tools.keys()].sort(), ["bash", "find", "grep", "ls", "read"]);
+	assert.deepEqual([...tools.keys()].sort(), ["bash", "edit", "find", "grep", "ls", "read", "write"]);
 	assert.ok(commands.has("tool-output"));
 	for (const tool of tools.values()) assert.equal(tool.renderShell, "self");
 
@@ -612,6 +612,24 @@ void (async () => {
 	);
 	assert.equal(untrustedExecution.content.find((block) => block.type === "text")?.text, "<>");
 	assert.equal(typeof tools.get("bash").promptSnippet, "string");
+
+	// A write records what it replaced; an edit passes pi's own diff through.
+	const write = (id, content) => tools.get("write").execute(id, { path: "notes.md", content }, undefined, undefined, executionContext);
+	const created = await write("write-create", "one\ntwo\n");
+	assert.deepEqual(created.details, { created: true });
+	assert.equal(readFileSync(path.join(projectDir, "notes.md"), "utf8"), "one\ntwo\n");
+	const overwrote = await write("write-overwrite", "one\nTWO\n");
+	assert.equal(overwrote.details.created, false);
+	assert.match(overwrote.details.diff, /^-2 two\n\+2 TWO$/m);
+	assert.match(overwrote.content[0].text, /Successfully wrote/, "the model still sees pi's own result");
+	const edited = await tools.get("edit").execute(
+		"edit-test",
+		{ path: "notes.md", edits: [{ oldText: "TWO", newText: "2" }] },
+		undefined,
+		undefined,
+		executionContext,
+	);
+	assert.match(edited.details.diff, /^-2 TWO\n\+2 2$/m);
 	assert.ok(Array.isArray(tools.get("bash").promptGuidelines));
 
 	const apiKey = Symbol.for("pi-tool-output.api.v1");
