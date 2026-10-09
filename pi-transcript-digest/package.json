@@ -2,7 +2,7 @@
   "name": "pi-transcript-digest",
   "version": "0.1.0",
   "private": true,
-  "description": "Experimental split fullscreen transcript with a scrollable conversation pane.",
+  "description": "Adds an easy-to-scan digest pane next to your agent transcript.",
   "type": "module",
   "main": "index.ts",
   "pi": {

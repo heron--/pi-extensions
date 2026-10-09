@@ -1,5 +1,5 @@
 import type { Api, AssistantMessage, Model, UserMessage } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
@@ -34,16 +34,18 @@ import {
 import {
 	DEFAULT_INTERVAL_MINUTES,
 	DEFAULT_MINIMUM_COMPLETED_INTERACTIONS,
+	DEFAULT_RECAP_STYLE,
 	MAX_COMPLETED_INTERACTIONS,
 	MAX_INTERVAL_MINUTES,
 	MIN_COMPLETED_INTERACTIONS,
 	MIN_INTERVAL_MINUTES,
+	RECAP_STYLES,
+	isRecapStyle,
 	isValidIntervalMinutes,
 	isValidMinimumCompletedInteractions,
 	normalizeRecapSettings,
 } from "./settings.ts";
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
 /**
@@ -56,7 +58,7 @@ const DEFAULT_MARKER_NEXT = "\uf10c";
 
 const config = {
 	markers: { recap: DEFAULT_MARKER_RECAP, next: DEFAULT_MARKER_NEXT },
-	style: "frame" as Style,
+	style: DEFAULT_RECAP_STYLE,
 	rotationIndex: 0,
 	intervalMinutes: DEFAULT_INTERVAL_MINUTES,
 	minimumCompletedInteractions: DEFAULT_MINIMUM_COMPLETED_INTERACTIONS,
@@ -86,19 +88,8 @@ const RECAP_MAX_TOKENS = 2_000;
 const RECAP_TIMEOUT_MS = 30_000;
 const GENERATION_LOCK_STALE_MS = RECAP_TIMEOUT_MS * 4;
 
-/** `frame` draws the box; `clean` sets the same content flush left. */
-type Style = "frame" | "clean";
-const STYLES = new Set<Style>(["frame", "clean"]);
-
-function agentDirectory(): string {
-	const configured = process.env.PI_AGENT_DIR;
-	return configured
-		? configured.replace(/^~(?=$|\/)/, homedir())
-		: join(homedir(), ".pi", "agent");
-}
-
 function configFile(): string {
-	return join(agentDirectory(), "pi-recap", "config.json");
+	return join(getAgentDir(), "pi-recap", "config.json");
 }
 
 /**
@@ -107,25 +98,25 @@ function configFile(): string {
  * machines, including through a symlink into a dotfiles checkout.
  */
 function rotationFile(): string {
-	return join(agentDirectory(), "pi-recap", "rotation.json");
+	return join(getAgentDir(), "pi-recap", "rotation.json");
 }
 
 function recapDataDirectory(): string {
-	return join(agentDirectory(), "pi-recap");
+	return join(getAgentDir(), "pi-recap");
 }
 
 function applyStoredConfig(stored: StoredRecapConfig, reset: boolean): void {
 	if (reset) {
 		config.markers.recap = DEFAULT_MARKER_RECAP;
 		config.markers.next = DEFAULT_MARKER_NEXT;
-		config.style = "frame";
+		config.style = DEFAULT_RECAP_STYLE;
 	}
 
 	const recap = stored.markers?.recap;
 	const next = stored.markers?.next;
 	if (typeof recap === "string" && recap) config.markers.recap = recap;
 	if (typeof next === "string" && next) config.markers.next = next;
-	if (typeof stored.style === "string" && STYLES.has(stored.style as Style)) config.style = stored.style as Style;
+	if (isRecapStyle(stored.style)) config.style = stored.style;
 	const settings = normalizeRecapSettings(stored);
 	config.intervalMinutes = settings.intervalMinutes;
 	config.minimumCompletedInteractions = settings.minimumCompletedInteractions;
@@ -1124,11 +1115,11 @@ export default function recapExtension(pi: ExtensionAPI): void {
 					ctx.ui.notify(`Recap style is ${config.style}`, "info");
 					return;
 				}
-				if (extra.length > 0 || !STYLES.has(value as Style)) {
-					ctx.ui.notify(`Style must be one of: ${[...STYLES].join(", ")}`, "warning");
+				if (extra.length > 0 || !isRecapStyle(value)) {
+					ctx.ui.notify(`Style must be one of: ${RECAP_STYLES.join(", ")}`, "warning");
 					return;
 				}
-				config.style = value as Style;
+				config.style = value;
 				const saved = saveConfig({ style: config.style });
 				ctx.ui.notify(
 					saved ? `Recap style set to ${config.style}, saved` : `Recap style set to ${config.style}, but could not be saved`,

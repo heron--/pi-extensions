@@ -14,6 +14,13 @@
       "./index.ts"
     ]
   },
+  "settings": [
+    { "key": "readOutputMode", "prompt": "Expanded read output", "type": "choice", "choices": ["hidden", "summary", "preview"], "default": "preview" },
+    { "key": "searchOutputMode", "prompt": "Expanded search output", "type": "choice", "choices": ["hidden", "summary", "preview"], "default": "preview" },
+    { "key": "mcpOutputMode", "prompt": "Expanded MCP output", "type": "choice", "choices": ["hidden", "summary", "preview"], "default": "preview" },
+    { "key": "bashOutputMode", "prompt": "Expanded bash output", "type": "choice", "choices": ["opencode", "summary", "preview"], "default": "opencode" },
+    { "key": "expandedPreviewMaxLines", "prompt": "Most lines in an expanded result, 0 for all", "type": "integer", "min": 0, "max": 20000, "default": 4000 }
+  ],
   "keywords": [
     "pi",
     "pi-package",

@@ -14,6 +14,12 @@ import {
 	selectRecapSlice,
 } from "./state.ts";
 import {
+	DEFAULT_RECAP_STYLE,
+	MAX_COMPLETED_INTERACTIONS,
+	MAX_INTERVAL_MINUTES,
+	MIN_COMPLETED_INTERACTIONS,
+	MIN_INTERVAL_MINUTES,
+	RECAP_STYLES,
 	isValidIntervalMinutes,
 	isValidMinimumCompletedInteractions,
 	normalizeRecapSettings,
@@ -76,6 +82,27 @@ test("normalizeRecapSettings accepts configured timer values and rejects invalid
 	assert.equal(isValidIntervalMinutes(0.01), false);
 	assert.equal(isValidMinimumCompletedInteractions(1), true);
 	assert.equal(isValidMinimumCompletedInteractions(0), false);
+});
+
+test("the settings install.sh offers match the recap defaults and bounds", () => {
+	const { settings } = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
+	const declared = Object.fromEntries(settings.map((setting) => [setting.key, setting]));
+	const defaults = normalizeRecapSettings({});
+	assert.deepEqual(Object.keys(declared), ["style", "intervalMinutes", "minimumCompletedInteractions"]);
+	assert.deepEqual(declared.style.choices, [...RECAP_STYLES]);
+	assert.equal(declared.style.default, DEFAULT_RECAP_STYLE);
+	assert.deepEqual(
+		[declared.intervalMinutes.default, declared.intervalMinutes.min, declared.intervalMinutes.max],
+		[defaults.intervalMinutes, MIN_INTERVAL_MINUTES, MAX_INTERVAL_MINUTES],
+	);
+	assert.deepEqual(
+		[
+			declared.minimumCompletedInteractions.default,
+			declared.minimumCompletedInteractions.min,
+			declared.minimumCompletedInteractions.max,
+		],
+		[defaults.minimumCompletedInteractions, MIN_COMPLETED_INTERACTIONS, MAX_COMPLETED_INTERACTIONS],
+	);
 });
 
 test("updateRecapConfig atomically merges changed fields with the latest config", () => {
