@@ -20,10 +20,10 @@
  * openai-* transports are deliberately excluded so the formatter is not
  * applied to transports that never carry thinking.
  *
- * Replacement for pi-tool-display's always-on thinking labeling (part 02 of
- * retiring it). Until it is retired both extensions run, and the artifact
- * stripper makes the double pass idempotent: whichever runs last strips the
- * other's label and lays down one of ours.
+ * Another extension that labels thinking the same way (pi-tool-display does,
+ * always) composes with this one: the artifact stripper makes a double pass
+ * idempotent, so whichever runs last strips the other's label and lays down
+ * its own.
  *
  * Toggle: `/thinking-labels [on|off]` (persisted in the agent config dir).
  */
@@ -205,8 +205,8 @@ function labelThinkingBlocks(message: AssistantMessage, theme: Theme, level: Mod
  * reduces to empty text rather than being restored, so nothing painted ever
  * reaches the model. This runs regardless of the display toggle: the toggle
  * governs painting, not cleanup — labels already stored in earlier turns (and
- * upstream's, which keep landing while pi-tool-display is installed) must be
- * stripped even when this extension is off.
+ * another extension's, such as pi-tool-display's) must be stripped even when
+ * this extension is off.
  */
 function sanitizeContextMessages(messages: AgentMessage[]): void {
 	let changed = false;

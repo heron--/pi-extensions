@@ -6,6 +6,8 @@ import test from "node:test";
 import {
 	BASH_OUTPUT_MODES,
 	DEFAULT_TOOL_OUTPUT_CONFIG,
+	DIFF_INDICATOR_MODES,
+	DIFF_VIEW_MODES,
 	OUTPUT_MODES,
 	loadToolOutputConfig,
 	normalizeKeyId,
@@ -50,8 +52,8 @@ test("the settings install.sh offers match the configuration defaults", () => {
 	for (const setting of settings) {
 		assert.equal(setting.default, DEFAULT_TOOL_OUTPUT_CONFIG[setting.key], setting.key);
 		if (setting.type === "choice") {
-			const modes = setting.key === "bashOutputMode" ? BASH_OUTPUT_MODES : OUTPUT_MODES;
-			assert.deepEqual(setting.choices, [...modes], setting.key);
+			const choices = { bashOutputMode: BASH_OUTPUT_MODES, diffViewMode: DIFF_VIEW_MODES, diffIndicatorMode: DIFF_INDICATOR_MODES };
+			assert.deepEqual(setting.choices, [...(choices[setting.key] ?? OUTPUT_MODES)], setting.key);
 		}
 		if (setting.type === "integer") {
 			assert.equal(normalizeToolOutputConfig({ [setting.key]: setting.min - 1 })[setting.key], setting.min, setting.key);
@@ -59,3 +61,21 @@ test("the settings install.sh offers match the configuration defaults", () => {
 		}
 	}
 });
+
+test("the diff settings fall back to their defaults when invalid", () => {
+	assert.deepEqual(
+		pick(normalizeToolOutputConfig({ diffViewMode: "split", diffIndicatorMode: "none", diffSplitMinWidth: 90, diffWordWrap: false })),
+		{ diffViewMode: "split", diffIndicatorMode: "none", diffSplitMinWidth: 90, diffWordWrap: false },
+	);
+	assert.deepEqual(
+		pick(normalizeToolOutputConfig({ diffViewMode: "sideways", diffIndicatorMode: 1, diffSplitMinWidth: 10, diffWordWrap: "yes" })),
+		{ diffViewMode: "auto", diffIndicatorMode: "bars", diffSplitMinWidth: 51, diffWordWrap: true },
+		"a width too narrow for two columns rises to the narrowest that fits",
+	);
+	assert.equal(normalizeToolOutputConfig({}).registerToolOverrides.edit, true, "edits and writes are drawn here by default");
+	assert.equal(normalizeToolOutputConfig({}).registerToolOverrides.write, true);
+});
+
+function pick({ diffViewMode, diffIndicatorMode, diffSplitMinWidth, diffWordWrap }) {
+	return { diffViewMode, diffIndicatorMode, diffSplitMinWidth, diffWordWrap };
+}

@@ -13,7 +13,7 @@
  */
 
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
-import { foregroundAnsi, parseColor } from "@earendil-works/pi-tui";
+import { backgroundAnsi as colorBackgroundAnsi, foregroundAnsi, mixColors, parseColor } from "@earendil-works/pi-tui";
 
 /**
  * Color names that only project-local themes define. `Theme.fg` **throws** on
@@ -149,7 +149,53 @@ export const TOOL_OUTPUT_COLORS = {
 		/** The words around them. */
 		hintText: "muted",
 	},
+
+	/**
+	 * An expanded edit's or write's diff. With a known language, code takes its
+	 * syntax colors instead, and the row tints (`DIFF_TINTS`) mark the change.
+	 */
+	diff: {
+		/** Added lines' change bar, line number, and code without a known language. */
+		added: "toolDiffAdded",
+		/** The same for removed lines. */
+		removed: "toolDiffRemoved",
+		/** Unchanged lines' code without a known language. */
+		context: "toolDiffContext",
+		/** Unchanged lines' line numbers. */
+		lineNumber: "dim",
+		/** The gutter rule, the split separator, and the mark for skipped lines. */
+		divider: "dim",
+		/** The `old` and `new` column headings of the side-by-side layout. */
+		header: "muted",
+		/** The state above a diff: `pending edit`, `new file`. */
+		label: "muted",
+		/** Why a preview could not be shown. */
+		notice: "warning",
+	},
 } as const;
+
+/**
+ * How strongly a diff's added and removed colors tint the box's ground: a
+ * changed row, and the words that changed within it.
+ */
+export const DIFF_TINTS = { row: 0.18, emphasis: 0.34 } as const;
+
+const DIFF_TINT_SOURCES = { add: "toolDiffAdded", remove: "toolDiffRemoved" } as const;
+
+/**
+ * A changed row's background: the box's ground mixed toward the diff color,
+ * as a raw ANSI sequence in the theme's color mode, or `""` when the theme
+ * cannot say.
+ */
+export function diffTint(theme: Theme, kind: keyof typeof DIFF_TINT_SOURCES, strength: keyof typeof DIFF_TINTS): string {
+	try {
+		const colors = theme.colors;
+		const mixed = mixColors(colors[TOOL_OUTPUT_BG], colors[DIFF_TINT_SOURCES[kind]], DIFF_TINTS[strength], "srgb");
+		return colorBackgroundAnsi(mixed, theme.getColorMode());
+	} catch {
+		return "";
+	}
+}
 
 /** Background tone filling the house box behind every row. */
 export const TOOL_OUTPUT_BG: PaletteBg = "userMessageBg";

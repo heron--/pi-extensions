@@ -1,7 +1,7 @@
 // Grouped layout, driven through pi's real ToolExecutionComponent inside a real
 // pi-tui Container — the same seam pi's chat uses. Loaded through jiti, like pi.
 const assert = require("node:assert/strict");
-const { mkdtempSync, readFileSync } = require("node:fs");
+const { mkdtempSync, readFileSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
 const { createRequire } = require("node:module");
@@ -179,26 +179,87 @@ void (async () => {
 	assert.match(editRows[editRow], /Edit File\s+path: lib\/box\.ts  \+2 -1\s*$/);
 	assert.match(editRows[editRow + 1], /Edit File\s+path: big\.ts  \+1,200 -2\s*$/, "pending edits count from the arguments");
 	assert.doesNotMatch(screen(), /edits:|Successfully replaced/);
-	assert.equal(group.editChanges({ toolName: "read", args: {} }), undefined);
+	assert.equal(group.fileChanges({ toolName: "read", args: {} }), undefined);
 	assert.deepEqual(
-		group.editChanges({ toolName: "edit", args: { edits: [{ oldText: "a\n", newText: "b\n" }] } }),
+		group.fileChanges({ toolName: "edit", args: { edits: [{ oldText: "a\n", newText: "b\n" }] } }),
 		{ added: 1, removed: 1 },
 		"a trailing newline is not an extra line",
 	);
 	edited.setExpanded(true);
 	editRows = rowsOf(screen());
-	assert.match(editRows[editRow + 1], /1 \/\/ top/, "expanded shows the diff");
-	assert.match(editRows[editRow + 2], /const A = 1;/);
-	assert.match(editRows[editRow + 3], /const A = 2;/);
+	assert.match(editRows[editRow + 1], /^\s+1 │ \/\/ top\s*$/, "expanded shows the diff, numbered in a gutter");
+	assert.match(editRows[editRow + 2], /▌\s+2 │ const A = 1;/, "the removed line, marked");
+	assert.match(editRows[editRow + 3], /▌\s+2 │ const A = 2;/, "then the lines replacing it");
+	assert.match(editRows[editRow + 4], /▌\s+3 │ const B = 3;/);
 	assert.doesNotMatch(screen(), /edit lib\/box\.ts/, "without pi's own edit header");
 	assert.doesNotMatch(screen(), /newText|oldText/, "an edit does not repeat its input");
+	const wide = rowsOf(screen(160));
+	const header = wide.findIndex((row) => /\bold\b.*│.*\bnew\b/.test(row));
+	assert.ok(header > 0, "a wide view puts old and new side by side");
+	assert.match(wide[header + 2], /▌\s+2 │ const A = 1;\s+│ ▌\s+2 │ const A = 2;/, "a removed line faces its replacement");
+	assert.match(wide[header + 3], /^\s+│\s+│ ▌\s+3 │ const B = 3;/, "an added line with nothing opposite faces a blank cell");
 	edited.setExpanded(false);
-	// Before a result diff exists, expanding a pending edit still shows the change.
+	// A pending edit is previewed against the file, read from the call's working directory.
 	pendingEdit.setExpanded(true);
-	// pi's call view: its header now, its preview diff once pi has read the file.
-	assert.match(screen(), /│\s+edit big\.ts/, "a pending edit's expanded view is not empty");
+	assert.match(screen(), /pending edit/);
+	assert.match(screen(), /Preview not shown: the file does not exist\./);
 	pendingEdit.setExpanded(false);
-	// An edit drawn by another extension (pi-tool-display) keeps that extension's view.
+
+	const workspace = mkdtempSync(path.join(tmpdir(), "pi-tool-output-preview-"));
+	writeFileSync(path.join(workspace, "a.ts"), "one\ntwo\nthree\n");
+	const call = (name, id, args, complete = true) => {
+		const component = new codingAgent.ToolExecutionComponent(
+			name, id, args, { showImages: false }, tools.get(name), ui, workspace,
+		);
+		chat.addChild(new piTui.Text(`${id} prose`, 0, 0));
+		chat.addChild(component);
+		if (complete) component.setArgsComplete();
+		component.setExpanded(true);
+		return component;
+	};
+	const previewed = call("edit", "p1", { path: "a.ts", edits: [{ oldText: "two", newText: "TWO" }] });
+	assert.match(screen(), /pending edit[\s\S]*▌\s+2 │ two[\s\S]*▌\s+2 │ TWO/, "a pending edit's preview diff");
+	previewed.setExpanded(false);
+	const streaming = call("edit", "p2", { path: "a.ts", edits: [{ oldText: "tw" }] }, false);
+	assert.match(screen(), /pending edit/);
+	assert.doesNotMatch(screen(), /Preview not shown: the edit/, "nothing is read while the arguments stream");
+	streaming.setExpanded(false);
+	const ambiguous = call("edit", "p3", { path: "a.ts", edits: [{ oldText: "o", newText: "0" }] });
+	assert.match(screen(), /Preview not shown: the edit matches more than one place\./);
+	ambiguous.setExpanded(false);
+	writeFileSync(path.join(path.dirname(workspace), "outside-secret.ts"), "secret\n");
+	const outside = call("edit", "p4", { path: "../outside-secret.ts", edits: [{ oldText: "secret", newText: "x" }] });
+	assert.match(screen(), /Preview not shown: it is outside the working directory\./, "a preview reads only the working directory");
+	outside.setExpanded(false);
+	const creating = call("write", "p5", { path: "new.md", content: "first\nsecond\n" });
+	assert.match(screen(), /pending create[\s\S]*▌\s+1 │ first[\s\S]*▌\s+2 │ second/);
+	creating.setExpanded(false);
+	const overwriting = call("write", "p6", { path: "a.ts", content: "one\nTWO\nthree\n" });
+	assert.match(screen(), /pending overwrite[\s\S]*▌\s+2 │ two[\s\S]*▌\s+2 │ TWO/);
+	overwriting.setExpanded(false);
+
+	// A finished write shows the change it recorded, which survives a reload.
+	const created = call("write", "w2", { path: "notes.md", content: "N1\nN2\nN3\n" });
+	created.updateResult({ content: [{ type: "text", text: "Successfully wrote to notes.md" }], details: { created: true } });
+	assert.match(screen(), /Write File\s+path: notes\.md  \+3 -0/);
+	assert.match(screen(), /new file[\s\S]*▌\s+1 │ N1[\s\S]*▌\s+3 │ N3/);
+	created.setExpanded(false);
+	const overwrote = call("write", "w3", { path: "a.ts", content: "one\nTWO\nthree\n" });
+	overwrote.updateResult({
+		content: [{ type: "text", text: "Successfully wrote to a.ts" }],
+		details: { created: false, diff: " 1 one\n-2 two\n+2 TWO\n 3 three" },
+	});
+	assert.match(screen(), /Write File\s+path: a\.ts  \+1 -1/);
+	assert.match(screen(), /▌\s+2 │ two[\s\S]*▌\s+2 │ TWO/);
+	assert.doesNotMatch(screen(), /new file[\s\S]*TWO/);
+	overwrote.setExpanded(false);
+	// A failed edit shows its error rather than a diff.
+	const failed = call("edit", "f1", { path: "a.ts", edits: [{ oldText: "zzz", newText: "y" }] });
+	failed.updateResult({ content: [{ type: "text", text: "Could not find the exact text in a.ts." }], details: {}, isError: true });
+	assert.match(screen(), /Could not find the exact text in a\.ts\./);
+	failed.setExpanded(false);
+
+	// An edit drawn by another extension keeps that extension's view.
 	const elsewhere = {
 		...codingAgent.createEditToolDefinition(process.cwd()),
 		renderCall: () => new piTui.Text("THIRD_PARTY_DIFF_VIEW", 0, 0),
@@ -215,7 +276,7 @@ void (async () => {
 	assert.match(screen(), /THIRD_PARTY_DIFF_VIEW/);
 	thirdParty.setExpanded(false);
 
-	// A write's input is the file it wrote; expanding does not repeat it.
+	// A write that recorded no change, such as pi's own, shows its sizes and does not repeat its input.
 	const written = addTool("write", "w1", { path: "notes.md", content: "WRITTEN_BODY\n".repeat(30) }, "Successfully wrote 390 bytes");
 	assert.match(screen(), /Write File\s+path: notes\.md  30 lines, 389 B · 1 line, 28 B/);
 	written.setExpanded(true);
@@ -278,6 +339,8 @@ void (async () => {
 
 	// Never wider than the terminal, at any width.
 	bash.setExpanded(true);
+	edited.setExpanded(true);
+	previewed.setExpanded(true);
 	for (const width of [120, 60, 30, 14, 8]) {
 		for (const row of chat.render(width)) {
 			assert.ok(piTui.visibleWidth(row) <= width, `row exceeds ${width}: ${JSON.stringify(row)}`);

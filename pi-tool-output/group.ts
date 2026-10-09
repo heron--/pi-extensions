@@ -19,13 +19,15 @@ import {
 	createEditToolDefinition,
 	createWriteToolDefinition,
 	keyText,
-	renderDiff,
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { CALL_LIMITS, compactArguments } from "./arguments.ts";
 import { callArgumentsComponent, paintMeasure, paintSummary } from "./call-rendering.ts";
 import { paint, TOOL_OUTPUT_COLORS } from "./colors.ts";
+import type { DiffViewOptions } from "./diff.ts";
+import { writeChanges } from "./file-changes.ts";
+import { fileCallComponent, isFileTool } from "./file-view.ts";
 import { displayToolName, extractTextOutput, pluralize, toolIcon } from "./rendering.ts";
 import { summarizeToolCall } from "./summaries.ts";
 import { boxContentWidth, boxInner, boxRows, ICON_TOOL } from "./tool-box.ts";
@@ -36,6 +38,9 @@ export interface GroupMember {
 	args: unknown;
 	expanded: boolean;
 	isPartial: boolean;
+	/** Whether the arguments have finished streaming. */
+	argsComplete?: boolean;
+	cwd?: string;
 	result?: { content?: unknown; details?: unknown; isError?: boolean };
 	callRendererComponent?: Component;
 	resultRendererComponent?: Component;
@@ -268,10 +273,13 @@ function expandedArguments(member: GroupMember): Record<string, unknown> | undef
 }
 
 /**
- * An edit's change counts: from the diff in its result once it has one,
- * otherwise from the edits it asks for. Every other tool has none.
+ * The lines an edit or write changes. An edit counts from the diff in its
+ * result once it has one, otherwise from the edits it asks for; a write
+ * counts once it has run, from the change it recorded. Every other tool has
+ * none.
  */
-export function editChanges(member: Pick<GroupMember, "toolName" | "args" | "result">): { added: number; removed: number } | undefined {
+export function fileChanges(member: Pick<GroupMember, "toolName" | "args" | "result">): { added: number; removed: number } | undefined {
+	if (member.toolName === "write") return member.result ? writeChanges(member.args, member.result.details) : undefined;
 	if (member.toolName !== "edit") return undefined;
 	const diff = record(member.result?.details)?.diff;
 	if (typeof diff === "string") {
@@ -318,8 +326,8 @@ function changeText({ added, removed }: { added: number; removed: number }): { p
 function toolRows(member: GroupMember, width: number, nameWidth: number, theme: Theme): string[] {
 	const failed = member.result?.isError === true && !member.isPartial;
 	const { name: nameTone, size: sizeTone, failed: failedTone, summaryPlain, summaryKey } = TOOL_OUTPUT_COLORS.group;
-	// An edit shows what it changed, +added -removed, instead of an input and output size.
-	const changes = editChanges(member);
+	// A file change shows what it changed, +added -removed, instead of an input and output size.
+	const changes = fileChanges(member);
 	const change = changes && !failed ? changeText(changes) : undefined;
 	const meta = memberMeta(member);
 	// A name is cut only when it would push the output size or status off the
@@ -352,14 +360,12 @@ function toolRows(member: GroupMember, width: number, nameWidth: number, theme: 
 	return [truncateToWidth(first, width, "…")];
 }
 
-const diffCache = new WeakMap<GroupMember, { diff: string; theme: Theme; component: Component }>();
-
 /** Pi's own edit/write call renderers: one shared object spread into every definition. */
 let piFileRenderers: Set<unknown> | undefined;
 
 /**
- * Whether an edit or write is drawn by another extension (`pi-tool-display`'s
- * diff view) rather than by pi itself. That view is kept as the expanded body.
+ * Whether an edit or write is drawn by another extension, rather than by
+ * this one or pi itself. That extension's view is kept as the expanded body.
  */
 function drawnElsewhere(member: GroupMember): boolean {
 	const renderCall = member.toolDefinition?.renderCall;
@@ -371,36 +377,40 @@ function drawnElsewhere(member: GroupMember): boolean {
 	return !piFileRenderers.has(renderCall);
 }
 
+const fileViewCache = new WeakMap<GroupMember, { key: unknown[]; component: Component | undefined }>();
+
+/**
+ * An edit's or write's diff view (see file-view.ts). It is rebuilt only when
+ * the call moves on: a pending preview reads the file once, not every frame.
+ */
+function fileView(member: GroupMember, theme: Theme, options: DiffViewOptions): Component | undefined {
+	const argsComplete = member.argsComplete !== false;
+	const key = [member.args, member.result, member.isPartial, argsComplete, theme, options];
+	const cached = fileViewCache.get(member);
+	if (cached && sameKey(cached.key, key)) return cached.component;
+	const component = fileCallComponent(
+		{ ...member, argsComplete, cwd: member.cwd ?? process.cwd() },
+		theme,
+		options,
+	);
+	fileViewCache.set(member, { key, component });
+	return component;
+}
+
 /**
  * The call's output, unframed: what its own result renderer drew, without its
- * arguments. An edit or write drawn by another extension keeps that
- * extension's view. Otherwise an edit's diff lives in pi's call block (beside an
- * `edit <path>` header the row already says), so it is drawn here from the
- * result instead.
+ * arguments. An edit or write shows its diff view instead, unless another
+ * extension draws it, whose view it keeps.
  */
-function expandedComponents(member: GroupMember, theme: Theme): Component[] {
-	if ((member.toolName === "edit" || member.toolName === "write") && drawnElsewhere(member)) {
-		return [member.callRendererComponent, member.resultRendererComponent].filter(
-			(component): component is Component => component !== undefined,
-		);
-	}
-	const diff = record(member.result?.details)?.diff;
-	if (member.toolName === "edit" && typeof diff === "string" && !member.result?.isError) {
-		let cached = diffCache.get(member);
-		// renderDiff bakes the active theme's colors in, so a theme switch rebuilds it too.
-		if (cached?.diff !== diff || cached.theme !== theme) {
-			cached = { diff, theme, component: new Text(renderDiff(diff), 0, 0) };
-			diffCache.set(member, cached);
+function expandedComponents(member: GroupMember, theme: Theme, diff: DiffViewOptions): Component[] {
+	if (isFileTool(member.toolName)) {
+		if (drawnElsewhere(member)) {
+			return [member.callRendererComponent, member.resultRendererComponent].filter(
+				(component): component is Component => component !== undefined,
+			);
 		}
-		return [cached.component];
-	}
-	if (member.toolName === "edit") {
-		// No result diff yet (pending, or failed without one): pi's own call view
-		// previews the change from the arguments, and its result view carries
-		// any error. Keep both rather than show nothing.
-		return [member.callRendererComponent, member.resultRendererComponent].filter(
-			(component): component is Component => component !== undefined,
-		);
+		const view = fileView(member, theme, diff);
+		if (view) return [view];
 	}
 	const result = boxInner(member.resultRendererComponent) ?? member.resultRendererComponent;
 	const shown = argumentsComponent(member, theme);
@@ -441,10 +451,10 @@ function sameKey(left: readonly unknown[] | undefined, right: readonly unknown[]
 
 const expandedCache = new WeakMap<GroupMember, { key: unknown[]; rows: string[] }>();
 
-function expandedRows(member: GroupMember, width: number, theme: Theme): string[] {
+function expandedRows(member: GroupMember, width: number, theme: Theme, diff: DiffViewOptions): string[] {
 	const inner = Math.max(1, width - INDENT.length);
 	const rendered: string[][] = [];
-	for (const component of expandedComponents(member, theme)) {
+	for (const component of expandedComponents(member, theme, diff)) {
 		try {
 			rendered.push(component.render(inner));
 		} catch {
@@ -474,7 +484,7 @@ function memberRows(
 ): string[] {
 	const { theme } = options;
 	const isLast = member === options.lastMember;
-	const expanded = member.expanded ? expandedRows(member, contentWidth, theme) : undefined;
+	const expanded = member.expanded ? expandedRows(member, contentWidth, theme, options.diff) : undefined;
 	const key = [
 		contentWidth, nameWidth, theme, member.args, member.result, member.isPartial, member.expanded,
 		isLast, options.expandLastKey, expanded,
@@ -503,6 +513,8 @@ export interface GroupRenderOptions {
 	/** The most recent tool call overall; only it carries the shortcut hint. */
 	lastMember: GroupMember | undefined;
 	expandLastKey: string;
+	/** How an expanded edit or write lays out its diff. */
+	diff: DiffViewOptions;
 }
 
 export interface GroupRender {

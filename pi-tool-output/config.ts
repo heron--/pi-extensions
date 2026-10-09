@@ -6,11 +6,15 @@ export const OUTPUT_MODES = ["hidden", "summary", "preview"] as const;
 export const BASH_OUTPUT_MODES = ["opencode", "summary", "preview"] as const;
 export const CUSTOM_TOOL_KINDS = ["generic", "mcp"] as const;
 export const BUILTIN_TOOL_NAMES = ["read", "grep", "find", "ls", "bash", "edit", "write"] as const;
+export const DIFF_VIEW_MODES = ["auto", "split", "unified"] as const;
+export const DIFF_INDICATOR_MODES = ["bars", "classic", "none"] as const;
 
 export type OutputMode = (typeof OUTPUT_MODES)[number];
 export type BashOutputMode = (typeof BASH_OUTPUT_MODES)[number];
 export type CustomToolKind = (typeof CUSTOM_TOOL_KINDS)[number];
 export type BuiltinToolName = (typeof BUILTIN_TOOL_NAMES)[number];
+export type DiffViewMode = (typeof DIFF_VIEW_MODES)[number];
+export type DiffIndicatorMode = (typeof DIFF_INDICATOR_MODES)[number];
 
 export interface ToolOwnership {
 	read: boolean;
@@ -41,6 +45,14 @@ export interface ToolOutputConfig {
 	expandedPreviewMaxLines: number;
 	bashOutputMode: BashOutputMode;
 	bashCollapsedLines: number;
+	/** How an expanded edit or write lays out its diff: by width, side by side, or one column. */
+	diffViewMode: DiffViewMode;
+	/** What marks a changed line: a bar in the gutter, a `+`/`-` sign, or only its tint. */
+	diffIndicatorMode: DiffIndicatorMode;
+	/** Columns a diff needs before `auto` shows old and new side by side. */
+	diffSplitMinWidth: number;
+	/** Wrap long diff lines at word boundaries; otherwise cut them with an ellipsis. */
+	diffWordWrap: boolean;
 }
 
 export const DEFAULT_TOOL_OUTPUT_CONFIG: ToolOutputConfig = {
@@ -52,9 +64,8 @@ export const DEFAULT_TOOL_OUTPUT_CONFIG: ToolOutputConfig = {
 		find: true,
 		ls: true,
 		bash: true,
-		// Keep pi-tool-display's diff renderer until a replacement is sourced.
-		edit: false,
-		write: false,
+		edit: true,
+		write: true,
 	},
 	customToolOverrides: {},
 	readOutputMode: "preview",
@@ -64,6 +75,10 @@ export const DEFAULT_TOOL_OUTPUT_CONFIG: ToolOutputConfig = {
 	expandedPreviewMaxLines: 4000,
 	bashOutputMode: "opencode",
 	bashCollapsedLines: 10,
+	diffViewMode: "auto",
+	diffIndicatorMode: "bars",
+	diffSplitMinWidth: 120,
+	diffWordWrap: true,
 };
 
 export interface ConfigLoadResult {
@@ -125,6 +140,10 @@ function asKey(value: unknown, fallback: string): string {
 
 function asBashOutputMode(value: unknown, fallback: BashOutputMode): BashOutputMode {
 	return BASH_OUTPUT_MODES.includes(value as BashOutputMode) ? (value as BashOutputMode) : fallback;
+}
+
+function asChoice<T extends string>(choices: readonly T[], value: unknown, fallback: T): T {
+	return choices.includes(value as T) ? (value as T) : fallback;
 }
 
 function asCustomToolKind(value: unknown): CustomToolKind {
@@ -193,6 +212,14 @@ export function normalizeToolOutputConfig(value: unknown): ToolOutputConfig {
 			80,
 			DEFAULT_TOOL_OUTPUT_CONFIG.bashCollapsedLines,
 		),
+		diffViewMode: asChoice(DIFF_VIEW_MODES, source.diffViewMode, DEFAULT_TOOL_OUTPUT_CONFIG.diffViewMode),
+		diffIndicatorMode: asChoice(
+			DIFF_INDICATOR_MODES,
+			source.diffIndicatorMode,
+			DEFAULT_TOOL_OUTPUT_CONFIG.diffIndicatorMode,
+		),
+		diffSplitMinWidth: asInteger(source.diffSplitMinWidth, 51, 400, DEFAULT_TOOL_OUTPUT_CONFIG.diffSplitMinWidth),
+		diffWordWrap: asBoolean(source.diffWordWrap, DEFAULT_TOOL_OUTPUT_CONFIG.diffWordWrap),
 	};
 }
 
