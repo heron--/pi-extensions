@@ -6,9 +6,8 @@ package-lock.json
 # `npm install`, `npm run typecheck`, or `npm run sync-types`.
 tsconfig.paths.json
 
-# Which extensions are live in THIS checkout. Symlinks here are machine-local
-# and change constantly while developing — add/remove freely without it showing
-# up in git status. See README "Loading extensions while developing".
+# pi's project-local state for this checkout, such as extension links and MCP
+# overrides. It is machine-local, so it is never committed.
 .pi/
 
 .DS_Store

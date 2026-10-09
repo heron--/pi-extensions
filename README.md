@@ -123,10 +123,7 @@ pi-extensions/
 ├── scripts/
 │   ├── install.mjs        # what install.sh runs
 │   ├── install/           # its modules and tests (npm run test:install)
-│   ├── sync-pi-types.mjs
-│   ├── link-extensions.mjs
-│   └── hooks/
-│       └── post-merge     # re-runs link-extensions.mjs after every git pull
+│   └── sync-pi-types.mjs
 ├── lib/                   # shared helpers, imported as "../lib/x.ts"
 │   ├── pricing.ts
 │   └── pricing.test.cjs   # npm run test:pricing
@@ -149,74 +146,17 @@ Runtime deps for shared helpers go in this root `package.json` under
 `dependencies` (not `devDependencies`) — pi resolves `node_modules` from a
 parent directory, so extensions pick them up automatically.
 
+Extensions load from symlinks, and relative imports resolve against the
+link's path, not the file's real one: an extension linked at
+`<extensions dir>/pi-model-picker/` imports `../lib/pricing.ts` from
+`<extensions dir>/lib/`. So `lib/` must be linked beside any extension that
+imports it, which `install.sh` does, and `lib/` must never contain an
+`index.ts`, or pi would load it as an extension.
+
 **Trade-off:** an extension that imports `../lib/` is no longer
 copy-paste-portable on its own. That's fine while everything lives here; if one
 ever needs to ship standalone, inline the helper or vendor it into that
 extension's own directory.
-
-## Loading extensions while developing
-
-`.pi/extensions/` is auto-discovered (once the directory is trusted), so `pi`
-with no flags loads whatever is linked there, and `/reload` hot-reloads it:
-
-```
-.pi/extensions/
-├── lib                  -> ../../lib                 # REQUIRED, see below
-├── pi-context-footer    -> ../../pi-context-footer
-├── pi-model-picker      -> ../../pi-model-picker
-├── pi-recap             -> ../../pi-recap
-├── pi-thinking-labels   -> ../../pi-thinking-labels
-├── pi-tool-output       -> ../../pi-tool-output
-├── pi-transcript-digest -> ../../pi-transcript-digest
-├── pi-typewriter        -> ../../pi-typewriter
-├── pi-user-message      -> ../../pi-user-message
-└── pi-write-lock        -> ../../pi-write-lock
-```
-
-Add or remove links freely — `.pi/` is gitignored, so it never shows up in
-`git status`. On a fresh checkout, `node scripts/link-extensions.mjs`
-creates all of these (and their global counterparts) idempotently — it
-discovers extensions by convention, so it never needs an edit per extension. For a one-off experiment, drop a plain `.ts` file in there (that
-path is discovered too) and delete it when done; or skip the directory entirely
-and use `pi -e ./pi-thing/index.ts`.
-
-The same script also installs `scripts/hooks/post-merge` into `.git/hooks/`
-(main checkout only). That hook re-runs the linker after every `git pull`,
-so an extension merged upstream — a PR merged on another machine, then
-pulled here — is linked on the spot instead of failing to load. The linker
-is silent when there is nothing to do, so pulls that change no extension
-directories print nothing. Worktrees are deliberately excluded: they share
-the main checkout's hooks but skip linking (a transient `/tmp` worktree
-would leave dangling global links behind), so a worktree still needs
-`pi -e`. Removing an extension is still manual: delete
-its symlinks first, then the directory, in both locations.
-
-### The `lib` symlink is required, not decorative
-
-**Relative imports resolve against the symlink path, not the real path.** An
-extension discovered at `.pi/extensions/pi-model-picker/index.ts` resolves
-`../lib/pricing.ts` to `.pi/extensions/lib/pricing.ts` — *not* to the real
-`lib/`. Without the `lib` symlink, pi fails to start from this directory:
-
-```
-Error: Failed to load extension ".pi/extensions/pi-model-picker/index.ts":
-Cannot find module '../lib/pricing.ts'
-```
-
-So: **any extension linked into `.pi/extensions/` that imports `../lib/`
-requires the `lib` symlink alongside it.** Linking the file instead of the
-directory (`pi-model-picker.ts -> ../../pi-model-picker/index.ts`) does not help
-— same resolution, same failure.
-
-This also means `lib/` must not gain an `index.ts`, or discovery would try to
-load it as an extension.
-
-### Trusting the directory
-
-Project-local `.pi/extensions` only loads after the directory is trusted. pi
-prompts on first interactive run; the decision is stored in
-`~/.pi/agent/trust.json` keyed by canonical absolute path (lookup walks up
-parent directories, so trusting a parent covers children).
 
 ### `lib/pricing.ts`
 

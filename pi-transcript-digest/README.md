@@ -6,7 +6,7 @@ An experimental [pi](https://github.com/earendil-works/pi-coding-agent) extensio
 
 ## Try it
 
-From a stable repository checkout, `node scripts/link-extensions.mjs` creates both the project-local and global links. Then launch Pi from any directory:
+Link it with [`install.sh`](../README.md#install) from the repository root, then launch Pi from any directory:
 
 ```bash
 pi --tui-mode fullscreen

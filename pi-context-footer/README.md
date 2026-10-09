@@ -329,6 +329,5 @@ npm run test:context-footer             # unit tests and a fake-pi host, run by 
 python3 pi-context-footer/tui.test.py   # the real pi on PATH in a pty; needs pyte
 ```
 
-Run `node scripts/link-extensions.mjs --yes` from the repository root after a
-fresh checkout. It adds both the project-local and global symlinks needed to
-load this extension.
+To load it in every session, link it with [`install.sh`](../README.md#install)
+from the repository root.

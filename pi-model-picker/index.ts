@@ -16,8 +16,8 @@
  *   /model                  open the picker (replaces pi's builtin)
  *   /model sonnet           open with the filter prefilled
  *
- * Run with: pi -e ~/Projects/heron--/pi-extensions/pi-model-picker/index.ts
- * (or link it into .pi/extensions/ — see the workspace README)
+ * Run with: pi -e ./pi-model-picker/index.ts from the repository root, or link
+ * it with the repository's install.sh to load it in every session.
  *
  * ---------------------------------------------------------------------------
  * Layout notes

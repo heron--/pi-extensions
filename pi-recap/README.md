@@ -284,5 +284,5 @@ npm run test:recap
 pi --no-extensions -e ./pi-recap/index.ts
 ```
 
-Run `node scripts/link-extensions.mjs --yes` from the repository root after a
-fresh checkout.
+To load it in every session, link it with [`install.sh`](../README.md#install)
+from the repository root.

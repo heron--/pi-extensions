@@ -102,25 +102,13 @@ intercepts it in the one situation that's actually relevant.
 
 ## Install
 
-One-off test:
+One-off test, from the repository root:
 
 ```
-pi -e ~/Projects/heron--/pi-extensions/pi-typewriter/index.ts
+pi -e ./pi-typewriter/index.ts
 ```
 
-Global (auto-loads every session):
-
-```
-cp -r pi-typewriter ~/.pi/agent/extensions/
-```
-
-Or register it in `~/.pi/agent/settings.json`:
-
-```json
-"packages": [
-  "../../Projects/heron--/pi-extensions/pi-typewriter"
-]
-```
+To load it in every session, link it with [`install.sh`](../README.md#install).
 
 ## Usage
 

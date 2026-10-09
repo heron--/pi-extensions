@@ -29,22 +29,17 @@ npm install          # once
 npm run check        # typecheck and every test suite
 ```
 
-## Extensions and linking
+## Extensions
 
 Each `pi-*` directory is an independent pi package (a `package.json` with a
-`pi` key). The root `package.json` deliberately has none.
+`pi` key). The root `package.json` deliberately has none, and anything that
+finds extensions does so by that convention.
 
-Extensions run from symlinks in two places: `.pi/extensions/` (this repo only)
-and `~/.pi/agent/extensions/` (everywhere). `node scripts/link-extensions.mjs`
-maintains both, finds extensions by convention, and is re-run by a post-merge
-hook on every pull. After adding, renaming, or removing an extension, run it,
-and record renames in its `RENAMED_EXTENSIONS`. Remove symlinks before deleting
-what they point at.
-
-Relative imports resolve against the symlink path, not the real path, so shared
-code lives in `lib/` and is linked beside the extensions. `lib/` must never
-contain an `index.ts`, or pi will load it as an extension. A broken link can
-fail silently, so verify a new extension from a directory outside this repo.
+Extensions run from symlinks, and relative imports resolve against the symlink
+path, not the real path, so shared code lives in `lib/` and is linked beside
+the extensions. `lib/` must never contain an `index.ts`, or pi will load it as
+an extension. Verify a new extension from a directory outside this repo: there
+it loads through its global link, the kind `install.sh` creates.
 
 `install.sh` is how someone who clones the repo installs it: it links only the
 extensions they choose, into the global directory, and offers the settings each

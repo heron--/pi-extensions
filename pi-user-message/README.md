@@ -34,10 +34,10 @@ one patch owns the prototype; its tool/diff rendering is unaffected.
 
 ## Install
 
-One-off test: `pi -e <this directory>/index.ts`. For everyday use see the
-workspace [README](../README.md#loading-extensions-while-developing) — this
-extension is picked up by the same symlink conventions as its siblings (it
-imports [`../lib/box.ts`](../lib/box.ts), so the `lib` symlink covers it).
+One-off test: `pi -e <this directory>/index.ts`. For everyday use, link it with
+[`install.sh`](../README.md#install), which also links the
+[`lib/`](../README.md#shared-helpers-lib) it imports
+([`../lib/box.ts`](../lib/box.ts)).
 
 ## Usage
 

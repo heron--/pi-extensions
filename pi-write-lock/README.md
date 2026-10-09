@@ -58,9 +58,8 @@ One-off test:
 pi --no-extensions -e ./pi-write-lock/index.ts
 ```
 
-To link every extension in this repository into both project-local and global
-pi discovery locations:
+To load it in every session, link it with the repository's installer:
 
 ```bash
-node scripts/link-extensions.mjs
+./install.sh
 ```

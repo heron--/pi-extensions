@@ -86,8 +86,8 @@
  *   - Self-paced models (GLM 5.3 in particular): automatically defers to
  *     the model's own streaming pace for that message (see above).
  *
- * Run with: pi -e ~/Projects/heron--/pi-extensions/pi-typewriter/index.ts
- * (or drop the file into ~/.pi/agent/extensions/ for global auto-load)
+ * Run with: pi -e ./pi-typewriter/index.ts from the repository root, or link
+ * it with the repository's install.sh to load it in every session.
  */
 
 import type {

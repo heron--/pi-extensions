@@ -83,9 +83,8 @@ One-off test:
 pi -e /path/to/pi-extensions/pi-model-picker/index.ts
 ```
 
-For everyday use, see the workspace [README](../README.md#loading-extensions-while-developing)
-for how extensions here get symlinked into pi's discovery locations (and why
-the `lib` symlink specifically is required, not optional, for this one).
+For everyday use, link it with [`install.sh`](../README.md#install), which also
+links the [`lib/`](../README.md#shared-helpers-lib) it imports.
 
 ## Usage
 
