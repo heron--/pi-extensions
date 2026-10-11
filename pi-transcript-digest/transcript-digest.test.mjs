@@ -10,7 +10,7 @@ initTheme("dark");
 
 const theme = {
 	fg(color, text) {
-		const code = { accent: 35, success: 32, muted: 90, dim: 90, border: 90, syntaxType: 34 }[color] ?? 39;
+		const code = { accent: 35, success: 32, warning: 33, muted: 90, dim: 90, border: 90, syntaxType: 34 }[color] ?? 39;
 		return `\x1b[${code}m${text}\x1b[0m`;
 	},
 	bold(text) { return `\x1b[1m${text}\x1b[22m`; },
@@ -68,11 +68,12 @@ test("conversation shows user and agent text with summaries for hidden activity"
 		entry("3", { role: "toolResult", content: [{ type: "text", text: "tool output" }] })];
 	assert.deepEqual(conversationItems(entries, streamed), [
 		{ role: "user", text: "hello", timestamp: 1 },
+		{ role: "agent-start", timestamp: 2 },
 		{ role: "activity", toolCalls: 1, thinkingBlocks: 0 },
 		{ role: "assistant", text: "partial", timestamp: 2 },
 	]);
 	entries.push(entry("4", streamed));
-	assert.equal(conversationItems(entries, streamed).length, 3, "the persisted live message appears once");
+	assert.equal(conversationItems(entries, streamed).length, 4, "the persisted live message appears once");
 });
 
 const markdownSample = [
@@ -97,16 +98,18 @@ const markdownSample = [
 test("user and agent bodies use Pi Markdown while labels and gutters stay separate", () => {
 	for (const message of [user(markdownSample), assistant([{ type: "text", text: markdownSample }])]) {
 		const pane = new ConversationPane(session([entry("1", { ...message, timestamp: undefined })]), theme);
+		pane.setAgentRunning(true);
+		const bodyStart = message.role === "user" ? 3 : 4;
 		for (const width of [18, 24, 40, 80]) {
 			const lines = pane.render(width);
-			const body = lines.slice(2);
+			const body = lines.slice(bodyStart);
 			const expected = new Markdown(markdownSample, 0, 0, getMarkdownTheme()).render(width - 4);
 			assert.deepEqual(body.map((row) => row.slice(2, -2)), expected, "Markdown receives only the body width");
 			assert(lines.every((row) => visibleWidth(row) === width));
 			assert(lines.every((row) => row.startsWith("  ") && row.endsWith("  ")), "painted gutters stay outside styled text");
 			assert.equal(stripTerminalSequences(lines[1]).trim(), message.role === "user" ? "User" : "Agent");
 		}
-		const body = pane.render(80).slice(2).join("\n");
+		const body = pane.render(80).slice(bodyStart).join("\n");
 		const plain = stripTerminalSequences(body);
 		assert(plain.includes("Heading") && !plain.includes("# Heading"));
 		assert(plain.includes("bold italic removed inline Docs") && !plain.includes("**bold**"));
@@ -164,7 +167,7 @@ test("invalidating the pane refreshes Markdown colors from the active theme", ()
 	}
 });
 
-test("agent labels show stored models before timestamps in the agent color", () => {
+test("agent sections show their first stored model and timestamp in the agent color", () => {
 	const firstTimestamp = new Date(2026, 0, 2, 9, 5).getTime();
 	const secondTimestamp = new Date(2026, 0, 3, 10, 15).getTime();
 	const first = { ...assistant([{ type: "text", text: "first" }]), timestamp: firstTimestamp, model: "request-alias", responseModel: "served-model-a" };
@@ -176,12 +179,9 @@ test("agent labels show stored models before timestamps in the agent color", () 
 	});
 
 	const pane = new ConversationPane(session(entries), theme);
-	const labels = (width) => pane.render(width).map(stripTerminalSequences).map((line) => line.trim()).filter((line) => line.startsWith("Agent"));
-	assert.deepEqual(labels(80), [
-		"Agent (served-model-a) 2026-01-02 09:05",
-		"Agent (model-b) 2026-01-03 10:15",
-		"Agent",
-	]);
+	const labels = (width) => pane.render(width).map(stripTerminalSequences).map((line) => line.trim()).filter((line) => /^Agent(?: \(| \d|$)/.test(line));
+	assert.deepEqual(labels(80), ["Agent (served-model-a) 2026-01-02 09:05"]);
+	assert(!pane.render(80).map(stripTerminalSequences).some((line) => line.includes("(2026-01-03 10:15)")), "later messages do not get standalone timestamps");
 	assert(!labels(80).some((line) => line.includes("request-alias")), "the recorded response model takes precedence");
 	for (const width of [18, 24, 32]) {
 		const lines = pane.render(width);
@@ -189,7 +189,7 @@ test("agent labels show stored models before timestamps in the agent color", () 
 		assert(lines.map(stripTerminalSequences).join("").replace(/\s/g, "").includes("served-model-a"));
 	}
 	const firstHeader = pane.render(80).find((line) => stripTerminalSequences(line).includes("(served-model-a)"));
-	assert(firstHeader?.includes("\x1b[32m(served-model-a)\x1b[0m"), "model ids use the agent label color");
+	assert(firstHeader?.includes("\x1b[33m(served-model-a)\x1b[0m"), "model ids use the yellow agent label color");
 	assert(firstHeader?.includes("\x1b[90m2026-01-02 09:05\x1b[0m"), "timestamps remain dim");
 
 	const livePane = new ConversationPane(session(), theme);
@@ -235,6 +235,7 @@ test("activity summaries count thinking blocks and tool calls between visible me
 	];
 	assert.deepEqual(conversationItems(entries), [
 		{ role: "user", text: "question", timestamp: 1 },
+		{ role: "agent-start", timestamp: 2 },
 		{ role: "activity", toolCalls: 1, thinkingBlocks: 2 },
 		{ role: "assistant", text: "answer", timestamp: 2 },
 	]);
@@ -246,6 +247,7 @@ test("activity summaries count thinking blocks and tool calls between visible me
 
 test("live activity summaries update as thinking blocks and tool calls arrive", () => {
 	const pane = new ConversationPane(session([entry("1", user("question"))]), theme);
+	pane.setAgentRunning(true);
 	const live = assistant([]);
 	const plainLines = () => pane.render(64).map(stripTerminalSequences).map((line) => line.trim());
 	pane.setLive(live);
@@ -256,12 +258,15 @@ test("live activity summaries update as thinking blocks and tool calls arrive", 
 	let lines = pane.render(64);
 	assert(plainLines().includes("0 tool calls, 1 thinking block"));
 	const summary = lines.find((line) => stripTerminalSequences(line).includes("0 tool calls, 1 thinking block"));
-	assert(summary?.includes("\x1b[3m"), "activity summaries are italic");
-	assert(summary?.includes("\x1b[90m"), "activity summaries use the dim color");
+	assert(summary?.includes(theme.fg("success", theme.italic("0 tool calls"))), "only the tool-call count uses green");
+	assert(summary?.includes(theme.fg("dim", theme.italic(", 1 thinking block"))), "the separator and thinking count remain subdued");
 
 	live.content.push({ type: "toolCall", id: "t", name: "bash", arguments: {} });
 	pane.setLive(live);
 	assert(plainLines().includes("1 tool call, 1 thinking block"));
+	const updated = pane.render(64).find((line) => stripTerminalSequences(line).includes("1 tool call, 1 thinking block"));
+	assert(updated?.includes(theme.fg("success", theme.italic("1 tool call"))));
+	assert(updated?.includes(theme.fg("dim", theme.italic(", 1 thinking block"))));
 
 	live.content.push({ type: "text", text: "answer" });
 	pane.setLive(live);
@@ -269,11 +274,80 @@ test("live activity summaries update as thinking blocks and tool calls arrive", 
 	const plain = lines.map(stripTerminalSequences).map((line) => line.trim());
 	const activityIndex = plain.indexOf("1 tool call, 1 thinking block");
 	assert(activityIndex > plain.indexOf("question"));
-	assert(activityIndex < plain.findIndex((line) => line.startsWith("Agent")), "the live summary stays between visible messages");
+	assert(plain.slice(0, activityIndex).findLast((line) => /^(User|Agent)(?: |$)/.test(line))?.startsWith("Agent"), "live activity belongs to the agent");
+	assert(activityIndex < plain.indexOf("answer"), "the live summary precedes the following agent text");
 	assert(lines.every((line) => visibleWidth(line) === 64));
 });
 
-test("message blocks have an extra blank row between them", () => {
+test("activity-only turns have an Agent header through streaming, persistence, and appended turns", () => {
+	const entries = [entry("1", user("question"))];
+	const pane = new ConversationPane(session(entries), theme);
+	const live = assistant([
+		{ type: "thinking", thinking: "hidden" },
+		{ type: "toolCall", id: "t", name: "read", arguments: {} },
+	]);
+	const verify = (expectedHeaders) => {
+		const rows = pane.render(64);
+		const plain = rows.map((line) => stripTerminalSequences(line).trim());
+		assert.equal(plain.filter((line) => /^Agent(?: |$)/.test(line)).length, expectedHeaders);
+		for (const [index, line] of plain.entries()) {
+			if (!/^\d+ tool calls?/.test(line)) continue;
+			const precedingLabel = plain.slice(0, index).findLast((line) => /^(User|Agent)(?: |$)/.test(line));
+			assert(precedingLabel?.startsWith("Agent"), "activity is never attributed to User");
+		}
+		assert(rows.every((line) => visibleWidth(line) === 64));
+		return [...rows];
+	};
+	pane.setAgentRunning(true);
+	pane.setLive(live);
+	const streamed = verify(1);
+	assert(streamed.some((line) => line.includes(theme.fg("warning", theme.bold("Agent")))));
+	entries.push(entry("2", live));
+	assert.deepEqual(verify(1), streamed, "persisting the live activity keeps one header");
+	entries.push(entry("3", { role: "toolResult", content: [] }));
+	pane.setLive(undefined);
+	assert.deepEqual(verify(1), streamed, "tool results do not duplicate the header");
+	entries.push(entry("4", { ...assistant([{ type: "text", text: "answer" }]), stopReason: "stop" }));
+	verify(1);
+	assert.equal(pane.getStats().agentMessages, 1, "section headers do not change the text-message count");
+	entries.push(entry("5", user("follow-up")));
+	verify(1);
+	entries.push(entry("6", assistant([{ type: "toolCall", id: "t2", name: "read", arguments: {} }])));
+	const appended = verify(2);
+	pane.invalidate();
+	assert.deepEqual(verify(2), appended, "a full rebuild agrees with incremental rendering");
+
+	const activityOnly = new ConversationPane(session([entry("1", live)]), theme);
+	assert(activityOnly.render(64).map(stripTerminalSequences).some((line) => line.trim().startsWith("Agent ")), "activity-only sections retain the first message's timestamp");
+});
+
+test("message headers have a full-width rule in their role color, including wrapped headers", () => {
+	const timestamp = new Date(2026, 0, 2, 9, 5).getTime();
+	for (const [message, code, label] of [
+		[user("user body"), 34, "User"],
+		[{ ...assistant([{ type: "text", text: "agent body" }]), model: "long-model-name-中文🙂" }, 33, "Agent"],
+	]) {
+		const pane = new ConversationPane(session([entry("1", { ...message, timestamp })]), theme);
+		pane.setAgentRunning(true);
+		for (const width of [17, 24, 40, 80]) {
+			const lines = pane.render(width);
+			const plain = lines.map((line) => stripTerminalSequences(line).trim());
+			const rules = plain.flatMap((line, index) => /^─+$/.test(line) ? [index] : []);
+			assert.equal(rules.length, 1, "one rule follows the complete header");
+			const ruleIndex = rules[0];
+			assert.equal(plain[ruleIndex], "─".repeat(width - 4), "the rule fills the content width");
+			assert.equal(lines[ruleIndex], `  \x1b[${code}m${"─".repeat(width - 4)}\x1b[0m  `, "gutters remain outside the colored rule");
+			assert(lines[1].includes(`\x1b[${code}m`) && plain[1].startsWith(label));
+			assert.equal(plain.slice(1, ruleIndex).join("").replace(/\s/g, ""),
+				`${label}${message.model ? `(${message.model})` : ""}2026-01-0209:05`);
+			assert.equal(plain.at(-1), message.role === "user" ? "user body" : "agent body");
+			if (message.role === "assistant") assert(!plain.slice(ruleIndex + 1).join("").includes("2026-01-02"), "timestamps belong only to the section header");
+			assert(lines.every((line) => visibleWidth(line) === width));
+		}
+	}
+});
+
+test("sections have two blank rows between headers, without repeating consecutive Agent headers", () => {
 	const pane = new ConversationPane(session([
 		entry("1", user("one")),
 		entry("2", assistant([{ type: "text", text: "two" }])),
@@ -281,7 +355,8 @@ test("message blocks have an extra blank row between them", () => {
 	]), theme);
 	const lines = pane.render(40).map(stripTerminalSequences).map((line) => line.trim());
 	const labels = lines.flatMap((line, index) => line.startsWith("User ") || line.startsWith("Agent ") ? [index] : []);
-	assert.equal(labels.length, 3);
+	assert.equal(labels.length, 2);
+	assert(lines.includes("two") && lines.includes("three"));
 	for (const index of labels.slice(1)) assert.deepEqual(lines.slice(index - 2, index), ["", ""]);
 });
 
@@ -292,6 +367,7 @@ test("persisted live activity is not counted twice", () => {
 		{ type: "toolCall", id: "t", name: "bash", arguments: {} },
 	]);
 	const pane = new ConversationPane(session(entries), theme);
+	pane.setAgentRunning(true);
 	const summaryCount = () => pane.render(64).map(stripTerminalSequences).join("\n").match(/1 tool call, 1 thinking block/g)?.length ?? 0;
 
 	pane.setLive(live);
@@ -315,6 +391,7 @@ test("activity summaries follow text that precedes tool calls in persisted and l
 	];
 	assert.deepEqual(conversationItems(entries), [
 		{ role: "user", text: "question", timestamp: 1 },
+		{ role: "agent-start", timestamp: 2 },
 		{ role: "assistant", text: "I'll check that.", timestamp: 2 },
 		{ role: "activity", toolCalls: 1, thinkingBlocks: 0 },
 		{ role: "assistant", text: "Done.", timestamp: 2 },
@@ -324,6 +401,7 @@ test("activity summaries follow text that precedes tool calls in persisted and l
 	const persisted = pane.render(64).map(stripTerminalSequences).map((line) => line.trim());
 	assert(persisted.indexOf("I'll check that.") < persisted.indexOf("1 tool call, 0 thinking blocks"));
 	assert(persisted.indexOf("1 tool call, 0 thinking blocks") < persisted.indexOf("Done."));
+	assert.equal(persisted.filter((line) => /^Agent(?: \(| \d|$)/.test(line)).length, 1, "consecutive agent text and activity share one section header");
 
 	const livePane = new ConversationPane(session([entry("1", user("question"))]), theme);
 	const live = assistant([
@@ -334,6 +412,7 @@ test("activity summaries follow text that precedes tool calls in persisted and l
 	livePane.setLive(live);
 	let current = liveLines();
 	assert(current.indexOf("I'll check that.") < current.indexOf("1 tool call, 0 thinking blocks"));
+	assert.equal(current.filter((line) => /^Agent(?: |$)/.test(line)).length, 1, "live activity reuses the preceding agent header");
 
 	live.content.push({ type: "text", text: "Done." });
 	livePane.setLive(live);
@@ -447,19 +526,21 @@ test("labels show the message's local date and time across days and streaming up
 
 	const live = { ...reply, content: [{ type: "text", text: "partial" }], timestamp: new Date(2026, 0, 2, 0, 7).getTime() };
 	pane.setLive(live);
-	assert(labels().includes("Agent 2026-01-02 00:07"));
+	assert(!labels().includes("(2026-01-02 00:07)"));
+	assert.equal(labels().filter((line) => /^Agent \d/.test(line)).length, 1, "the section retains its first timestamp");
 	pane.setLive({ ...live, content: [{ type: "text", text: "completed" }] });
-	assert(labels().includes("Agent 2026-01-02 00:07"), "stream updates keep the original message timestamp");
+	assert(labels().includes("Agent 2026-01-01 14:32"), "stream updates keep the original section timestamp");
 });
 
 test("narrow panes wrap labels and timestamps without dropping the date or time", () => {
 	const pane = new ConversationPane(session([
 		entry("1", { ...assistant([{ type: "text", text: "answer" }]), timestamp: new Date(2026, 0, 2, 9, 5).getTime() }),
 	]), theme);
+	pane.setAgentRunning(true);
 	for (const width of [17, 18, 24, 32]) {
 		const lines = pane.render(width);
 		assert(lines.every((line) => visibleWidth(line) === width));
-		assert.equal(lines.map(stripTerminalSequences).map((line) => line.trim()).filter(Boolean).join(" "),
+		assert.equal(lines.map(stripTerminalSequences).map((line) => line.trim()).filter((line) => line && !/^─+$/.test(line)).join(" "),
 			"Agent 2026-01-02 09:05 answer");
 	}
 });
@@ -470,8 +551,9 @@ test("missing or invalid timestamps leave plain role labels", () => {
 			entry("1", { ...user("hello"), timestamp }),
 			entry("2", { ...assistant([{ type: "text", text: "answer" }]), timestamp }),
 		]), theme);
+		pane.setAgentRunning(true);
 		const lines = pane.render(24).map(stripTerminalSequences).map((line) => line.trim());
-		assert.deepEqual(lines, ["", "User", "hello", "", "", "Agent", "answer"]);
+		assert.deepEqual(lines, ["", "User", "─".repeat(20), "hello", "", "", "Agent", "─".repeat(20), "", "answer"]);
 	}
 });
 
@@ -483,6 +565,158 @@ function reply(text, stopReason = "stop") { return { ...assistant([{ type: "text
 function toolUse() { return { ...assistant([{ type: "toolCall", id: "t", name: "read", arguments: {} }]), stopReason: "toolUse" }; }
 function toolResult() { return { role: "toolResult", toolCallId: "t", toolName: "read", content: [], isError: false, timestamp: 0 }; }
 
+test("activity summaries show gaps between visible agent messages, not cumulative section time", () => {
+	const start = new Date(2026, 0, 2, 9, 0).getTime();
+	const calls = Array.from({ length: 12 }, (_, index) => ({ type: "toolCall", id: `t${index}`, name: "read", arguments: {} }));
+	const entries = [
+		timed("1", user("question"), start),
+		timed("2", assistant([{ type: "text", text: "first reply" }, ...calls]), start + 2_000, start),
+		timed("3", assistant([{ type: "thinking", thinking: "one" }, { type: "thinking", thinking: "two" }, { type: "text", text: "second reply" }]), start + 508_000, start + 507_000),
+		timed("4", assistant([{ type: "text", text: "third reply" }, { type: "toolCall", id: "next", name: "read", arguments: {} }]), start + 601_000, start + 600_000),
+		timed("5", reply("fourth reply"), start + 1_108_000, start + 1_107_000),
+	];
+	assert.deepEqual(conversationItems(entries).filter((item) => item.role === "activity"), [
+		{ role: "activity", toolCalls: 12, thinkingBlocks: 2, elapsedMs: 507_000 },
+		{ role: "activity", toolCalls: 1, thinkingBlocks: 0, elapsedMs: 507_000 },
+	]);
+	const pane = new ConversationPane(session(entries), theme);
+	pane.setAgentRunning(true);
+	const rows = pane.render(100);
+	const plain = rows.map((line) => stripTerminalSequences(line).trim());
+	assert(plain.includes("12 tool calls, 2 thinking blocks · 8m 27s"));
+	assert(plain.includes("1 tool call, 0 thinking blocks · 8m 27s"), "even a text-only message resets the gap's starting point");
+	assert(!plain.some((line) => /^\(\d{4}-/.test(line)));
+	const summary = rows.find((line) => stripTerminalSequences(line).includes("12 tool calls"));
+	assert(summary?.includes(theme.fg("success", theme.italic("12 tool calls"))));
+	assert(summary?.includes(theme.fg("dim", theme.italic(", 2 thinking blocks · 8m 27s"))));
+	entries.push(timed("6", user("follow-up"), start + 1_200_000),
+		timed("7", assistant([{ type: "thinking", thinking: "new section" }]), start + 1_206_000, start + 1_205_000),
+		timed("8", reply("new reply"), start + 1_266_000, start + 1_265_000));
+	assert(pane.render(100).map(stripTerminalSequences).some((line) => line.trim() === "0 tool calls, 1 thinking block · 1m 00s"), "a new user interaction resets the interval");
+});
+
+test("activity durations omit missing, backwards, and sub-second timestamp differences", () => {
+	const start = new Date(2026, 0, 2, 9, 0).getTime();
+	for (const timestamp of [undefined, null, "bad", NaN, Infinity, start - 1_000, start + 500]) {
+		const entries = [
+			timed("1", assistant([{ type: "text", text: "first" }, { type: "toolCall", id: "t", name: "read", arguments: {} }]), start + 5_000, start),
+			timed("2", reply("next"), start + 10_000, timestamp),
+		];
+		if (timestamp === undefined) entries[1].message.timestamp = undefined;
+		const summary = conversationItems(entries).find((item) => item.role === "activity");
+		assert.deepEqual(summary, { role: "activity", toolCalls: 1, thinkingBlocks: 0 }, "an unknown boundary must not reuse the previous completion timestamp");
+	}
+});
+
+test("pending activity durations advance with tool results without changing section totals", () => {
+	const start = new Date(2026, 0, 2, 9, 0).getTime();
+	const entries = [timed("1", user("question"), start), timed("2", {
+		...assistant([{ type: "text", text: "working" }, { type: "toolCall", id: "t", name: "read", arguments: {} }]), stopReason: "toolUse",
+	}, start + 2_000, start)];
+	const pane = new ConversationPane(session(entries), theme);
+	pane.setAgentRunning(true);
+	const lines = () => pane.render(100).map(stripTerminalSequences).map((line) => line.trim());
+	assert(lines().includes("1 tool call, 0 thinking blocks · 2s"));
+	entries.push(timed("3", toolResult(), start + 10_000));
+	assert(lines().includes("1 tool call, 0 thinking blocks · 10s"));
+	pane.setAgentRunning(false);
+	assert(lines().includes("Total: 1 tool call, 0 thinking blocks · Agent turn 10s"));
+	pane.invalidate();
+	assert(lines().includes("1 tool call, 0 thinking blocks · 10s"));
+});
+
+test("thinking-first sections group activity durations, totals, and first-message metadata", () => {
+	const start = new Date(2026, 0, 2, 9, 0).getTime();
+	const thought = { ...assistant([{ type: "thinking", thinking: "one" }, { type: "thinking", thinking: "two" }]), model: "request-alias", responseModel: "served-first", stopReason: "toolUse" };
+	const first = { ...assistant([
+		{ type: "text", text: "first words" }, { type: "thinking", thinking: "three" },
+		{ type: "toolCall", id: "a", name: "read", arguments: {} }, { type: "toolCall", id: "b", name: "read", arguments: {} },
+	]), model: "later-model", stopReason: "toolUse" };
+	const second = { ...assistant([
+		{ type: "text", text: "second words" }, { type: "thinking", thinking: "four" },
+		{ type: "toolCall", id: "c", name: "read", arguments: {} },
+	]), stopReason: "toolUse" };
+	const entries = [
+		timed("1", user("question"), start),
+		timed("2", thought, start + 7_000, start + 5_000),
+		timed("3", first, start + 70_000, start + 60_000),
+		timed("4", second, start + 130_000, start + 120_000),
+		timed("5", reply("last words"), start + 185_000, start + 180_000),
+		timed("6", user("follow-up"), start + 200_000),
+		timed("7", { ...assistant([{ type: "thinking", thinking: "new turn" }]), model: "next-model" }, start + 207_000, start + 205_000),
+	];
+	const pane = new ConversationPane(session(entries), theme);
+	pane.setAgentRunning(true);
+	const rows = pane.render(120);
+	const plain = rows.map((line) => stripTerminalSequences(line).trim());
+	assert.deepEqual(plain.filter((line) => /^Agent \(/.test(line)), [
+		"Agent (served-first) 2026-01-02 09:00", "Agent (next-model) 2026-01-02 09:03",
+	]);
+	assert(!plain.some((line) => line.includes("later-model")), "the section label belongs to the first agent message");
+	assert(!plain.some((line) => /^\(2026-01-02 /.test(line)), "message timestamps are not rendered above the body");
+	for (const [summary, text] of [
+		["0 tool calls, 2 thinking blocks · 55s", "first words"],
+		["2 tool calls, 1 thinking block · 1m 00s", "second words"],
+		["1 tool call, 1 thinking block · 1m 00s", "last words"],
+	]) {
+		const index = plain.indexOf(summary);
+		assert(index >= 0 && index < plain.indexOf(text), "each batch shows the gap before the next agent message");
+		assert(rows[index].includes("\x1b[90m"), "activity durations stay subdued");
+	}
+	const footer = "Total: 3 tool calls, 4 thinking blocks · Agent turn 3m 05s · User turn 15s";
+	const footerIndex = plain.indexOf(footer);
+	assert(footerIndex > plain.indexOf("last words") && footerIndex < plain.indexOf("follow-up"));
+	assert.equal(plain[footerIndex - 1], "─".repeat(116), "a closing rule separates totals from messages");
+	assert(rows[footerIndex].includes(theme.fg("success", theme.italic("3 tool calls"))));
+	assert(rows[footerIndex].includes(theme.fg("dim", theme.italic(", 4 thinking blocks"))));
+	assert.equal(plain.filter((line) => line.startsWith("Total:")).length, 1, "the running section stays open");
+	pane.setAgentRunning(false);
+	assert(pane.render(120).map(stripTerminalSequences).some((line) => line.trim() === "Total: 0 tool calls, 1 thinking block · Agent turn 7s"), "each section resets its totals");
+});
+
+test("live updates keep one cached Agent header and count each activity block once in the footer", () => {
+	const start = new Date(2026, 0, 2, 9, 0).getTime();
+	const entries = [timed("1", user("question"), start), timed("2", {
+		...assistant([{ type: "text", text: "persisted words" }, { type: "toolCall", id: "a", name: "read", arguments: {} }]),
+		model: "first-model", stopReason: "toolUse",
+	}, start + 5_000)];
+	let headerRenders = 0;
+	let branchReads = 0;
+	const countingTheme = { ...theme, fg(color, text) {
+		if (color === "warning" && text.includes("Agent")) headerRenders++;
+		return theme.fg(color, text);
+	} };
+	const pane = new ConversationPane({ ...session(entries), getBranch() { branchReads++; return entries; } }, countingTheme);
+	pane.setAgentRunning(true);
+	pane.render(80);
+	assert.equal(headerRenders, 1);
+	const live = { ...assistant([]), model: "later-model", timestamp: start + 10_000 };
+	for (const text of ["partial", "more words", "done"]) {
+		live.content = [
+			{ type: "thinking", thinking: "one" }, { type: "thinking", thinking: "two" }, { type: "text", text },
+			{ type: "toolCall", id: "b", name: "read", arguments: {} }, { type: "toolCall", id: "c", name: "read", arguments: {} },
+		];
+		pane.setLive(live);
+		const rows = pane.render(80).map(stripTerminalSequences).map((line) => line.trim());
+		assert.equal(rows.filter((line) => /^Agent \(/.test(line)).length, 1);
+		assert(rows.includes("1 tool call, 2 thinking blocks · 5s"));
+		assert(rows.includes("2 tool calls, 0 thinking blocks"));
+		assert(!rows.some((line) => line.startsWith("Total:")));
+		assert.equal(headerRenders, 1, "live messages do not re-render the section header");
+		assert.equal(branchReads, 1, "live messages do not re-read persisted history");
+	}
+	entries.push({ ...entry("3", live), timestamp: new Date(start + 20_000).toISOString() });
+	pane.render(80);
+	pane.setLive(undefined);
+	pane.setAgentRunning(false);
+	const rows = pane.render(120).map(stripTerminalSequences).map((line) => line.trim());
+	assert.equal(rows.filter((line) => /^Agent \(/.test(line)).length, 1);
+	assert.equal(rows.filter((line) => line === "done").length, 1);
+	assert(rows.includes("Total: 3 tool calls, 2 thinking blocks · Agent turn 20s"));
+	pane.invalidate();
+	assert.deepEqual(pane.render(120).map(stripTerminalSequences).map((line) => line.trim()), rows);
+});
+
 test("elapsed times follow each agent turn and precede the user's reply", () => {
 	const entries = [
 		timed("1", user("question"), T0),
@@ -493,18 +727,18 @@ test("elapsed times follow each agent turn and precede the user's reply", () => 
 	];
 	assert.deepEqual(conversationItems(entries), [
 		{ role: "user", text: "question", timestamp: T0 },
-		{ role: "activity", toolCalls: 1, thinkingBlocks: 0 },
+		{ role: "agent-start", timestamp: T0 + 5_000 },
+		{ role: "activity", toolCalls: 1, thinkingBlocks: 0, elapsedMs: 65_000 },
 		{ role: "assistant", text: "answer", timestamp: T0 + 70_000 },
-		{ role: "elapsed", turn: "agent", ms: 70_000 },
-		{ role: "elapsed", turn: "user", ms: 30_000 },
+		{ role: "agent-end", toolCalls: 1, thinkingBlocks: 0, agentMs: 70_000, userMs: 30_000 },
 		{ role: "user", text: "thanks", timestamp: T0 + 100_000 },
 	]);
 	const pane = new ConversationPane(session(entries), theme);
-	const rows = pane.render(60).map((line) => stripTerminalSequences(line).trim()).filter((line) => line.includes("turn"));
-	assert.deepEqual(rows, ["Agent turn 1m 10s · User turn 30s"], "a handoff's two turns share one line");
+	const rows = pane.render(120).map((line) => stripTerminalSequences(line).trim()).filter((line) => line.includes("turn"));
+	assert.deepEqual(rows, ["Total: 1 tool call, 0 thinking blocks · Agent turn 1m 10s · User turn 30s"], "totals and handoff timing share the section footer");
 });
 
-test("steering keeps one agent turn and queued follow-ups have no user turn", () => {
+test("steering splits sections, and queued follow-ups have no user waiting time", () => {
 	const entries = [
 		timed("1", user("start"), T0),
 		timed("2", toolUse(), T0 + 5_000),
@@ -515,23 +749,26 @@ test("steering keeps one agent turn and queued follow-ups have no user turn", ()
 		timed("6", user("next"), T0 + 21_000, T0 + 15_000),
 		timed("7", reply("ok"), T0 + 31_000),
 	];
-	const elapsed = conversationItems(entries).filter((item) => item.role === "elapsed");
-	assert.deepEqual(elapsed, [{ role: "elapsed", turn: "agent", ms: 20_000 }]);
+	const footers = conversationItems(entries).filter((item) => item.role === "agent-end");
+	assert.deepEqual(footers, [
+		{ role: "agent-end", toolCalls: 1, thinkingBlocks: 0, agentMs: 7_000 },
+		{ role: "agent-end", toolCalls: 0, thinkingBlocks: 0, agentMs: 13_000 },
+	]);
 
 	const pane = new ConversationPane(session(entries), theme);
-	const rows = () => pane.render(40).map((line) => stripTerminalSequences(line).trim()).filter((line) => line.includes("turn"));
-	assert.deepEqual(rows(), ["Agent turn 20s", "Agent turn 10s"], "an idle agent's latest turn is closed");
+	const times = () => pane.render(120).map((line) => stripTerminalSequences(line).trim()).filter((line) => line.includes("turn")).map((line) => line.split(" · ").at(-1));
+	assert.deepEqual(times(), ["Agent turn 7s", "Agent turn 13s", "Agent turn 10s"], "each user interaction bounds a section's timing");
 	pane.setAgentRunning(true);
-	assert.deepEqual(rows(), ["Agent turn 20s"], "a running agent's turn is still open");
+	assert.deepEqual(times(), ["Agent turn 7s", "Agent turn 13s"], "a running section has no footer yet");
 });
 
 test("elapsed times are appended incrementally and skip sub-second spans", () => {
 	const entries = [timed("1", user("hi"), T0), timed("2", reply("hello"), T0 + 500)];
 	const pane = new ConversationPane(session(entries), theme);
-	const rows = () => pane.render(40).map((line) => stripTerminalSequences(line).trim()).filter((line) => line.includes("turn"));
-	assert.deepEqual(rows(), []);
+	const times = () => pane.render(120).map((line) => stripTerminalSequences(line).trim()).filter((line) => line.includes("turn")).map((line) => line.split(" · ").at(-1));
+	assert.deepEqual(times(), []);
 	entries.push(timed("3", user("more"), T0 + 125_000), timed("4", reply("sure"), T0 + 3_725_000));
-	assert.deepEqual(rows(), ["User turn 2m 04s", "Agent turn 1h 00m"], "a missing agent turn leaves the user turn alone");
+	assert.deepEqual(times(), ["User turn 2m 04s", "Agent turn 1h 00m"], "a missing agent duration leaves the user waiting time alone");
 });
 
 test("elapsed durations are compact at every scale", () => {
@@ -550,7 +787,7 @@ test("pane wraps long words, lines and wide graphemes within its width", () => {
 	assert(lines.length > 9);
 	assert(lines.every((line) => visibleWidth(line) === 18));
 	assert(lines.some((line) => line.includes("\x1b[34m") && line.includes("User")));
-	assert(lines.some((line) => line.includes("\x1b[32m") && line.includes("Agent")));
+	assert(lines.some((line) => line.includes("\x1b[33m") && line.includes("Agent")));
 	assert(lines.some((line) => line.includes("new line")));
 	assert.equal(pane.render(18), lines, "an unchanged branch reuses wrapped output");
 	pane.invalidate();
