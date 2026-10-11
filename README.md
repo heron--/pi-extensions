@@ -37,10 +37,10 @@ Certainly some extensions had more intellectual engagement from me than others.
   extension tools in the shared dark house box, with readable names, a semantic
   one-line summary of each call, dimmed expandable output, and side-by-side or
   one-column diffs for edits and writes.
-- **[pi-transcript-digest](pi-transcript-digest/README.md)** — **EXPERIMENTAL** I really struggled to keep up
+- **[pi-transcript-digest](pi-transcript-digest/README.md)** — I really struggled to keep up
   with an Astra conversation with all of it's tool calls. I wanted a more compact view where I
   could just see our conversation. This exists in pi with the `/tree` command.
-  Requires fullscreen mode, which is itself experimental. I've been tuning the performance of
+  Requires fullscreen mode, the default from pi 1.0.0. I've been tuning the performance of
   this one to make sure it runs well.
 - **[pi-typewriter](pi-typewriter/README.md)** — I got motion sick when I first used Opus
   with pi because of how text streamed in as large chunks. This was one of my first
