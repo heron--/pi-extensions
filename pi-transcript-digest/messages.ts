@@ -16,16 +16,22 @@ export interface ConversationActivityItem {
 	role: "activity";
 	toolCalls: number;
 	thinkingBlocks: number;
+	elapsedMs?: number;
 }
 
-/** Wall-clock length of one side's turn: the agent working, or the user deciding what to send. */
-export interface ConversationElapsedItem {
-	role: "elapsed";
-	turn: "agent" | "user";
-	ms: number;
+export interface ConversationAgentStartItem {
+	role: "agent-start";
+	timestamp?: number;
+	model?: string;
 }
 
-export type ConversationItem = ConversationMessageItem | ConversationActivityItem | ConversationElapsedItem;
+export interface ConversationAgentEndItem extends Pick<ConversationActivityItem, "toolCalls" | "thinkingBlocks"> {
+	role: "agent-end";
+	agentMs?: number;
+	userMs?: number;
+}
+
+export type ConversationItem = ConversationMessageItem | ConversationActivityItem | ConversationAgentStartItem | ConversationAgentEndItem;
 
 export interface ConversationStats {
 	userMessages: number;
@@ -80,9 +86,13 @@ export function conversationItem(message: AgentMessage): ConversationMessageItem
 	return undefined;
 }
 
-function appendActivity(items: ConversationItem[], activity: Omit<ConversationActivityItem, "role">): void {
+function appendActivity(items: ConversationItem[], activity: PendingState, end: number | undefined): void {
 	if (activity.toolCalls === 0 && activity.thinkingBlocks === 0) return;
-	items.push({ role: "activity", toolCalls: activity.toolCalls, thinkingBlocks: activity.thinkingBlocks });
+	const duration = elapsedMs(activity.activitySince, end);
+	items.push({
+		role: "activity", toolCalls: activity.toolCalls, thinkingBlocks: activity.thinkingBlocks,
+		...(duration !== undefined ? { elapsedMs: duration } : {}),
+	});
 	activity.toolCalls = 0;
 	activity.thinkingBlocks = 0;
 }
@@ -118,28 +128,48 @@ function forEachAssistantPart(
 function appendAssistantMessage(
 	message: Extract<AgentMessage, { role: "assistant" }>,
 	items: ConversationItem[],
-	pendingActivity: Omit<ConversationActivityItem, "role">,
+	pendingActivity: PendingState,
 ): void {
 	const model = assistantModelId(message);
+	if (!pendingActivity.sectionOpen) {
+		items.push({ role: "agent-start", timestamp: message.timestamp, ...(model ? { model } : {}) });
+		pendingActivity.sectionOpen = true;
+		pendingActivity.totalToolCalls = 0;
+		pendingActivity.totalThinkingBlocks = 0;
+		pendingActivity.turnStart ??= validTime(message.timestamp);
+		pendingActivity.activitySince = validTime(message.timestamp);
+	}
 	forEachAssistantPart(message, (text) => {
-		appendActivity(items, pendingActivity);
+		const timestamp = validTime(message.timestamp);
+		appendActivity(items, pendingActivity, timestamp);
 		items.push({ role: "assistant", text, timestamp: message.timestamp, ...(model ? { model } : {}) });
+		pendingActivity.activitySince = timestamp;
 	}, (type) => {
-		if (type === "thinking") pendingActivity.thinkingBlocks++;
-		else pendingActivity.toolCalls++;
+		if (type === "thinking") {
+			pendingActivity.thinkingBlocks++;
+			pendingActivity.totalThinkingBlocks++;
+		} else {
+			pendingActivity.toolCalls++;
+			pendingActivity.totalToolCalls++;
+		}
 	});
 }
 
-interface PendingState extends Omit<ConversationActivityItem, "role"> {
-	/** When the user message that started the current agent turn was sent. */
+interface PendingState extends Pick<ConversationActivityItem, "toolCalls" | "thinkingBlocks"> {
+	/** The previous visible agent message's timestamp, or the section's first timestamp. */
+	activitySince?: number;
+	sectionOpen: boolean;
+	totalToolCalls: number;
+	totalThinkingBlocks: number;
+	/** When Pi picked up the user interaction that started the section. */
 	turnStart?: number;
-	/** When the latest agent message of the current turn was persisted. */
+	/** When the latest assistant message or tool result in the section was persisted. */
 	agentEnd?: number;
 	/** The latest agent message returned control to the user rather than waiting on tools. */
 	handedBack?: boolean;
 }
 
-// Sub-second spans are timestamp noise (or test fixtures), not a turn worth labelling.
+// Sub-second differences are timestamp noise rather than a useful displayed duration.
 const MIN_ELAPSED_MS = 1000;
 
 function validTime(value: unknown): number | undefined {
@@ -151,15 +181,23 @@ function entryTime(entry: SessionEntry): number | undefined {
 	return validTime(Date.parse(entry.timestamp));
 }
 
-function appendElapsed(items: ConversationItem[], turn: ConversationElapsedItem["turn"], start?: number, end?: number): void {
-	if (start === undefined || end === undefined || end - start < MIN_ELAPSED_MS) return;
-	items.push({ role: "elapsed", turn, ms: end - start });
+function elapsedMs(start?: number, end?: number): number | undefined {
+	return start !== undefined && end !== undefined && end - start >= MIN_ELAPSED_MS ? end - start : undefined;
 }
 
-/** Closes the agent turn once the agent has handed control back to the user. */
-function appendAgentTurn(items: ConversationItem[], pending: PendingState): void {
-	appendActivity(items, pending);
-	appendElapsed(items, "agent", pending.turnStart, pending.agentEnd);
+function closeAgentSection(items: ConversationItem[], pending: PendingState, user?: { receivedAt?: number; sentAt?: number }): void {
+	const end = user && !pending.handedBack ? user.receivedAt ?? pending.agentEnd : pending.agentEnd;
+	appendActivity(items, pending, end);
+	if (!pending.sectionOpen) return;
+	const agentMs = elapsedMs(pending.turnStart, end);
+	// A message queued before the agent finished has no waiting time of its own.
+	const userMs = user && pending.handedBack ? elapsedMs(pending.agentEnd, user.sentAt) : undefined;
+	items.push({
+		role: "agent-end", toolCalls: pending.totalToolCalls, thinkingBlocks: pending.totalThinkingBlocks,
+		...(agentMs !== undefined ? { agentMs } : {}),
+		...(userMs !== undefined ? { userMs } : {}),
+	});
+	pending.sectionOpen = false;
 }
 
 function appendConversationMessage(message: AgentMessage, items: ConversationItem[], pending: PendingState, completedAt?: number): void {
@@ -173,21 +211,11 @@ function appendConversationMessage(message: AgentMessage, items: ConversationIte
 	}
 	const item = conversationItem(message);
 	if (!item) return;
-	if (item.role !== "user") {
-		appendActivity(items, pending);
-	} else if (pending.turnStart === undefined || pending.handedBack) {
-		appendAgentTurn(items, pending);
-		// A follow-up queued while the agent was still working has no user turn of its own.
-		appendElapsed(items, "user", pending.agentEnd, validTime(message.timestamp));
-		// Persistence marks when the agent picked the message up, which for a queued
-		// follow-up is later than when it was typed.
-		pending.turnStart = completedAt ?? validTime(message.timestamp);
-		pending.agentEnd = undefined;
-		pending.handedBack = false;
-	} else {
-		// Steering mid-run: the agent never handed back, so its turn continues.
-		appendActivity(items, pending);
-	}
+	const receivedAt = completedAt ?? validTime(message.timestamp);
+	closeAgentSection(items, pending, { receivedAt, sentAt: validTime(message.timestamp) });
+	pending.turnStart = receivedAt;
+	pending.agentEnd = undefined;
+	pending.handedBack = false;
 	items.push(item);
 }
 
@@ -198,7 +226,7 @@ function buildConversation(entries: readonly SessionEntry[]): {
 } {
 	const items: ConversationItem[] = [];
 	const persisted = new Set<AgentMessage>();
-	const pendingActivity: PendingState = { toolCalls: 0, thinkingBlocks: 0 };
+	const pendingActivity: PendingState = { toolCalls: 0, thinkingBlocks: 0, sectionOpen: false, totalToolCalls: 0, totalThinkingBlocks: 0 };
 	for (const entry of entries) {
 		if (entry.type !== "message") continue;
 		persisted.add(entry.message);
@@ -212,7 +240,7 @@ export function conversationItems(entries: readonly SessionEntry[], live?: Conve
 	// Pi emits message_end before appending the message to SessionManager. The
 	// finalized message is the same object it appends, so identity avoids duplicates.
 	if (live && !persisted.has(live)) appendConversationMessage(live, items, pendingActivity);
-	appendActivity(items, pendingActivity);
+	appendActivity(items, pendingActivity, pendingActivity.agentEnd);
 	return items;
 }
 
@@ -266,10 +294,6 @@ export function formatElapsed(ms: number): string {
 	return `${Math.floor(hours / 24)}d ${String(hours % 24).padStart(2, "0")}h`;
 }
 
-function isMessageItem(item: ConversationItem): item is ConversationMessageItem {
-	return item.role === "user" || item.role === "assistant";
-}
-
 /**
  * Rows have two blank columns on each side. The layout paints the divider and
  * scrollbar over the outer column of each pair, so rows must begin and end
@@ -282,50 +306,65 @@ function paneRow(text: string, width: number): string {
 	return width <= ROW_GUTTER * 2 ? " ".repeat(width) : `${gutter}${truncateToWidth(text, width - ROW_GUTTER * 2, "", true)}${gutter}`;
 }
 
-function renderItems(messages: readonly ConversationItem[], width: number, theme: Theme, hasPriorMessage = false): string[] {
+function renderMessageHeader(message: Omit<ConversationMessageItem, "text">, width: number, theme: Theme, hasPriorMessage: boolean): string[] {
+	const lines = [paneRow("", width)];
+	if (hasPriorMessage) lines.push(paneRow("", width));
+	const contentWidth = Math.max(1, width - ROW_GUTTER * 2);
+	const label = message.role === "user" ? "User" : "Agent";
+	const color = message.role === "user" ? "syntaxType" : "warning";
+	const timestamp = messageTimestamp(message.timestamp);
+	const model = message.role === "assistant" && message.model ? ` ${theme.fg(color, `(${message.model})`)}` : "";
+	const stamp = timestamp ? ` ${theme.fg("dim", timestamp)}` : "";
+	for (const wrapped of wrapTextWithAnsi(theme.fg(color, theme.bold(label)) + model + stamp, contentWidth)) {
+		lines.push(paneRow(wrapped, width));
+	}
+	lines.push(paneRow(theme.fg(color, "─".repeat(contentWidth)), width));
+	return lines;
+}
+
+function activitySummary(activity: Omit<ConversationActivityItem, "role">, theme: Theme): string {
+	const toolCalls = `${activity.toolCalls} tool call${activity.toolCalls === 1 ? "" : "s"}`;
+	const thinkingBlocks = `${activity.thinkingBlocks} thinking block${activity.thinkingBlocks === 1 ? "" : "s"}`;
+	const duration = activity.elapsedMs !== undefined ? ` · ${formatElapsed(activity.elapsedMs)}` : "";
+	return theme.fg("success", theme.italic(toolCalls)) + theme.fg("dim", theme.italic(`, ${thinkingBlocks}${duration}`));
+}
+
+function renderItems(messages: readonly ConversationItem[], width: number, theme: Theme, hasPriorContent = false): string[] {
 	const lines: string[] = [];
 	const contentWidth = Math.max(1, width - ROW_GUTTER * 2);
-	let hasMessage = hasPriorMessage;
-	for (let index = 0; index < messages.length; index++) {
-		const message = messages[index]!;
+	let hasContent = hasPriorContent;
+	const appendSummary = (text: string) => {
+		for (const wrapped of wrapTextWithAnsi(text, contentWidth)) lines.push(paneRow(wrapped, width));
+	};
+	for (const message of messages) {
+		if (message.role === "agent-start") {
+			lines.push(...renderMessageHeader({ ...message, role: "assistant" }, width, theme, hasContent));
+			hasContent = true;
+			continue;
+		}
 		if (message.role === "activity") {
-			const toolCalls = `${message.toolCalls} tool call${message.toolCalls === 1 ? "" : "s"}`;
-			const thinkingBlocks = `${message.thinkingBlocks} thinking block${message.thinkingBlocks === 1 ? "" : "s"}`;
-			const summary = theme.fg("dim", theme.italic(`${toolCalls}, ${thinkingBlocks}`));
-			for (const wrapped of wrapTextWithAnsi(summary, contentWidth)) {
-				lines.push(paneRow(wrapped, width));
-			}
+			lines.push(paneRow("", width));
+			appendSummary(activitySummary(message, theme));
 			continue;
 		}
-		if (message.role === "elapsed") {
-			// A handoff's agent and user turns share one line.
-			const parts = [message];
-			while (messages[index + 1]?.role === "elapsed") parts.push(messages[++index] as ConversationElapsedItem);
-			const text = parts
-				.map((part) => `${part.turn === "agent" ? "Agent turn" : "User turn"} ${formatElapsed(part.ms)}`)
-				.join(" · ");
-			const summary = theme.fg("dim", theme.italic(text));
-			for (const wrapped of wrapTextWithAnsi(summary, contentWidth)) {
-				lines.push(paneRow(wrapped, width));
-			}
+		if (message.role === "agent-end") {
+			lines.push(paneRow(theme.fg("warning", "─".repeat(contentWidth)), width));
+			const elapsed = [
+				...(message.agentMs !== undefined ? [`Agent turn ${formatElapsed(message.agentMs)}`] : []),
+				...(message.userMs !== undefined ? [`User turn ${formatElapsed(message.userMs)}`] : []),
+			];
+			const time = elapsed.length ? theme.fg("dim", theme.italic(` · ${elapsed.join(" · ")}`)) : "";
+			appendSummary(theme.fg("dim", theme.italic("Total: ")) + activitySummary(message, theme) + time);
 			continue;
 		}
-
-		lines.push(paneRow("", width));
-		if (hasMessage) lines.push(paneRow("", width));
-		hasMessage = true;
-		const label = message.role === "user" ? "User" : "Agent";
-		const color = message.role === "user" ? "syntaxType" : "success";
-		const timestamp = messageTimestamp(message.timestamp);
-		const model = message.role === "assistant" && message.model ? ` ${theme.fg(color, `(${message.model})`)}` : "";
-		const stamp = timestamp ? ` ${theme.fg("dim", timestamp)}` : "";
-		for (const wrapped of wrapTextWithAnsi(theme.fg(color, theme.bold(label)) + model + stamp, contentWidth)) {
-			lines.push(paneRow(wrapped, width));
+		if (message.role === "user") {
+			lines.push(...renderMessageHeader(message, width, theme, hasContent));
+			hasContent = true;
+		} else {
+			lines.push(paneRow("", width));
 		}
 		const markdown = new Markdown(message.text, 0, 0, getMarkdownTheme());
-		for (const row of markdown.render(contentWidth)) {
-			lines.push(paneRow(row, width));
-		}
+		for (const row of markdown.render(contentWidth)) lines.push(paneRow(row, width));
 	}
 	return lines;
 }
@@ -341,7 +380,7 @@ export class ConversationPane implements Component {
 		entryCount: number;
 		lastEntry?: SessionEntry;
 		lines: string[];
-		hasVisibleMessage: boolean;
+		hasContent: boolean;
 		persisted: Set<AgentMessage>;
 		pendingActivity: PendingState;
 	};
@@ -361,7 +400,7 @@ export class ConversationPane implements Component {
 		this.revision++;
 	}
 
-	/** While the agent runs, its turn is still open and has no length to show yet. */
+	/** A running section has no closing rule or totals footer. */
 	setAgentRunning(running: boolean): void {
 		if (this.agentRunning === running) return;
 		this.agentRunning = running;
@@ -442,8 +481,8 @@ export class ConversationPane implements Component {
 					appendConversationMessage(entry.message, appendedItems, history.pendingActivity, entryTime(entry));
 				}
 				if (appendedItems.length > 0) {
-					history.lines.push(...renderItems(appendedItems, w, this.theme, history.hasVisibleMessage));
-					if (appendedItems.some(isMessageItem)) history.hasVisibleMessage = true;
+					history.lines.push(...renderItems(appendedItems, w, this.theme, history.hasContent));
+					history.hasContent = history.lines.length > 0;
 				}
 				history.entryCount += appended.length;
 				history.lastEntry = appended.at(-1) ?? history.lastEntry;
@@ -451,13 +490,14 @@ export class ConversationPane implements Component {
 			} else {
 				const branch = this.session.getBranch();
 				const { items, persisted, pendingActivity } = buildConversation(branch);
+				const rendered = renderItems(items, w, this.theme);
 				history = {
 					width: w,
 					leaf,
 					entryCount: branch.length,
 					lastEntry: branch.at(-1),
-					lines: renderItems(items, w, this.theme),
-					hasVisibleMessage: items.some(isMessageItem),
+					lines: rendered,
+					hasContent: rendered.length > 0,
 					persisted,
 					pendingActivity,
 				};
@@ -466,12 +506,14 @@ export class ConversationPane implements Component {
 		}
 
 		const tailItems: ConversationItem[] = [];
+		// The idle footer is provisional: later agent messages can extend the
+		// same section, so closing the live tail must not close persisted history.
 		const pendingActivity = { ...history.pendingActivity };
 		if (this.live && !history.persisted.has(this.live)) {
 			appendConversationMessage(this.live, tailItems, pendingActivity);
 		}
-		if (this.agentRunning) appendActivity(tailItems, pendingActivity);
-		else appendAgentTurn(tailItems, pendingActivity);
+		if (this.agentRunning) appendActivity(tailItems, pendingActivity, pendingActivity.agentEnd);
+		else closeAgentSection(tailItems, pendingActivity);
 		// Reuse one flattened output buffer so live tails never copy persisted rows.
 		let composed = this.composed;
 		if (!composed || composed.source !== history) {
@@ -485,7 +527,7 @@ export class ConversationPane implements Component {
 			composed.persistedLength = history.lines.length;
 		}
 		composed.lines.length = composed.persistedLength;
-		if (tailItems.length > 0) composed.lines.push(...renderItems(tailItems, w, this.theme, history.hasVisibleMessage));
+		if (tailItems.length > 0) composed.lines.push(...renderItems(tailItems, w, this.theme, history.hasContent));
 		if (composed.lines.length === 0) composed.lines.push(paneRow(this.theme.fg("dim", "No messages yet"), w));
 		this.cached = { width: w, leaf, revision: this.revision, lines: composed.lines };
 		return composed.lines;
