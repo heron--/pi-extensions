@@ -1,12 +1,12 @@
 # pi-transcript-digest
 
-An experimental [pi](https://github.com/earendil-works/pi-coding-agent) extension for the **fullscreen TUI**. `/transcript-digest` toggles a two-column transcript: Pi's existing feed (including tool calls, output, and its normal scrolling) on the left, and a separately scrollable conversation on the right. The editor, status, widgets, and footer remain full-width.
+A [pi](https://github.com/earendil-works/pi-coding-agent) extension for the **fullscreen TUI**. `/transcript-digest` toggles a two-column transcript: Pi's existing feed (including tool calls, output, and its normal scrolling) on the left, and a separately scrollable conversation on the right. The editor, status, widgets, and footer remain full-width.
 
 ![Fullscreen transcript digest split showing Pi's activity feed on the left and the conversation on the right](../docs/images/transcript-digest-fullscreen.png)
 
 ## Try it
 
-Link it with [`install.sh`](../README.md#install) from the repository root, then launch Pi from any directory:
+Link it with [`install.sh`](../README.md#install) from the repository root, then launch Pi from any directory. Fullscreen mode is the default from Pi 1.0.0; earlier versions need the flag:
 
 ```bash
 pi --tui-mode fullscreen
@@ -20,4 +20,4 @@ Below 36 terminal columns, the right pane is hidden; it reappears on resize. Swi
 
 ## Compatibility
 
-Fullscreen mode is required. The split is available only on supported Pi transcript layouts. Pi 0.85.1 and 0.87.1 are tested; Pi 0.84.1 lacks the mouse and scrollbar APIs used here.
+Fullscreen mode is required; it is Pi's default from 1.0.0. The split is available only on supported Pi transcript layouts. Pi 0.85.1 and 0.87.1 are tested; Pi 0.84.1 lacks the mouse and scrollbar APIs used here.
