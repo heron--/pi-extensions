@@ -779,6 +779,122 @@ test("elapsed durations are compact at every scale", () => {
 	assert.equal(formatElapsed(90_000_000), "1d 01h");
 });
 
+const askArgs = { questions: [
+	{ question: "How should `install.sh` work?", header: "Installer", options: [{ label: "Node script", description: "hidden" }, { label: "POSIX sh", description: "hidden", preview: "hidden" }] },
+	{ question: "Which extras?", header: "Extras", multiSelect: true, options: [{ label: "Settings", description: "" }, { label: "Themes", description: "" }] },
+	{ question: "Anything else?", options: [{ label: "No", description: "" }, { label: "Yes", description: "" }] },
+] };
+function ask(args = askArgs, text = "Before I start:") {
+	return { ...assistant([{ type: "thinking", thinking: "" }, ...(text ? [{ type: "text", text }] : []), { type: "toolCall", id: "q", name: "ask_user_question", arguments: args }]), stopReason: "toolUse" };
+}
+function answered(details, extra = {}) {
+	return { role: "toolResult", toolCallId: "q", toolName: "ask_user_question", content: [{ type: "text", text: "hidden" }], details, isError: false, ...extra };
+}
+const answerDetails = { cancelled: false, globalNote: "keep it short", answers: [
+	{ questionIndex: 0, question: "How should `install.sh` work?", kind: "custom", answer: "Node, typed", notes: "small" },
+	{ questionIndex: 1, question: "Which extras?", kind: "multi", answer: null, selected: ["Settings", "Themes"] },
+] };
+
+test("ask_user_question shows the questions to the agent's section and the answers as a User section", () => {
+	const entries = [
+		timed("1", user("start"), T0),
+		timed("2", toolUse(), T0 + 5_000),
+		timed("3", toolResult(), T0 + 6_000),
+		timed("4", ask(), T0 + 20_000),
+		timed("5", answered(answerDetails), T0 + 92_000),
+		timed("6", reply("done"), T0 + 150_000),
+	];
+	assert.deepEqual(conversationItems(entries), [
+		{ role: "user", text: "start", timestamp: T0 },
+		{ role: "agent-start", timestamp: T0 + 5_000 },
+		{ role: "activity", toolCalls: 1, thinkingBlocks: 1, elapsedMs: 15_000 },
+		{ role: "assistant", text: "Before I start:", timestamp: T0 + 20_000 },
+		{ role: "questions", questions: [
+			{ header: "Installer", question: "How should `install.sh` work?", options: ["Node script", "POSIX sh"], multiSelect: false },
+			{ header: "Extras", question: "Which extras?", options: ["Settings", "Themes"], multiSelect: true },
+			{ question: "Anything else?", options: ["No", "Yes"], multiSelect: false },
+		] },
+		{ role: "agent-end", toolCalls: 2, thinkingBlocks: 1, agentMs: 20_000, userMs: 72_000 },
+		{ role: "answers", declined: false, note: "keep it short", timestamp: T0 + 92_000, answers: [
+			{ label: "Installer", answer: "Node, typed", notes: "small" },
+			{ label: "Extras", answer: "Settings, Themes" },
+			{ label: "Anything else?" },
+		] },
+		{ role: "agent-start", timestamp: T0 + 150_000 },
+		{ role: "assistant", text: "done", timestamp: T0 + 150_000 },
+	]);
+
+	const pane = new ConversationPane(session(entries), theme);
+	assert.deepEqual(pane.getStats(), { userMessages: 1, agentMessages: 2, toolCalls: 2, thinkingBlocks: 1 }, "the questionnaire stays a tool call");
+	const rows = pane.render(80).map((line) => stripTerminalSequences(line).trim());
+	const from = (text) => rows.indexOf(text);
+	assert.deepEqual(rows.slice(from("? Installer"), from("Total: 2 tool calls, 1 thinking block · Agent turn 20s · User turn 1m 12s") + 1), [
+		"? Installer", "How should install.sh work?", "• Node script", "• POSIX sh", "",
+		"? Extras (select any)", "Which extras?", "• Settings", "• Themes", "",
+		"? Question", "Anything else?", "• No", "• Yes",
+		"─".repeat(76), "Total: 2 tool calls, 1 thinking block · Agent turn 20s · User turn 1m 12s",
+	]);
+	assert.deepEqual(rows.slice(from(`User · answered ${messageDate(T0 + 92_000)}`)), [
+		`User · answered ${messageDate(T0 + 92_000)}`, "─".repeat(76),
+		"Installer → Node, typed", "note: small", "Extras → Settings, Themes", "Anything else? → (no answer)", "Note: keep it short",
+		"", "", `Agent ${messageDate(T0 + 150_000)}`, "─".repeat(76), "", "done", "─".repeat(76), "Total: 0 tool calls, 0 thinking blocks · Agent turn 58s",
+	]);
+	assert(!rows.join("\n").includes("hidden"), "option descriptions, previews, and the tool's text result stay hidden");
+	const styled = pane.render(80).join("\n");
+	assert(styled.includes(theme.fg("accent", theme.bold("? Installer"))));
+	assert(styled.includes(theme.fg("syntaxType", theme.bold("Installer"))));
+	for (const width of [12, 24, 40]) assert(pane.render(width).every((line) => visibleWidth(line) === width));
+});
+
+function messageDate(at) {
+	const date = new Date(at);
+	const pad = (value) => String(value).padStart(2, "0");
+	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+test("declined questionnaires end the section, and unseen ones stay in it", () => {
+	const declined = [timed("1", user("start"), T0), timed("2", ask(), T0 + 5_000), timed("3", answered({ answers: [], cancelled: true }), T0 + 30_000)];
+	const rows = new ConversationPane(session(declined), theme).render(80).map((line) => stripTerminalSequences(line).trim());
+	assert.deepEqual(rows.slice(-2), ["─".repeat(76), "Declined to answer"]);
+	assert(rows.includes("Total: 1 tool call, 1 thinking block · Agent turn 5s · User turn 25s"));
+	const submitted = (details) => new ConversationPane(session([...declined.slice(0, 2), timed("3", answered(details), T0 + 30_000)]), theme)
+		.render(80).map((line) => stripTerminalSequences(line).trim());
+	const noteOnly = submitted({ cancelled: false, answers: [{ questionIndex: 0, question: "How should `install.sh` work?", kind: "option", answer: null, notes: "unsure" }] });
+	assert.deepEqual(noteOnly.slice(-4), ["Installer → (no answer)", "note: unsure", "Extras → (no answer)", "Anything else? → (no answer)"], "a note without a selection is a submission");
+	assert.equal(submitted({ cancelled: false, answers: [] }).at(-1), "Declined to answer", "an empty submission is a decline");
+
+	for (const result of [answered({ answers: [], cancelled: true, error: "no_ui" }), answered(undefined, { isError: true })]) {
+		const unseen = [timed("1", user("start"), T0), timed("2", ask(), T0 + 5_000), timed("3", result, T0 + 6_000), timed("4", reply("asking in chat"), T0 + 9_000)];
+		const items = conversationItems(unseen);
+		assert.deepEqual(items.slice(4).map((item) => item.role), ["questions", "notice", "assistant"], "the section stays open");
+		assert(new ConversationPane(session(unseen), theme).render(80).some((line) => stripTerminalSequences(line).includes("The questions were not shown to the user.")));
+	}
+});
+
+test("streamed questions render from partial arguments and answers append incrementally", () => {
+	const entries = [timed("1", user("start"), T0)];
+	const pane = new ConversationPane(session(entries), theme);
+	pane.setAgentRunning(true);
+	const live = ask({ questions: [{ question: "Which", options: [{ label: "A" }, {}] }, { header: "Partial" }] }, "");
+	pane.setLive(live);
+	let rows = pane.render(40).map((line) => stripTerminalSequences(line).trim());
+	assert.deepEqual(rows.slice(-3), ["? Question", "Which", "• A"]);
+	assert(rows.includes("0 tool calls, 1 thinking block"), "the questionnaire is not summarized as hidden activity");
+	assert.equal(pane.getStats().toolCalls, 1);
+
+	const question = ask();
+	pane.setLive(question);
+	entries.push(timed("2", question, T0 + 5_000));
+	pane.setLive(undefined);
+	pane.render(40);
+	entries.push(timed("3", answered(answerDetails), T0 + 30_000), timed("4", reply("done"), T0 + 40_000));
+	pane.setAgentRunning(false);
+	rows = pane.render(40);
+	const rebuilt = new ConversationPane(session(entries), theme).render(40);
+	assert.deepEqual(rows, rebuilt, "appending the answer matches a full rebuild");
+	assert(rows.map(stripTerminalSequences).some((line) => line.includes("Installer → Node, typed")));
+});
+
 test("pane wraps long words, lines and wide graphemes within its width", () => {
 	const entries = [entry("1", user("one long examplewithnobreaksinthemiddlebutplentyofletters 中文🙂\nnew line")),
 		entry("2", assistant([{ type: "text", text: "reply" }]))];

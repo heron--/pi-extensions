@@ -31,7 +31,48 @@ export interface ConversationAgentEndItem extends Pick<ConversationActivityItem,
 	userMs?: number;
 }
 
-export type ConversationItem = ConversationMessageItem | ConversationActivityItem | ConversationAgentStartItem | ConversationAgentEndItem;
+export interface ConversationQuestion {
+	header?: string;
+	question: string;
+	options: string[];
+	multiSelect: boolean;
+}
+
+/** Questions the agent put to the user with `ask_user_question`. */
+export interface ConversationQuestionsItem {
+	role: "questions";
+	questions: ConversationQuestion[];
+}
+
+export interface ConversationAnswer {
+	/** The question's header chip, or its text when it has none. */
+	label: string;
+	answer?: string;
+	notes?: string;
+}
+
+/** The user's reply to `ask_user_question`, shown as its own User section. */
+export interface ConversationAnswersItem {
+	role: "answers";
+	answers: ConversationAnswer[];
+	declined: boolean;
+	note?: string;
+	timestamp?: number;
+}
+
+export interface ConversationNoticeItem {
+	role: "notice";
+	text: string;
+}
+
+export type ConversationItem =
+	| ConversationMessageItem
+	| ConversationActivityItem
+	| ConversationAgentStartItem
+	| ConversationAgentEndItem
+	| ConversationQuestionsItem
+	| ConversationAnswersItem
+	| ConversationNoticeItem;
 
 export interface ConversationStats {
 	userMessages: number;
@@ -62,6 +103,77 @@ function storedModelId(value: unknown): string | undefined {
 
 function assistantModelId(message: Extract<AgentMessage, { role: "assistant" }>): string | undefined {
 	return storedModelId(message.responseModel) ?? storedModelId(message.model);
+}
+
+const QUESTION_TOOL = "ask_user_question";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function oneLine(value: unknown): string | undefined {
+	return typeof value === "string" ? safeText(value).replace(/\s+/g, " ").trim() || undefined : undefined;
+}
+
+function multiLine(value: unknown): string | undefined {
+	return typeof value === "string" && value.trim() ? safeText(value).trim() : undefined;
+}
+
+/** Streaming and third-party arguments may be partial, so invalid entries are skipped. */
+function askedQuestions(args: unknown): ConversationQuestion[] {
+	const questions = isRecord(args) && Array.isArray(args.questions) ? args.questions : [];
+	return questions.flatMap((value): ConversationQuestion[] => {
+		if (!isRecord(value)) return [];
+		const question = multiLine(value.question);
+		if (!question) return [];
+		const header = oneLine(value.header);
+		const options = Array.isArray(value.options)
+			? value.options.flatMap((option) => {
+				const label = isRecord(option) ? oneLine(option.label) : undefined;
+				return label ? [label] : [];
+			})
+			: [];
+		return [{ ...(header ? { header } : {}), question, options, multiSelect: value.multiSelect === true }];
+	});
+}
+
+function answerText(answer: Record<string, unknown>): string | undefined {
+	if (answer.kind === "multi") {
+		const selected = Array.isArray(answer.selected) ? answer.selected.flatMap((label) => oneLine(label) ?? []) : [];
+		return selected.length ? selected.join(", ") : undefined;
+	}
+	return multiLine(answer.answer);
+}
+
+/**
+ * Reads the questionnaire result from the tool's `details`. A result without
+ * them, or one reporting an error, means the user never saw the questions.
+ */
+function questionAnswers(
+	message: Extract<AgentMessage, { role: "toolResult" }>,
+	asked: readonly ConversationQuestion[] | undefined,
+): Omit<ConversationAnswersItem, "timestamp"> | undefined {
+	const details: unknown = message.details;
+	if (message.isError || !isRecord(details) || details.error !== undefined) return undefined;
+	if (!Array.isArray(details.answers) || typeof details.cancelled !== "boolean") return undefined;
+	const note = multiLine(details.globalNote);
+	const replies = details.answers.filter(isRecord);
+	const label = (index: number, fallback: unknown) =>
+		asked?.[index]?.header ?? oneLine(asked?.[index]?.question) ?? oneLine(fallback) ?? `Question ${index + 1}`;
+	const answer = (reply: Record<string, unknown> | undefined, index: number): ConversationAnswer => {
+		const text = reply ? answerText(reply) : undefined;
+		const notes = multiLine(reply?.notes);
+		return { label: label(index, reply?.question), ...(text ? { answer: text } : {}), ...(notes ? { notes } : {}) };
+	};
+	const answers = details.cancelled
+		? []
+		: asked?.length
+			? asked.map((_question, index) => answer(replies.find((reply) => reply.questionIndex === index), index))
+			: replies.map((reply, index) => answer(reply, typeof reply.questionIndex === "number" ? reply.questionIndex : index));
+	// Matches the tool's reply to the agent: any answer entry, even one with only
+	// a note or no input, counts as a submission.
+	const declined = details.cancelled || (replies.length === 0 && !note);
+	return { role: "answers", answers, declined, ...(note ? { note } : {}) };
 }
 
 export function conversationItem(message: AgentMessage): ConversationMessageItem | undefined {
@@ -106,6 +218,7 @@ function forEachAssistantPart(
 	message: Extract<AgentMessage, { role: "assistant" }>,
 	onText: (text: string) => void,
 	onActivity: (type: "thinking" | "toolCall") => void,
+	onQuestions: (id: string, questions: ConversationQuestion[]) => void,
 ): void {
 	let textBlocks: string[] = [];
 	const flush = () => {
@@ -117,6 +230,9 @@ function forEachAssistantPart(
 	for (const block of message.content) {
 		if (block.type === "text") {
 			textBlocks.push(block.text);
+		} else if (block.type === "toolCall" && block.name === QUESTION_TOOL) {
+			flush();
+			onQuestions(block.id, askedQuestions(block.arguments));
 		} else if (block.type === "thinking" || block.type === "toolCall") {
 			flush();
 			onActivity(block.type);
@@ -152,6 +268,15 @@ function appendAssistantMessage(
 			pendingActivity.toolCalls++;
 			pendingActivity.totalToolCalls++;
 		}
+	}, (id, questions) => {
+		// The questions are shown rather than summarized, so they count toward
+		// the section's tool calls but not the activity between visible entries.
+		const timestamp = validTime(message.timestamp);
+		appendActivity(items, pendingActivity, timestamp);
+		pendingActivity.totalToolCalls++;
+		pendingActivity.questions.set(id, questions);
+		if (questions.length > 0) items.push({ role: "questions", questions });
+		pendingActivity.activitySince = timestamp;
 	});
 }
 
@@ -167,6 +292,12 @@ interface PendingState extends Pick<ConversationActivityItem, "toolCalls" | "thi
 	agentEnd?: number;
 	/** The latest agent message returned control to the user rather than waiting on tools. */
 	handedBack?: boolean;
+	/** Unanswered `ask_user_question` calls by tool call id. */
+	questions: Map<string, ConversationQuestion[]>;
+}
+
+function pendingState(): PendingState {
+	return { toolCalls: 0, thinkingBlocks: 0, sectionOpen: false, totalToolCalls: 0, totalThinkingBlocks: 0, questions: new Map() };
 }
 
 // Sub-second differences are timestamp noise rather than a useful displayed duration.
@@ -200,9 +331,32 @@ function closeAgentSection(items: ConversationItem[], pending: PendingState, use
 	pending.sectionOpen = false;
 }
 
+/** Answers end the agent section like a user message; the agent was waiting on them. */
+function appendAnswers(answers: Omit<ConversationAnswersItem, "timestamp">, items: ConversationItem[], pending: PendingState, answeredAt?: number): void {
+	pending.handedBack = true;
+	closeAgentSection(items, pending, { receivedAt: answeredAt, sentAt: answeredAt });
+	pending.turnStart = answeredAt;
+	pending.agentEnd = undefined;
+	pending.handedBack = false;
+	items.push({ ...answers, ...(answeredAt !== undefined ? { timestamp: answeredAt } : {}) });
+}
+
 function appendConversationMessage(message: AgentMessage, items: ConversationItem[], pending: PendingState, completedAt?: number): void {
 	if (message.role === "assistant") {
 		appendAssistantMessage(message, items, pending);
+	}
+	if (message.role === "toolResult" && message.toolName === QUESTION_TOOL) {
+		const asked = pending.questions.get(message.toolCallId);
+		pending.questions.delete(message.toolCallId);
+		const answers = questionAnswers(message, asked);
+		if (answers) {
+			appendAnswers(answers, items, pending, validTime(message.timestamp) ?? completedAt);
+			return;
+		}
+		if (asked?.length) {
+			appendActivity(items, pending, completedAt ?? validTime(message.timestamp));
+			items.push({ role: "notice", text: "The questions were not shown to the user." });
+		}
 	}
 	if (message.role === "assistant" || message.role === "toolResult") {
 		if (pending.turnStart !== undefined) pending.agentEnd = completedAt ?? validTime(message.timestamp) ?? pending.agentEnd;
@@ -226,7 +380,7 @@ function buildConversation(entries: readonly SessionEntry[]): {
 } {
 	const items: ConversationItem[] = [];
 	const persisted = new Set<AgentMessage>();
-	const pendingActivity: PendingState = { toolCalls: 0, thinkingBlocks: 0, sectionOpen: false, totalToolCalls: 0, totalThinkingBlocks: 0 };
+	const pendingActivity = pendingState();
 	for (const entry of entries) {
 		if (entry.type !== "message") continue;
 		persisted.add(entry.message);
@@ -267,7 +421,7 @@ function countMessage(message: AgentMessage, stats: ConversationStatsState): voi
 		forEachAssistantPart(message, () => stats.agentMessages++, (type) => {
 			if (type === "thinking") stats.thinkingBlocks++;
 			else stats.toolCalls++;
-		});
+		}, () => stats.toolCalls++);
 	}
 }
 
@@ -306,7 +460,12 @@ function paneRow(text: string, width: number): string {
 	return width <= ROW_GUTTER * 2 ? " ".repeat(width) : `${gutter}${truncateToWidth(text, width - ROW_GUTTER * 2, "", true)}${gutter}`;
 }
 
-function renderMessageHeader(message: Omit<ConversationMessageItem, "text">, width: number, theme: Theme, hasPriorMessage: boolean): string[] {
+function renderMessageHeader(
+	message: Omit<ConversationMessageItem, "text"> & { detail?: string },
+	width: number,
+	theme: Theme,
+	hasPriorMessage: boolean,
+): string[] {
 	const lines = [paneRow("", width)];
 	if (hasPriorMessage) lines.push(paneRow("", width));
 	const contentWidth = Math.max(1, width - ROW_GUTTER * 2);
@@ -315,7 +474,8 @@ function renderMessageHeader(message: Omit<ConversationMessageItem, "text">, wid
 	const timestamp = messageTimestamp(message.timestamp);
 	const model = message.role === "assistant" && message.model ? ` ${theme.fg(color, `(${message.model})`)}` : "";
 	const stamp = timestamp ? ` ${theme.fg("dim", timestamp)}` : "";
-	for (const wrapped of wrapTextWithAnsi(theme.fg(color, theme.bold(label)) + model + stamp, contentWidth)) {
+	const detail = message.detail ? ` ${theme.fg("dim", `· ${message.detail}`)}` : "";
+	for (const wrapped of wrapTextWithAnsi(theme.fg(color, theme.bold(label)) + model + detail + stamp, contentWidth)) {
 		lines.push(paneRow(wrapped, width));
 	}
 	lines.push(paneRow(theme.fg(color, "─".repeat(contentWidth)), width));
@@ -329,6 +489,43 @@ function activitySummary(activity: Omit<ConversationActivityItem, "role">, theme
 	return theme.fg("success", theme.italic(toolCalls)) + theme.fg("dim", theme.italic(`, ${thinkingBlocks}${duration}`));
 }
 
+/** Wraps `text` below `first`, continuing at `indent` columns. */
+function hangingRows(first: string, text: string, indent: number, contentWidth: number): string[] {
+	const rest = " ".repeat(indent);
+	return wrapTextWithAnsi(text, Math.max(1, contentWidth - indent)).map((row, index) => (index === 0 ? first : rest) + row);
+}
+
+function renderQuestions(item: ConversationQuestionsItem, contentWidth: number, theme: Theme): string[] {
+	const rows: string[] = [];
+	const indent = Math.min(2, contentWidth - 1);
+	for (const [index, question] of item.questions.entries()) {
+		if (index > 0) rows.push("");
+		const mode = question.multiSelect ? theme.fg("dim", " (select any)") : "";
+		rows.push(...wrapTextWithAnsi(theme.fg("accent", theme.bold(`? ${question.header ?? "Question"}`)) + mode, contentWidth));
+		const markdown = new Markdown(question.question, 0, 0, getMarkdownTheme());
+		for (const row of markdown.render(Math.max(1, contentWidth - indent))) rows.push(" ".repeat(indent) + row);
+		for (const option of question.options) {
+			rows.push(...hangingRows(`${" ".repeat(indent)}${theme.fg("dim", "•")} `, option, indent + 2, contentWidth));
+		}
+	}
+	return rows;
+}
+
+function renderAnswers(item: ConversationAnswersItem, contentWidth: number, theme: Theme): string[] {
+	const rows: string[] = [];
+	const subdued = (text: string) => theme.fg("dim", theme.italic(text));
+	if (item.declined) rows.push(...wrapTextWithAnsi(subdued("Declined to answer"), contentWidth));
+	else {
+		for (const answer of item.answers) {
+			const reply = answer.answer ?? subdued("(no answer)");
+			rows.push(...wrapTextWithAnsi(`${theme.fg("syntaxType", theme.bold(answer.label))} ${theme.fg("dim", "→")} ${reply}`, contentWidth));
+			if (answer.notes) rows.push(...hangingRows("  ", subdued(`note: ${answer.notes}`), 2, contentWidth));
+		}
+	}
+	if (item.note) rows.push(...wrapTextWithAnsi(subdued(`Note: ${item.note}`), contentWidth));
+	return rows;
+}
+
 function renderItems(messages: readonly ConversationItem[], width: number, theme: Theme, hasPriorContent = false): string[] {
 	const lines: string[] = [];
 	const contentWidth = Math.max(1, width - ROW_GUTTER * 2);
@@ -337,6 +534,22 @@ function renderItems(messages: readonly ConversationItem[], width: number, theme
 		for (const wrapped of wrapTextWithAnsi(text, contentWidth)) lines.push(paneRow(wrapped, width));
 	};
 	for (const message of messages) {
+		if (message.role === "questions") {
+			lines.push(paneRow("", width));
+			for (const row of renderQuestions(message, contentWidth, theme)) lines.push(paneRow(row, width));
+			continue;
+		}
+		if (message.role === "answers") {
+			lines.push(...renderMessageHeader({ role: "user", timestamp: message.timestamp, detail: "answered" }, width, theme, hasContent));
+			hasContent = true;
+			for (const row of renderAnswers(message, contentWidth, theme)) lines.push(paneRow(row, width));
+			continue;
+		}
+		if (message.role === "notice") {
+			lines.push(paneRow("", width));
+			appendSummary(theme.fg("dim", theme.italic(message.text)));
+			continue;
+		}
 		if (message.role === "agent-start") {
 			lines.push(...renderMessageHeader({ ...message, role: "assistant" }, width, theme, hasContent));
 			hasContent = true;
@@ -508,7 +721,7 @@ export class ConversationPane implements Component {
 		const tailItems: ConversationItem[] = [];
 		// The idle footer is provisional: later agent messages can extend the
 		// same section, so closing the live tail must not close persisted history.
-		const pendingActivity = { ...history.pendingActivity };
+		const pendingActivity = { ...history.pendingActivity, questions: new Map(history.pendingActivity.questions) };
 		if (this.live && !history.persisted.has(this.live)) {
 			appendConversationMessage(this.live, tailItems, pendingActivity);
 		}
