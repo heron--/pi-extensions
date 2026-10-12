@@ -857,6 +857,11 @@ test("declined questionnaires end the section, and unseen ones stay in it", () =
 	const rows = new ConversationPane(session(declined), theme).render(80).map((line) => stripTerminalSequences(line).trim());
 	assert.deepEqual(rows.slice(-2), ["─".repeat(76), "Declined to answer"]);
 	assert(rows.includes("Total: 1 tool call, 1 thinking block · Agent turn 5s · User turn 25s"));
+	const submitted = (details) => new ConversationPane(session([...declined.slice(0, 2), timed("3", answered(details), T0 + 30_000)]), theme)
+		.render(80).map((line) => stripTerminalSequences(line).trim());
+	const noteOnly = submitted({ cancelled: false, answers: [{ questionIndex: 0, question: "How should `install.sh` work?", kind: "option", answer: null, notes: "unsure" }] });
+	assert.deepEqual(noteOnly.slice(-4), ["Installer → (no answer)", "note: unsure", "Extras → (no answer)", "Anything else? → (no answer)"], "a note without a selection is a submission");
+	assert.equal(submitted({ cancelled: false, answers: [] }).at(-1), "Declined to answer", "an empty submission is a decline");
 
 	for (const result of [answered({ answers: [], cancelled: true, error: "no_ui" }), answered(undefined, { isError: true })]) {
 		const unseen = [timed("1", user("start"), T0), timed("2", ask(), T0 + 5_000), timed("3", result, T0 + 6_000), timed("4", reply("asking in chat"), T0 + 9_000)];

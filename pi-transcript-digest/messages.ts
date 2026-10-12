@@ -170,7 +170,10 @@ function questionAnswers(
 		: asked?.length
 			? asked.map((_question, index) => answer(replies.find((reply) => reply.questionIndex === index), index))
 			: replies.map((reply, index) => answer(reply, typeof reply.questionIndex === "number" ? reply.questionIndex : index));
-	return { role: "answers", answers, declined: details.cancelled || (answers.every((item) => !item.answer) && !note), ...(note ? { note } : {}) };
+	// Matches the tool's reply to the agent: any answer entry, even one with only
+	// a note or no input, counts as a submission.
+	const declined = details.cancelled || (replies.length === 0 && !note);
+	return { role: "answers", answers, declined, ...(note ? { note } : {}) };
 }
 
 export function conversationItem(message: AgentMessage): ConversationMessageItem | undefined {
