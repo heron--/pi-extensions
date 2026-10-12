@@ -2,8 +2,9 @@
 """Check digest message headers in real Pi screens without model calls.
 
 Run: python3 pi-transcript-digest/tui.test.py [--output-dir /tmp/digest-screens]
-Requires pyte. Uses scratch settings and a synthetic session, toggles the split
-with real keystrokes, and checks colors and rules across terminal resizes.
+Requires pyte. Uses scratch settings and synthetic sessions, toggles the split
+with real keystrokes, and checks colors and rules across terminal resizes. A
+second session checks how an ask_user_question exchange splits the sections.
 """
 import argparse
 import codecs
@@ -29,7 +30,7 @@ USAGE = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens"
          "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0}}
 
 
-def seed(cwd):
+def seed(cwd, questions=False):
     entries = [{"type": "session", "version": 3, "id": str(uuid.uuid4()),
                 "timestamp": "2026-01-02T09:05:00Z", "cwd": str(cwd)}]
     parent = None
@@ -55,6 +56,21 @@ def seed(cwd):
               "timestamp": at}, at)
 
     push({"role": "user", "content": "USER_BODY", "timestamp": start}, start)
+    if questions:
+        asked = {"questions": [{"question": "QUESTION_TEXT?", "header": "Installer", "options": [
+            {"label": "OPTION_A", "description": "HIDDEN_DESCRIPTION"},
+            {"label": "OPTION_B", "description": "HIDDEN_DESCRIPTION", "preview": "HIDDEN_PREVIEW"}]}]}
+        assistant([{"type": "text", "text": "ASK_BODY"},
+                   {"type": "toolCall", "id": "q", "name": "ask_user_question", "arguments": asked}],
+                  "toolUse", start + 60_000)
+        answered = start + 150_000
+        push({"role": "toolResult", "toolCallId": "q", "toolName": "ask_user_question",
+              "content": [{"type": "text", "text": "HIDDEN_TOOL_RESULT"}], "isError": False, "timestamp": answered,
+              "details": {"cancelled": False, "answers": [{"questionIndex": 0, "question": "QUESTION_TEXT?",
+                                                           "kind": "option", "answer": "OPTION_A", "notes": "NOTE_TEXT"}]}},
+             answered)
+        assistant([{"type": "text", "text": "AFTER_BODY"}], "stop", answered + 30_000)
+        return "\n".join(json.dumps(entry) for entry in entries) + "\n"
     assistant([{"type": "thinking", "thinking": "HIDDEN_INITIAL_THINKING"},
                {"type": "thinking", "thinking": "HIDDEN_SECOND_THINKING"}], "toolUse", start + 60_000)
     for index, text in enumerate(["AGENT_BODY", "MIDDLE_BODY"], 1):
@@ -68,7 +84,7 @@ def seed(cwd):
     return "\n".join(json.dumps(entry) for entry in entries) + "\n"
 
 
-def run(output_dir, theme_path=None):
+def run(output_dir, theme_path=None, questions=False):
     with tempfile.TemporaryDirectory(prefix="pi-digest-tui-") as scratch:
         cwd = Path(scratch)
         agent = cwd / "agent"
@@ -86,6 +102,7 @@ export default function(pi) {
       render: (width) => [truncateToWidth([
         theme.fg("syntaxType", "USER_COLOR"), theme.fg("warning", "AGENT_COLOR"),
         theme.fg("success", "ACTIVITY_COLOR"), theme.fg("dim", "TIME_COLOR"),
+        theme.fg("accent", "ACCENT_COLOR"),
       ].join(" "), width)],
       invalidate() {},
     }));
@@ -93,7 +110,7 @@ export default function(pi) {
 }
 ''')
         session = cwd / "session.jsonl"
-        session.write_text(seed(cwd))
+        session.write_text(seed(cwd, questions))
         pid, fd = pty.fork()
         if pid == 0:
             os.chdir(cwd)
@@ -211,11 +228,46 @@ export default function(pi) {
             col = split + right[stamp].index("2026-01-02")
             assert screen.buffer[stamp][col].fg == colors["time"], "timestamps remain dim"
 
+        def check_questions():
+            split = (width - 1) // 2
+            right = [line[split:] for line in screen.display]
+            body = [line[2:-2].strip() for line in right]
+            assert not any("HIDDEN_" in line for line in right), capture()
+            heading = next(row for row, line in enumerate(body) if line == "? Installer")
+            col = split + right[heading].index("? Installer")
+            assert screen.buffer[heading][col].fg == colors["accent"] and screen.buffer[heading][col].bold, \
+                "question headers stand out in the accent color"
+            assert body[heading + 1:heading + 4] == ["QUESTION_TEXT?", "• OPTION_A", "• OPTION_B"], capture()
+            asked = next(row for row, line in enumerate(body) if line.startswith("Agent"))
+            ask_body = next(row for row, line in enumerate(body) if line == "ASK_BODY")
+            assert asked < ask_body < heading, "the questions follow the agent's text in its section"
+            answers = next(row for row, line in enumerate(body) if line.startswith("User · answered"))
+            total = "".join(body[heading + 4:answers]).replace(" ", "")
+            assert "Total:1toolcall,0thinkingblocks·Agentturn1m30s·Userturn1m00s" in total, capture()
+            assert screen.buffer[answers][split + 2].fg == colors["User"], "answers are a User section"
+            reply = next(row for row, line in enumerate(body) if "→" in line)
+            col = split + right[reply].index("Installer")
+            assert screen.buffer[reply][col].fg == colors["User"] and screen.buffer[reply][col].bold
+            after = next(row for row, line in enumerate(body) if line == "AFTER_BODY")
+            agent = next(row for row in range(reply, after) if body[row].startswith("Agent"))
+            assert "".join(body[reply:agent]).replace(" ", "") == "Installer→OPTION_Anote:NOTE_TEXT", capture()
+
         try:
-            receive_until(lambda text: "TIME_COLOR" in text and "FINAL_BODY" in text)
+            receive_until(lambda text: "TIME_COLOR" in text and ("FINAL_BODY" in text or "AFTER_BODY" in text))
             colors = {"User": color_at("USER_COLOR"), "Agent": color_at("AGENT_COLOR"),
-                      "activity": color_at("ACTIVITY_COLOR"), "time": color_at("TIME_COLOR")}
-            assert len(set(colors.values())) == 4, colors
+                      "activity": color_at("ACTIVITY_COLOR"), "time": color_at("TIME_COLOR"),
+                      "accent": color_at("ACCENT_COLOR")}
+            assert len({colors[key] for key in ["User", "Agent", "activity", "time"]}) == 4, colors
+            if questions:
+                command("/transcript-digest on")
+                for columns in [160, 60, 40]:
+                    resize(columns)
+                    receive_until(lambda text: "Transcript Digest" in text and "AFTER_BODY" in text and "OPTION_B" in text)
+                    check_questions()
+                    (output_dir / f"questions-{width}.txt").write_text(capture())
+                    print(f"PASS digest questions at {width} columns", flush=True)
+                assert b"exceeds terminal width" not in raw
+                return
             command("/transcript-digest on")
             receive_until(lambda text: "Transcript Digest" in text and "1 tool call," in text)
             check_digest()
@@ -243,7 +295,7 @@ export default function(pi) {
             assert b"Failed to load extension" not in raw
             print("PASS hide, resize restore, and command toggles", flush=True)
         finally:
-            (output_dir / "digest.ansi").write_bytes(raw)
+            (output_dir / ("questions.ansi" if questions else "digest.ansi")).write_bytes(raw)
             os.kill(pid, signal.SIGKILL)
             os.waitpid(pid, 0)
             os.close(fd)
@@ -257,4 +309,6 @@ if __name__ == "__main__":
     output = options.output_dir or Path(tempfile.mkdtemp(prefix="pi-digest-screens-"))
     output.mkdir(parents=True, exist_ok=True)
     print(f"Screens: {output}", flush=True)
-    run(output, options.theme.resolve() if options.theme else None)
+    theme = options.theme.resolve() if options.theme else None
+    run(output, theme)
+    run(output, theme, questions=True)
