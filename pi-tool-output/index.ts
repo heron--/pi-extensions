@@ -33,7 +33,8 @@ import {
 	type ToolOutputAdapter,
 	type ToolOutputApi,
 } from "./decorate.ts";
-import { paint, TOOL_OUTPUT_COLORS, type ColorSpec } from "./colors.ts";
+import { type Ink, paint } from "../lib/colors.ts";
+import { loadToolOutputColors, TOOL_OUTPUT_COLORS, useToolOutputColors } from "./colors.ts";
 import {
 	countNonEmptyLines,
 	displayToolName,
@@ -220,7 +221,7 @@ function renderPreview(
 	options: ToolRenderResultOptions,
 	config: ToolOutputConfig,
 	theme: Theme,
-	color: ColorSpec = TOOL_OUTPUT_COLORS.result.output,
+	color: Ink = TOOL_OUTPUT_COLORS.result.output,
 	footer?: string,
 ): Component {
 	if (lines.length === 0 && !footer) return emptyResult();
@@ -921,6 +922,7 @@ function configSummary(config: ToolOutputConfig): string {
 export default function toolOutputExtension(pi: ExtensionAPI): void {
 	const loaded = loadToolOutputConfig();
 	let config = loaded.config;
+	useToolOutputColors(loadToolOutputColors(config.colors).palette);
 	let cleanupDecorationApi: (() => void) | undefined;
 
 	if (config.enabled) {
@@ -930,6 +932,7 @@ export default function toolOutputExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_start", (_event, ctx) => {
 		if (loaded.error) ctx.ui.notify(loaded.error, "warning");
+		if (loaded.problems.length > 0) ctx.ui.notify(`tool-output config: ${loaded.problems.join("; ")}.`, "warning");
 		if (config.enabled && ctx.mode === "tui") patchToolExecutionRendering(() => config);
 	});
 

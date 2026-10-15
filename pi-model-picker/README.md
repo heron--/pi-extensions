@@ -18,15 +18,9 @@ level in one flow.
   after the mapped ones.
 - **Stage 2** — pick a reasoning level from the levels the selected model
   actually supports (derived from `reasoning` + `thinkingLevelMap`), with a
-  colour-coded intensity gauge. The gauge's filled cells and the level name
-  are painted as one shared-scheme run from
-  [`lib/thinking-colors.ts`](../README.md#libthinking-colorsts), so for
-  `high`/`xhigh`/`max` the bar is part of the rainbow — the `max` gloss even
-  sweeps across gauge and name, resting on the plain rainbow between passes,
-  governed by the same
-  [`/context-footer animate`](../pi-context-footer/README.md) preference as
-  the footer. Shows the provider-mapped value for the highlighted level. Esc
-  goes **back to stage 1**.
+  intensity gauge. The gauge and the level's name are painted as one run of
+  the [shared thinking scheme](../README.md#libthinking-colorsts). Shows the
+  provider-mapped value for the highlighted level. Esc goes **back to stage 1**.
 - **Stage 2 for DeepSeek-family models** — DeepSeek does not reason with an
   OpenAI-style effort ladder; its API takes a single toggle
   (`thinking: { type: "enabled" | "disabled" }`). Those models get stage 2 in

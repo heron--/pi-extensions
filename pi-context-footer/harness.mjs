@@ -6,25 +6,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
-
-const THEME_COLORS = [
-	"accent", "border", "borderAccent", "borderMuted", "success", "error", "warning", "muted", "dim", "text",
-	"thinkingText", "mdLink", "syntaxType", "syntaxFunction", "syntaxNumber", "thinkingOff", "thinkingMinimal",
-	"thinkingLow", "thinkingMedium", "thinkingHigh", "thinkingXhigh", "thinkingMax", "bashMode", "syntaxKeyword",
-];
-
-/** A theme like pi's in the one way that matters: unknown colors throw. */
-export function fakeTheme(extraColors = []) {
-	const known = [...THEME_COLORS, ...extraColors];
-	return {
-		fg(color, text) {
-			const index = known.indexOf(color);
-			if (index < 0) throw new Error(`Unknown theme color: ${color}`);
-			return `\x1b[38;5;${index + 1}m${text}\x1b[39m`;
-		},
-		getBgAnsi: () => "\x1b[48;5;236m",
-	};
-}
+import { testTheme } from "../lib/test-theme.mjs";
 
 /** Every escape sequence — CSI, OSC and the rest — for comparing visible text. */
 const ESCAPES = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[PX^_][^\x1b]*\x1b\\|\x1b./g;
@@ -121,7 +103,7 @@ export async function startFooter(modulePath, options = {}) {
 		notifications: [],
 		renderRequests: 0,
 	};
-	const theme = options.theme ?? fakeTheme();
+	const theme = options.theme ?? testTheme();
 	const branchListeners = new Set();
 	const provider = {
 		getGitBranch: () => state.branch,

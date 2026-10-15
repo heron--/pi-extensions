@@ -96,10 +96,13 @@ test("any problem rejects the whole layout", () => {
 	rejected({ topLeft: ["tokens"] }, /"tokens" is already selected/);
 });
 
-test("colors are checked against the theme", () => {
-	const isColor = (name) => name === "accent" || name === "warning";
-	assert.equal(parseLayout({ topLeft: [{ status: "x", color: "warning" }] }, isColor).problems.length, 0);
-	assert.match(parseLayout({ topLeft: [{ status: "x", color: "chartreuse" }] }, isColor).problems[0], /theme color/);
+test("a status color is a theme color name or a color value", () => {
+	for (const color of ["warning", "#abc", "oklch(80% 0.1 300)", 42]) {
+		assert.equal(parseLayout({ topLeft: [{ status: "x", color }] }).problems.length, 0, String(color));
+	}
+	for (const color of ["chartreuse", "emphasisText", "userMessageBg", 256, ""]) {
+		assert.match(parseLayout({ topLeft: [{ status: "x", color }] }).problems[0], /"color" must be a theme color name/, String(color));
+	}
 });
 
 test("statusFormatters is an optional module path; invalid values do not discard the layout", () => {
@@ -139,7 +142,7 @@ test("readFooterConfig: missing, malformed and partial files", () => {
 		assert.equal(readFooterConfig(file).layout, DEFAULT_LAYOUT);
 
 		writeFileSync(file, "{ not json");
-		assert.deepEqual(readFooterConfig(file), { layout: null, hostname: null, statusFormatters: undefined, problems: ["config.json is not valid JSON"] });
+		assert.deepEqual(readFooterConfig(file), { layout: null, hostname: null, colors: null, statusFormatters: undefined, problems: ["config.json is not valid JSON"] });
 
 		writeFileSync(file, JSON.stringify({ animate: false, layout: { topLeft: ["nope"] }, hostname: { show: true } }));
 		const load = readFooterConfig(file);

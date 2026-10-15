@@ -80,8 +80,7 @@ test("a pinned layout ignores an unrelated status; a remaining-statuses item sho
 });
 
 test("presentation: normalized repaints, producer keeps styling, both obey the width limit", async () => {
-	const theme = (await import("./harness.mjs")).fakeTheme();
-	const warning = theme.fg("warning", "x").split("x")[0];
+	const warning = (await import("../lib/test-theme.mjs")).testTheme().getFgAnsi("warning");
 	const host = await start({
 		config: {
 			layout: {

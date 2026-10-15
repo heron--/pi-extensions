@@ -382,11 +382,11 @@ void (async () => {
 	tones.length = 0;
 	tools.get("read").renderCall({ path: "file.ts" }, coloredTheme, { ...context, state: {} }).render(100);
 	assert.ok(tones.some(([color, text]) => color === "success" && text === "path"));
-	assert.ok(tones.some(([color, text]) => color === "emphasisText" && text === "file.ts"));
+	assert.ok(tones.some(([color, text]) => color === "accent" && text === "file.ts"));
 	tones.length = 0;
 	tools.get("read").renderCall({ path: "file.ts", offset: "not-a-number" }, coloredTheme, { ...context, state: {} }).render(100);
 	assert.ok(tones.some(([color, text]) => color === "accent" && text === "offset"));
-	assert.ok(tones.some(([color, text]) => color === "emphasisText" && text === "not-a-number"));
+	assert.ok(tones.some(([color, text]) => color === "accent" && text === "not-a-number"));
 	assert.ok(tones.some(([color]) => color === "success")); // Frame and summary keys stay green.
 
 	// An expanded multi-line value keeps the call's tone on every line, so a
@@ -401,7 +401,7 @@ void (async () => {
 		const painted = tones.filter(([, text]) => text === line);
 		assert.ok(painted.length > 0, `expanded body line not rendered: ${line}`);
 		assert.ok(
-			painted.every(([color]) => color === "emphasisText"),
+			painted.every(([color]) => color === "accent"),
 			`expanded body line ${JSON.stringify(line)} used ${painted.map(([color]) => color).join("/")}`,
 		);
 	}
@@ -798,6 +798,23 @@ void (async () => {
 		}
 		await modeHandlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, {});
 	}
+	// Configured colors reach the renderers; invalid ones are reported.
+	configModule.saveToolOutputConfig({ ...configModule.DEFAULT_TOOL_OUTPUT_CONFIG, colors: { call: { summaryValue: "warning" } } });
+	const stored = JSON.parse(readFileSync(path.join(testAgentDir, "pi-tool-output", "config.json"), "utf8"));
+	writeFileSync(path.join(testAgentDir, "pi-tool-output", "config.json"), JSON.stringify({ ...stored, colors: { ...stored.colors, box: { frame: "nope" } } }));
+	const colorTools = new Map();
+	const colorHandlers = new Map();
+	factory({
+		registerTool(tool) { colorTools.set(tool.name, tool); }, registerCommand() {}, registerShortcut() {},
+		on(name, handler) { colorHandlers.set(name, handler); },
+	});
+	const notices = [];
+	await colorHandlers.get("session_start")({ type: "session_start" }, { mode: "tui", ui: { theme, notify: (message) => notices.push(message) } });
+	assert.match(notices.join("\n"), /"colors\.box\.frame" must be a theme color name/);
+	tones.length = 0;
+	colorTools.get("read").renderCall({ path: "file.ts" }, coloredTheme, { ...context, state: {} }).render(100);
+	assert.ok(tones.some(([color, text]) => color === "warning" && text === "file.ts"));
+	await colorHandlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, {});
 	toolExecutionPrototype.getCallRenderer = originalGetCallRenderer;
 	console.log("tool-output integration fixture passed");
 })()

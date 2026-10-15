@@ -59,6 +59,13 @@ pi tears the whole TUI down when a rendered row is wider than the terminal.
 Anything that decorates rendered rows pays for its width by rendering the inner
 content narrower, never by prefixing rows that are already full width.
 
+## Colors
+
+Name colors by pi's theme tokens. A theme may define only pi's own tokens, so
+a color pi has no token for is a role in the extension's palette
+(`lib/colors.ts`): it defaults to a token, and the owner overrides it under
+`colors` in the extension's config.
+
 ## Performance
 
 Measure before optimising, and measure with the checked-in synthetic profilers

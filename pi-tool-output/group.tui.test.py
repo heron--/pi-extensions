@@ -5,7 +5,8 @@ Run: python3 pi-tool-output/group.tui.test.py [--output-dir /tmp/tool-output-gro
 Seeds a session with a three-call turn, assistant text, then a background-task
 call, and checks decoded screens for: one box per run, size lines instead of
 output, the hint only under the most recent call, Alt+O expanding only that
-call, a mouse click expanding only the clicked call, and Ctrl+O for all.
+call, a mouse click expanding only the clicked call, Ctrl+O for all, and
+configured colors.
 """
 import argparse
 import codecs
@@ -75,6 +76,9 @@ def run(width, output_dir):
         agent = cwd / "agent"
         agent.mkdir()
         (agent / "settings.json").write_text(json.dumps({"theme": "dark", "quietStartup": True}))
+        (agent / "pi-tool-output").mkdir()
+        (agent / "pi-tool-output" / "config.json").write_text(json.dumps(
+            {"colors": {"group": {"name": "#ff8700"}, "call": {"summaryValue": "oklch(80% 0.1 230)"}}}))
         fixtures = cwd / "fixtures.ts"
         fixtures.write_text('''
 import { Type } from "typebox";
@@ -151,6 +155,9 @@ export default function(pi) {
                         return screen.buffer[row][col].fg
                 raise AssertionError(needle)
             assert fg_at("+2") != fg_at("-1"), "added and removed have their own colors"
+            assert fg_at("Read File") == "ff8700", f"configured name color: {fg_at('Read File')}"
+            assert fg_at("lib/box.ts") not in (fg_at("Read File"), fg_at("path:"), "default"), "configured value color"
+            assert b"tool-output config" not in raw, "unexpected config warning"
             assert "UNDECORATED" not in collapsed, collapsed
             assert not any(out in collapsed for out in outputs), collapsed
             assert collapsed.count("ctrl+o") == 1, collapsed

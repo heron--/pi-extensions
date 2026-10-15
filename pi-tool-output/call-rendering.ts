@@ -1,39 +1,28 @@
 import { keyHint, type Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { argumentSpans, CALL_LIMITS, compactArguments, expandedArguments, type ArgumentPreview, type ArgumentSpanKind } from "./arguments.ts";
-import { paint, TOOL_OUTPUT_COLORS, type ColorSpec } from "./colors.ts";
+import { type Ink, paint } from "../lib/colors.ts";
+import { TOOL_OUTPUT_COLORS } from "./colors.ts";
 import { summarizeToolCall } from "./summaries.ts";
 
-/**
- * Spans within a value that carry their own color. A magnitude, its unit, the
- * separator inside a descriptor, and generated stand-in labels are all tinted
- * apart from the value tone, so `288 B · 1 line` reads as a measurement rather
- * than as two unrelated fields.
- */
-const SPAN_COLORS: Readonly<Record<Exclude<ArgumentSpanKind, "text">, ColorSpec>> = {
-	measure: TOOL_OUTPUT_COLORS.call.valueMeasure,
-	unit: TOOL_OUTPUT_COLORS.call.valueUnit,
-	separator: TOOL_OUTPUT_COLORS.call.valueSeparator,
-	placeholder: TOOL_OUTPUT_COLORS.call.valuePlaceholder,
-};
+/** Spans within a value tinted apart from it, so `288 B · 1 line` reads as a measurement. */
+function spanColor(kind: Exclude<ArgumentSpanKind, "text">): Ink {
+	const { valueMeasure, valueUnit, valueSeparator, valuePlaceholder } = TOOL_OUTPUT_COLORS.call;
+	return { measure: valueMeasure, unit: valueUnit, separator: valueSeparator, placeholder: valuePlaceholder }[kind];
+}
 
-/**
- * Call arguments deliberately do not share the dim result tone: accent labels and
- * emphasized values make input metadata scannable before output begins. The parser is
- * display-only and only recognizes our own `key: value` field boundaries.
- */
 interface KeyValueColors {
-	plain: ColorSpec;
-	key: ColorSpec;
-	value: ColorSpec;
+	plain: Ink;
+	key: Ink;
+	value: Ink;
 }
 
 /** Paint a value, tinting recognized measure/unit/placeholder spans within it. */
-function paintValue(theme: Theme, value: ColorSpec, text: string): string {
+function paintValue(theme: Theme, value: Ink, text: string): string {
 	const spans = argumentSpans(text);
 	if (spans.length === 1 && spans[0]!.kind === "text") return paint(theme, value, text);
 	return spans
-		.map((span) => paint(theme, span.kind === "text" ? value : SPAN_COLORS[span.kind], span.text))
+		.map((span) => paint(theme, span.kind === "text" ? value : spanColor(span.kind), span.text))
 		.join("");
 }
 

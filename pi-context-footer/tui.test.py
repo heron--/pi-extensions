@@ -198,8 +198,11 @@ class Pi:
             assert row.startswith(("│", "├")), f"unrailed row {row!r}:\n{self.text()}"
         return rows[tops[0]], rows[bottoms[0]]
 
-    def fg_at(self, needle):
+    def fg_at(self, needle, rule=None):
+        """The color of `needle`'s first cell, optionally only in the frame rule starting with `rule`."""
         for y, row in enumerate(self.screen.display):
+            if rule and not row.startswith(rule):
+                continue
             x = row.find(needle)
             if x >= 0:
                 return self.screen.buffer[y][x].fg
@@ -281,6 +284,29 @@ def repository_directory(scratch, mode):
         return pi
     except BaseException:
         pi.close(OUTPUT, f"repository_directory-{mode}-FAILED")
+        raise
+
+
+@case
+def configured_colors(scratch, mode):
+    """`colors` and a status item's `color` paint what they name, in any color form."""
+    config = {"colors": {"repo": "#d7afff", "directory": "oklch(80% 0.1 230)", "sessionName": "#5ec8f0",
+                          "frame": "warning"},
+              "layout": {**PINNED, "bottomRight": [{"status": "fx-cost", "color": "#ff8700"}]}}
+    pi = started(Pi(scratch, 100, tui_mode=mode, subdir="packages/core", config=config))
+    try:
+        pi.command("/name naming things")
+        pi.command("/fx set fx-cost $1.25")
+        pi.wait(lambda text: "demo-repo" in text and "$1.25" in text, "the repository and the status")
+        assert pi.fg_at("\U000F0AE3 demo-repo") == "d7afff", pi.fg_at("\U000F0AE3 demo-repo")
+        assert pi.fg_at(" core") not in ("d7afff", "default"), pi.fg_at(" core")
+        assert pi.fg_at("naming things", "╭") == "5ec8f0", pi.fg_at("naming things", "╭")
+        assert pi.fg_at("$1.25", "╰") == "ff8700", pi.fg_at("$1.25", "╰")
+        assert pi.fg_at("╭") not in (pi.fg_at("GPT-4o"), "default"), "the frame takes its own color"
+        pi.check_no_errors()
+        return pi
+    except BaseException:
+        pi.close(OUTPUT, f"configured_colors-{mode}-FAILED")
         raise
 
 

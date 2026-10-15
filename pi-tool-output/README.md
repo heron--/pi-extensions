@@ -6,8 +6,7 @@ user messages.
 
 Neighbouring calls share one box with one row per call — a Nerd Font icon,
 the display name, a semantic summary, and the size of the output rather than
-the output itself — on a dark `userMessageBg` ground with a green frame
-(`success`, the footer's git branch color). Expanding a call shows its full
+the output itself — on the same ground as the user's messages. Expanding a call shows its full
 arguments and output. Pi's `app.tools.expand` binding (Ctrl+O by default)
 expands every call, and the hints follow any user keybinding override rather
 than hard-coding the key label.
@@ -34,11 +33,7 @@ instead, `+added -removed` in the theme's diff colors:
 ╰─────────────────────────────────────────────────────────────────────────╯
 ```
 
-Names are padded so the summaries form one column. The name keeps the box's
-green; the summary's prose and keys use `group.summaryPlain`/`group.summaryKey`
-(`#57a174`, a subdued green), and its values keep their usual tint. The input
-size uses the argument descriptors' measure/unit tints; the output size is
-muted. Icons come from `TOOL_ICONS` in `rendering.ts`; tools without one get
+Names are padded so the summaries form one column. Icons come from `TOOL_ICONS` in `rendering.ts`; tools without one get
 the wrench. Expanding a call shows the arguments its row does not (`timeout:
 120`, MCP's `args:`), then its input in full (the script or prompt the row
 only measures), a blank row, and its output. An expanded edit or write shows
@@ -66,13 +61,13 @@ terminal does not report the mouse, and the keys still work.
 
 ### Expanded arguments
 
-An expanded call's arguments use one bounded renderer, the same descriptors and
-tints as the call rows' sizes:
+An expanded call's arguments use one bounded renderer, with the same
+descriptors as the call rows' sizes:
 
 - Short values (up to 160 characters) stay inline. Multiline or longer strings
-  become descriptors such as `workflowScript: 19 KB · 501 lines`, whose
-  magnitudes and units are tinted apart from the value — see
-  [Descriptor tinting](#descriptor-tinting).
+  become descriptors such as `workflowScript: 19 KB · 501 lines`. An expanded
+  multi-line value keeps the call's color on every line, so it is not mistaken
+  for output.
 - Small arrays/objects stay inline; larger or deeply nested structures become
   item/field counts. The compact view considers at most eight argument fields.
 - A field a summary stands in for — a sketched `command`, a labeled
@@ -81,11 +76,7 @@ tints as the call rows' sizes:
   size descriptor; Ctrl+O reveals the original in full.
 - The call body has at most one summary row, three wrapped argument rows, and
   one expansion hint. Limits apply **after wrapping**, including narrow terminals.
-- Argument keys use the theme's `accent` color (the `identity` teal in the
-  bundled `frontier-funds` theme) and values use `emphasisText` (falling back
-  to `accent`); separators and expansion hints remain subdued. Every color is
-  named in `colors.ts` — see [Colors](#colors). Ctrl+O reveals the
-  original arguments with multiline string layout preserved.
+- Ctrl+O reveals the original arguments with multiline string layout preserved.
   Expansion is still bounded to 16,000 characters and 120 wrapped argument rows,
   with bounded tree depth/node traversal and an explicit cap notice. These call
   limits are independent of `expandedPreviewMaxLines`, which controls results.
@@ -133,10 +124,6 @@ characters each, and a whole summary to 480.
 A tool with no recognized shape gets no summary row and falls back to the
 generic compact preview, which is also what partial streaming arguments and
 unexpected scalar types produce.
-
-When a summary contains explicit `key: value` fields, keys keep the summary
-color while values use `summaryValue`; plain-language summaries are drawn in one
-color. See [Colors](#colors).
 
 #### Shell sketches
 
@@ -232,58 +219,26 @@ an unexpected type stays visible. Every summarizer is unit-tested directly in
 
 ### Colors
 
-`colors.ts` holds every color this extension paints; no other module names a
-theme color. `TOOL_OUTPUT_COLORS` groups them by the region they paint — `box`
-(frame and label), `call` (summary and argument rows), `nestedCall` (codemode's
-executed calls), and `result` (output, errors, notices, metadata) — so retuning
-one region leaves the others alone.
+`colors` in the config overrides the color of anything this extension paints,
+by role. A value is a theme color name, which follows theme switches, or a
+fixed color in any form a pi theme accepts: `#rgb`, `#rrggbb`, `oklch(…)`,
+`okhsl(…)`, or a 0–255 index.
 
-Values are theme color names rather than hex codes, so the active theme resolves
-them and the palette follows theme switches. A color the stock themes do not
-define is written as a fallback chain in preference order, such as
-`["emphasisText", "accent"]`: `paint` tries each candidate and falls back to
-unstyled text, because `Theme.fg` throws on an unknown color name. Every chain
-ends in a color Pi's stock theme defines, which `colors.test.mjs` enforces by
-reading that theme from the live install rather than a retyped list.
+```json
+{
+  "colors": {
+    "call": { "argumentValue": "#5ec8f0" },
+    "group": { "summaryPlain": "oklch(65% 0.1 150)" }
+  }
+}
+```
 
-### Descriptor tinting
-
-A generated descriptor is not a plain value, so its parts are colored
-separately. `command: 288 B · 1 line` renders as four distinct tones:
-
-| Part | Palette entry | Stock theme |
-|---|---|---|
-| `command` | `argumentKey` | `accent` |
-| `288`, `1` | `valueMeasure` | `syntaxNumber` |
-| `B`, `line` | `valueUnit` | `syntaxType` |
-| the inner ` · ` | `valueSeparator` | `dim` |
-
-### Expanded multi-line values
-
-Expanding a call with a multi-line value — a script, a prompt, a nested tree —
-keeps **every** line in the call's tone (`argumentBody`), not just the first, so
-an expanded command stays visually distinct from the dimmed result below it.
-
-Which lines continue a value is reported by `expandedArguments` as `fieldLines`,
-the indices of lines that begin a top-level field. The renderer parses `key:`
-structure only on those lines. Field boundaries are therefore positional facts
-from the generator, so a body line that happens to read `limit: 99` stays body
-text instead of being repainted as a field.
-
-The `·` inside a descriptor is part of one value, not a field boundary, so it is
-tinted apart from the ` · ` that separates `key: value` pairs. The same treatment
-applies to `array · 10000 items` and `object · 100+ fields`.
-
-Generated stand-in labels — `[circular]`, `[large value]`, `<inline script>`,
-`<long argument>` — use `valuePlaceholder` to read as metadata rather than as
-content. They are listed in `ARGUMENT_PLACEHOLDERS`, which is both what writes
-them and what recognizes them, so a literal value that merely looks like one (a
-`[abc]` character class, `--flag=[x]`) keeps the ordinary value color.
-
-`argumentSpans` performs the split and returns typed spans
-(`measure`, `unit`, `separator`, `placeholder`, `text`); the renderer only maps
-span kinds to colors. Spans always rebuild the original string exactly, which
-`arguments.test.mjs` asserts.
+The roles, and the theme color each defaults to, are `TOOL_OUTPUT_COLOR_ROLES`
+in [`colors.ts`](colors.ts), grouped by what they paint: `box`, `call`,
+`nestedCall` (codemode's calls), `result`, `group` (the grouped rows), and
+`diff`. A descriptor's parts are colored apart, so `288 B · 1 line` reads as a
+measurement: `call.valueMeasure`, `call.valueUnit`, and `call.valueSeparator`.
+An invalid entry is reported at startup and keeps its default.
 
 ### Edits and writes
 
@@ -368,7 +323,8 @@ Missing values use these defaults:
   "diffViewMode": "auto",
   "diffIndicatorMode": "bars",
   "diffSplitMinWidth": 120,
-  "diffWordWrap": true
+  "diffWordWrap": true,
+  "colors": {}
 }
 ```
 
@@ -383,7 +339,7 @@ the old one-box-per-call layout and no longer change anything.
 `hidden` intentionally suppresses it. `diffViewMode` accepts `auto`, `split`,
 or `unified`, `diffIndicatorMode` accepts `bars`, `classic`, or `none`, and
 `diffSplitMinWidth` is at least 51, the narrowest that fits two columns.
-Ownership, mode, and diff edits take effect after `/reload`.
+Ownership, mode, diff, and [color](#colors) edits take effect after `/reload`.
 
 ### With another tool renderer installed
 

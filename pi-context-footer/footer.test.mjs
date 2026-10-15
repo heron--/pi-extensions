@@ -5,7 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { fakeTheme, plain, scratch, startFooter } from "./harness.mjs";
+import { testTheme } from "../lib/test-theme.mjs";
+import { plain, scratch, startFooter } from "./harness.mjs";
 
 let loads = 0;
 /** A fresh copy of the extension per test, so no module state carries over. */
@@ -94,7 +95,7 @@ test("configuration reload applies a valid layout and keeps the last valid one o
 test("the directory item names the repository, and below its root only the current directory", async () => {
 	const FOLDER = "";
 	const STAR = "\u{f0ae3}";
-	const dirs = scratch({ config: { layout: { topLeft: ["directory"], topRight: [], bottomLeft: [], bottomRight: [] } } });
+	const dirs = scratch({ config: { layout: { topLeft: ["directory"], topRight: [], bottomLeft: [], bottomRight: [] }, colors: { repo: "mdLink", directory: "#ff0000" } } });
 	const git = (cwd, ...args) => execFileSync("git", args, { cwd, stdio: "ignore" });
 	git(dirs.cwd, "init", "-q");
 	git(dirs.cwd, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "init");
@@ -112,13 +113,13 @@ test("the directory item names the repository, and below its root only the curre
 		{ cwd: worktree, repo: "demo-repo", folder: null },
 	];
 	for (const { cwd, repo, folder } of cases) {
-		const theme = fakeTheme(["repoText", "directoryText"]);
+		const theme = testTheme();
 		const host = await start({ dirs: { ...dirs, cwd }, theme });
 		try {
 			if (repo) assert.ok(await waitFor(() => host.state.renderRequests > 0), `repaints once git answers in ${cwd}`);
 			else await delay(200);
 			const top = host.renderEditor(100)[1];
-			const parts = [repo && theme.fg("repoText", `${STAR} ${repo}`), folder && theme.fg("directoryText", `${FOLDER} ${folder}`)];
+			const parts = [repo && theme.fg("mdLink", `${STAR} ${repo}`), folder && `\x1b[38;5;196m${FOLDER} ${folder}\x1b[39m`];
 			const label = parts.filter(Boolean).join(" ");
 			assert.ok(top.includes(label), `${cwd}: ${JSON.stringify(plain(top))}`);
 			assert.match(plain(top), /^╭── \S+ [^─]+ ─+╮$/u);
@@ -288,16 +289,14 @@ test("token totals follow new entries and the current session", async () => {
 	}
 });
 
-test("a status color the current theme lacks falls back instead of crashing the render", async () => {
+test("an invalid color warns and keeps its default", async () => {
 	const host = await start({
-		theme: fakeTheme(["chartreuse"]),
-		config: { layout: { bottomRight: [{ status: "x", color: "chartreuse" }] } },
-		statuses: { x: "shown" },
+		config: { colors: { branch: "chartreuse" }, layout: { bottomRight: ["branch"] } },
 	});
 	try {
-		assert.equal(host.state.notifications.length, 0);
-		host.ctx.ui.theme = fakeTheme();
-		assert.match(bottomRule(host.renderEditor(80)), /shown ──╯$/);
+		assert.match(host.state.notifications.map((n) => n.message).join("\n"), /"colors.branch" must be a theme color name/);
+		const success = host.ctx.ui.theme.getFgAnsi("success");
+		assert.match(host.renderEditor(80).at(-2), new RegExp(`${success.replace("[", "\\[")}\\S+ feature/demo`));
 	} finally {
 		await host.shutdown();
 	}
