@@ -38,7 +38,7 @@
  */
 
 import type { Api, Model, ModelThinkingLevel, ThinkingLevelMap } from "@earendil-works/pi-ai";
-import { CustomEditor, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { CustomEditor, type ExtensionAPI, type ExtensionContext, type Theme, type ThemeColor } from "@earendil-works/pi-coding-agent";
 import {
 	Input,
 	Key,
@@ -89,37 +89,6 @@ function visibleRowsFor(rowCount: number): number {
 	return Math.max(1, Math.min(rowCount, MAX_VISIBLE, room));
 }
 
-/**
- * Theme colours this extension uses. Declared as a narrow subset so the
- * helpers below can accept the theme from ctx.ui.custom() without importing
- * the (non-exported) Theme class.
- */
-type PickerColor =
-	| "accent"
-	| "text"
-	| "muted"
-	| "dim"
-	| "success"
-	| "warning"
-	| "error"
-	| "border"
-	| "borderMuted"
-	| "mdLink"
-	| "thinkingOff"
-	| "thinkingMinimal"
-	| "thinkingLow"
-	| "thinkingMedium"
-	| "thinkingHigh"
-	| "thinkingXhigh"
-	| "thinkingMax";
-
-interface PickerTheme {
-	fg(color: PickerColor, text: string): string;
-	bold(text: string): string;
-	/** Raw SGR code for a colour, with no trailing reset. */
-	getFgAnsi(color: PickerColor): string;
-}
-
 /* -------------------------------------------------------------------------- */
 /* Icons                                                                      */
 /* -------------------------------------------------------------------------- */
@@ -150,14 +119,9 @@ const ICON_COLOR = {
 	text: "success",
 	image: "mdLink",
 	reasoning: "thinkingHigh",
-	/**
-	 * The active model marker. Deliberately NOT "accent": SelectList paints the
-	 * highlighted row accent, so an accent marker made "current" and "highlighted"
-	 * indistinguishable. "warning" is yellow in both builtin themes, and clashes
-	 * with none of the capability colours (green / blue / purple).
-	 */
+	/** Not accent: the highlighted row is accent, and the two must differ. */
 	current: "warning",
-} as const;
+} as const satisfies Record<string, ThemeColor>;
 
 /**
  * Relative reasoning effort per level, used to fill the gauge (0..6). The
@@ -370,7 +334,7 @@ function inputProse(model: Model<Api>): string {
  * Unsupported capabilities render as a dim placeholder so the cell keeps its
  * width and the following columns stay aligned.
  */
-export function capabilityIcons(model: Model<Api>, theme: PickerTheme): string {
+export function capabilityIcons(model: Model<Api>, theme: Theme): string {
 	const input = model.input ?? ["text"];
 	const cells = [
 		input.includes("text")
@@ -387,7 +351,7 @@ export function capabilityIcons(model: Model<Api>, theme: PickerTheme): string {
 }
 
 /** Legend explaining the row glyphs. */
-function iconLegend(theme: PickerTheme): string {
+function iconLegend(theme: Theme): string {
 	return [
 		`${theme.fg(ICON_COLOR.text, ICON.text)} ${theme.fg("dim", "text")}`,
 		`${theme.fg(ICON_COLOR.image, ICON.image)} ${theme.fg("dim", "image")}`,
@@ -478,7 +442,7 @@ export function composeModelPrimary(
 		isSelected: boolean;
 		isCurrent: boolean;
 		maxWidth: number;
-		theme: PickerTheme;
+		theme: Theme;
 		columns: ModelColumns;
 	},
 ): string {
@@ -496,7 +460,7 @@ export function composeModelPrimary(
 	// repainting it: an explicit colour here overrode the highlight, so moving the
 	// cursor changed nothing visible. "current" gets yellow (the marker colour) so
 	// it stays distinguishable from the highlight.
-	const idColor: PickerColor = isSelected ? "accent" : isCurrent ? "warning" : "text";
+	const idColor: ThemeColor = isSelected ? "accent" : isCurrent ? "warning" : "text";
 	const ctx = theme.fg("muted", padStartTo(abbreviateContextWindow(model.contextWindow), CTX_WIDTH));
 
 	// Widest → narrowest layouts; pick the first that fits.
@@ -681,7 +645,7 @@ export function composeGroupHeader(
 	provider: string,
 	count: number,
 	maxWidth: number,
-	theme: PickerTheme,
+	theme: Theme,
 ): string {
 	if (maxWidth <= 0) return "";
 	const countText = String(count);
@@ -704,7 +668,7 @@ export function composeGroupHeader(
  * Two-line summary of the highlighted model, shown under the list. This is
  * the "what am I about to pick" panel: real numbers, not restated labels.
  */
-function modelDetailLines(entry: ModelEntry, theme: PickerTheme, width: number): string[] {
+function modelDetailLines(entry: ModelEntry, theme: Theme, width: number): string[] {
 	const model = entry.model;
 	const cost = formatCost(model);
 	const facts = [
@@ -967,7 +931,7 @@ function pickModel(
  * of the rainbow for high/xhigh/max, sheen included for max), while the empty
  * cells pass through dim, so the meter keeps meaning what it says.
  */
-export function levelGauge(level: ModelThinkingLevel, theme: PickerTheme): ThinkingSpan[] {
+export function levelGauge(level: ModelThinkingLevel, theme: Theme): ThinkingSpan[] {
 	const filled = LEVEL_INTENSITY[level];
 	const empty = GAUGE_WIDTH - filled;
 	const spans: ThinkingSpan[] = [];
@@ -1239,7 +1203,7 @@ function pickDeepSeekThinking(
 					const glyph = isOn
 						? theme.fg(ICON_COLOR.reasoning, ICON.reasoning)
 						: theme.fg("dim", ICON.off);
-					const nameColor: PickerColor = isOn ? ICON_COLOR.reasoning : "dim";
+					const nameColor: ThemeColor = isOn ? ICON_COLOR.reasoning : "dim";
 					return (
 						[
 							glyph,

@@ -2,7 +2,8 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { CORNER_BL, CORNER_BR, CORNER_TL, CORNER_TR, groundRow, labelRuleRow, railRow } from "../lib/box.ts";
-import { backgroundAnsi, paint, TOOL_OUTPUT_COLORS } from "./colors.ts";
+import { paint } from "../lib/colors.ts";
+import { TOOL_OUTPUT_BG, TOOL_OUTPUT_COLORS } from "./colors.ts";
 
 export const ICON_TOOL = "\uf0ad"; // nf-fa-wrench
 const PAD_X = 1;
@@ -64,7 +65,7 @@ export function boxRows(
 		if (result === undefined) painted.set(text, (result = paint(theme, TOOL_OUTPUT_COLORS.box.frame, text)));
 		return result;
 	};
-	const ground = (row: string) => groundRow(row, backgroundAnsi(theme));
+	const ground = (row: string) => groundRow(row, theme.getBgAnsi(TOOL_OUTPUT_BG));
 	const contentWidth = boxContentWidth(w);
 	const rows: string[] = [];
 	if (options.includeTop) {

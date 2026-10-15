@@ -24,7 +24,8 @@ import {
 import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { CALL_LIMITS, compactArguments } from "./arguments.ts";
 import { callArgumentsComponent, paintMeasure, paintSummary } from "./call-rendering.ts";
-import { paint, TOOL_OUTPUT_COLORS } from "./colors.ts";
+import { paint } from "../lib/colors.ts";
+import { TOOL_OUTPUT_COLORS } from "./colors.ts";
 import type { DiffViewOptions } from "./diff.ts";
 import { writeChanges } from "./file-changes.ts";
 import { fileCallComponent, isFileTool } from "./file-view.ts";

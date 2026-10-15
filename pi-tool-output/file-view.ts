@@ -5,7 +5,8 @@
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
-import { paint, TOOL_OUTPUT_COLORS } from "./colors.ts";
+import { paint } from "../lib/colors.ts";
+import { TOOL_OUTPUT_COLORS } from "./colors.ts";
 import { diffComponent, type DiffViewOptions } from "./diff.ts";
 import {
 	editResultChange,

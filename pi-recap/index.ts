@@ -1,5 +1,5 @@
 import type { Api, AssistantMessage, Model, UserMessage } from "@earendil-works/pi-ai";
-import { getAgentDir, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext, type Theme, type ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
@@ -303,7 +303,7 @@ function wrap(text: string, width: number): string[] {
 }
 
 interface BoxSpec {
-	color: "warning" | "error";
+	color: Extract<ThemeColor, "warning" | "error">;
 	title: string;
 	/** Builds the content rows for the given content width, already painted. */
 	body: (content: number) => string[];

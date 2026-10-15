@@ -1,7 +1,8 @@
 import { keyHint, type AgentToolResult, type CodemodeToolDetails, type Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { CALL_LIMITS, cleanArgumentText, compactArguments, expandedArguments, shortArgument } from "./arguments.ts";
-import { paint, TOOL_OUTPUT_COLORS } from "./colors.ts";
+import { paint } from "../lib/colors.ts";
+import { TOOL_OUTPUT_COLORS } from "./colors.ts";
 import { displayToolName, pluralize, shortenPath } from "./rendering.ts";
 import { summarizeToolCall } from "./summaries.ts";
 

@@ -5,10 +5,11 @@
  */
 
 import type { ModelThinkingLevel, Usage } from "@earendil-works/pi-ai";
-import type { ExtensionContext, SessionEntry, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, SessionEntry, Theme } from "@earendil-works/pi-coding-agent";
 import { basename } from "node:path";
+import { paint } from "../lib/colors.ts";
 import { paintThinkingLevel } from "../lib/thinking-colors.ts";
-import type { BuiltinItemId, HostnameSettings, LayoutItem, StatusPresentation } from "./config.ts";
+import type { BuiltinItemId, FooterColors, HostnameSettings, LayoutItem, StatusPresentation } from "./config.ts";
 import type { PullRequest } from "./pull-request.ts";
 import type { Repository } from "./repository.ts";
 import { formatStatus, type StatusFormatters } from "./formatters.ts";
@@ -36,6 +37,7 @@ const LINK_CLOSE = "\x1b]8;;\x07";
 export interface ItemData {
 	ctx: Pick<ExtensionContext, "model" | "thinkingLevel" | "getContextUsage" | "sessionManager">;
 	theme: Theme;
+	colors: FooterColors;
 	branch: string | null;
 	pullRequest: PullRequest | null;
 	/** The repository holding the working directory, or null outside one or until known. */
@@ -49,21 +51,6 @@ export interface ItemData {
 	selectedStatusKeys: { has(key: string): boolean };
 	/** Whether the thinking gloss is being driven by a repaint ticker. */
 	animated: boolean;
-}
-
-/**
- * Paint in a theme color by name. Owner configuration names colors as
- * strings; a theme switched after the configuration was validated may not
- * define one, and `theme.fg` throws on an unknown color, which from a render
- * path tears the TUI down. Fall back to `fallback`, the accent color unless
- * given, instead.
- */
-export function paintColor(theme: Theme, color: string, text: string, fallback: ThemeColor = "accent"): string {
-	try {
-		return theme.fg(color as ThemeColor, text);
-	} catch {
-		return theme.fg(fallback, text);
-	}
 }
 
 export function formatTokens(count: number): string {
@@ -127,42 +114,28 @@ export function createTokenTotalsCache(): (sessionManager: ItemData["ctx"]["sess
 	};
 }
 
-function gaugeColor(percent: number): "success" | "warning" | "error" {
-	if (percent >= GAUGE_ALERT_PERCENT) return "error";
-	if (percent >= GAUGE_WARN_PERCENT) return "warning";
-	return "success";
+function contextTone(colors: FooterColors["context"], percent: number | null) {
+	if (percent === null) return colors.empty;
+	if (percent >= GAUGE_ALERT_PERCENT) return colors.critical;
+	if (percent >= GAUGE_WARN_PERCENT) return colors.warning;
+	return colors.ok;
 }
 
-function renderGauge(theme: Theme, percent: number | null): string {
-	if (percent === null) return theme.fg("dim", GAUGE_EMPTY.repeat(GAUGE_WIDTH));
-
+function renderGauge(theme: Theme, colors: FooterColors["context"], percent: number | null): string {
+	if (percent === null) return paint(theme, colors.empty, GAUGE_EMPTY.repeat(GAUGE_WIDTH));
 	const clamped = Math.max(0, Math.min(100, percent));
 	const filledCount = Math.round((clamped / 100) * GAUGE_WIDTH);
-	return theme.fg(gaugeColor(clamped), GAUGE_FILLED.repeat(filledCount))
-		+ theme.fg("dim", GAUGE_EMPTY.repeat(GAUGE_WIDTH - filledCount));
+	return paint(theme, contextTone(colors, percent), GAUGE_FILLED.repeat(filledCount))
+		+ paint(theme, colors.empty, GAUGE_EMPTY.repeat(GAUGE_WIDTH - filledCount));
 }
 
 /**
- * The thinking-level label, painted with the shared scheme from
- * lib/thinking-colors.ts so it matches the model picker's level rows exactly —
- * except "off", which paints dim rather than the scheme's thinkingOff color.
- * Themes may map that color to rule shades meant for barely-visible
- * separators, and the frame itself is not thinking-tinted, so this label is
- * the off state's only announcement and has to stay legible. The model
- * picker's DeepSeek toggle rows paint "off" dim for the same reason.
+ * The shared thinking scheme, except "off": themes may map `thinkingOff` to a
+ * barely visible rule shade, and this label is the off state's only sign.
  */
-function thinkingLabel(theme: Theme, level: ModelThinkingLevel, animated: boolean): string {
-	if (level === "off") return theme.fg("dim", `thinking:${level}`);
+function thinkingLabel(theme: Theme, colors: FooterColors, level: ModelThinkingLevel, animated: boolean): string {
+	if (level === "off") return paint(theme, colors.thinkingOff, `thinking:${level}`);
 	return paintThinkingLevel(theme, level, `thinking:${level}`, animated);
-}
-
-/**
- * The identity labels' paint — the session name and the hostname.
- * `emphasisText` is a theme color pi's ThemeColor union does not know about,
- * defined by the frontier-funds theme; others fall back to the accent color.
- */
-function paintIdentity(theme: Theme, text: string): string {
-	return paintColor(theme, "emphasisText", text);
 }
 
 /** Whether the hostname is shown: the regex decides when there is one, else the switch. */
@@ -215,69 +188,63 @@ export function hostnameLabel(settings: HostnameSettings, host: string): string 
  * name. Inside one, the four-pointed star and the repository name, then —
  * below the root — the folder icon and the current directory's name only,
  * not the path between.
- *
- * `repoText` and `directoryText` are theme colors pi's ThemeColor union does
- * not know about, defined by the owner's theme; others fall back to
- * syntaxKeyword and syntaxFunction.
  */
-function directoryLabel(theme: Theme, cwd: string, repository: Repository | null): string {
-	const folder = (name: string) => paintColor(theme, "directoryText", `${ICON_FOLDER} ${name}`, "syntaxFunction");
+function directoryLabel(theme: Theme, colors: FooterColors, cwd: string, repository: Repository | null): string {
+	const folder = (name: string) => paint(theme, colors.directory, `${ICON_FOLDER} ${name}`);
 	if (!repository) return folder(basename(cwd) || cwd);
-	const repo = paintColor(theme, "repoText", `${ICON_REPO} ${repository.name}`, "syntaxKeyword");
+	const repo = paint(theme, colors.repo, `${ICON_REPO} ${repository.name}`);
 	return repository.subdir ? `${repo} ${folder(basename(repository.subdir))}` : repo;
 }
 
 function renderBuiltin(id: BuiltinItemId, data: ItemData): string | null {
-	const { ctx, theme } = data;
+	const { ctx, theme, colors } = data;
 	switch (id) {
 		case "model": {
 			const model = ctx.model?.name || ctx.model?.id || "no-model";
-			return theme.fg("syntaxType", `${ICON_MODEL} ${model}`);
+			return paint(theme, colors.model, `${ICON_MODEL} ${model}`);
 		}
 		case "thinking":
 			if (!ctx.model?.reasoning || !ctx.thinkingLevel) return null;
-			return thinkingLabel(theme, ctx.thinkingLevel, data.animated);
+			return thinkingLabel(theme, colors, ctx.thinkingLevel, data.animated);
 		case "directory":
-			return directoryLabel(theme, ctx.sessionManager.getCwd(), data.repository);
+			return directoryLabel(theme, colors, ctx.sessionManager.getCwd(), data.repository);
 		case "context": {
 			const usage = ctx.getContextUsage();
 			const contextWindow = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
 			const percent = usage?.percent ?? null;
 			const percentLabel = percent === null ? "?" : `${percent.toFixed(0)}%`;
-			const tone = percent === null ? "dim" : gaugeColor(percent);
-			return `${theme.fg(tone, ICON_GAUGE)} ${renderGauge(theme, percent)} ${theme.fg("text", `${percentLabel}/${formatTokens(contextWindow)}`)}`;
+			const tone = contextTone(colors.context, percent);
+			return `${paint(theme, tone, ICON_GAUGE)} ${renderGauge(theme, colors.context, percent)} ${paint(theme, colors.context.text, `${percentLabel}/${formatTokens(contextWindow)}`)}`;
 		}
 		case "session-name": {
 			const name = ctx.sessionManager.getSessionName();
-			return name ? paintIdentity(theme, `${ICON_SESSION} ${name}`) : null;
+			return name ? paint(theme, colors.sessionName, `${ICON_SESSION} ${name}`) : null;
 		}
 		case "hostname":
 			if (!hostnameShown(data.hostnameSettings, data.hostname)) return null;
-			return paintIdentity(theme, `${ICON_HOST} ${hostnameLabel(data.hostnameSettings, data.hostname)}`);
+			return paint(theme, colors.hostname, `${ICON_HOST} ${hostnameLabel(data.hostnameSettings, data.hostname)}`);
 		case "branch":
-			return data.branch ? theme.fg("success", `${ICON_BRANCH} ${data.branch}`) : null;
+			return data.branch ? paint(theme, colors.branch, `${ICON_BRANCH} ${data.branch}`) : null;
 		case "pull-request": {
 			const pullRequest = data.pullRequest;
 			if (!pullRequest) return null;
-			return `${LINK_OPEN}${pullRequest.url}\x07${theme.fg("mdLink", `#${pullRequest.number}`)}${LINK_CLOSE}`;
+			return `${LINK_OPEN}${pullRequest.url}\x07${paint(theme, colors.pullRequest, `#${pullRequest.number}`)}${LINK_CLOSE}`;
 		}
 		case "tokens": {
 			const { input, output } = data.tokens;
 			if (!input && !output) return null;
-			return theme.fg("syntaxNumber", `⇡${formatTokens(input)} ⇣${formatTokens(output)}`);
+			return paint(theme, colors.tokens, `⇡${formatTokens(input)} ⇣${formatTokens(output)}`);
 		}
 	}
 }
 
 /**
- * Present sanitized status text. Normalized mode repaints it in one theme
- * color — statuses arrive styled for pi's own footer, some as filled pills,
- * so repainting makes them read as part of this border;
- * producer mode keeps the producer's colors. Either way the width limit
- * applies last, on what will actually be drawn.
+ * Normalized mode repaints status text in one color, since statuses arrive
+ * styled for pi's own footer; producer mode keeps it. The width limit applies
+ * to what is drawn.
  */
 function present(text: string, style: StatusPresentation, theme: Theme): string {
-	const painted = style.presentation === "normalized" ? paintColor(theme, style.color, text) : text;
+	const painted = style.presentation === "normalized" ? paint(theme, style.color, text) : text;
 	return clipToWidth(painted, style.maxWidth);
 }
 

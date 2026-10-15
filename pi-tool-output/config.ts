@@ -1,6 +1,7 @@
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { loadToolOutputColors } from "./colors.ts";
 
 export const OUTPUT_MODES = ["hidden", "summary", "preview"] as const;
 export const BASH_OUTPUT_MODES = ["opencode", "summary", "preview"] as const;
@@ -53,6 +54,8 @@ export interface ToolOutputConfig {
 	diffSplitMinWidth: number;
 	/** Wrap long diff lines at word boundaries; otherwise cut them with an ellipsis. */
 	diffWordWrap: boolean;
+	/** Color overrides by role, as configured; see `TOOL_OUTPUT_COLOR_ROLES`. */
+	colors: Record<string, unknown>;
 }
 
 export const DEFAULT_TOOL_OUTPUT_CONFIG: ToolOutputConfig = {
@@ -79,11 +82,14 @@ export const DEFAULT_TOOL_OUTPUT_CONFIG: ToolOutputConfig = {
 	diffIndicatorMode: "bars",
 	diffSplitMinWidth: 120,
 	diffWordWrap: true,
+	colors: {},
 };
 
 export interface ConfigLoadResult {
 	config: ToolOutputConfig;
 	error?: string;
+	/** Invalid entries the config ignored. */
+	problems: string[];
 }
 
 export interface ConfigSaveResult {
@@ -220,6 +226,7 @@ export function normalizeToolOutputConfig(value: unknown): ToolOutputConfig {
 		),
 		diffSplitMinWidth: asInteger(source.diffSplitMinWidth, 51, 400, DEFAULT_TOOL_OUTPUT_CONFIG.diffSplitMinWidth),
 		diffWordWrap: asBoolean(source.diffWordWrap, DEFAULT_TOOL_OUTPUT_CONFIG.diffWordWrap),
+		colors: loadToolOutputColors(source.colors).overrides,
 	};
 }
 
@@ -229,11 +236,14 @@ export function getToolOutputConfigPath(): string {
 
 export function loadToolOutputConfig(path = getToolOutputConfigPath()): ConfigLoadResult {
 	try {
-		return { config: normalizeToolOutputConfig(JSON.parse(readFileSync(path, "utf8")) as unknown) };
+		const stored: unknown = JSON.parse(readFileSync(path, "utf8"));
+		const colors = isRecord(stored) ? stored.colors : undefined;
+		return { config: normalizeToolOutputConfig(stored), problems: loadToolOutputColors(colors).problems };
 	} catch (error) {
 		const missing = error instanceof Error && "code" in error && error.code === "ENOENT";
 		return {
 			config: normalizeToolOutputConfig(undefined),
+			problems: [],
 			...(missing ? {} : { error: `Could not load ${path}: ${error instanceof Error ? error.message : String(error)}` }),
 		};
 	}

@@ -4,14 +4,13 @@ import type {
 	ExtensionContext,
 	ReadonlyFooterDataProvider,
 	Theme,
-	ThemeColor,
 } from "@earendil-works/pi-coding-agent";
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { hostname as osHostname } from "node:os";
 import type { TUI } from "@earendil-works/pi-tui";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { paint as paintInk } from "../lib/colors.ts";
 import {
-	fgFromBg,
 	groundRow,
 	CORNER_BL as CORNER_BOTTOM_LEFT,
 	CORNER_BR as CORNER_BOTTOM_RIGHT,
@@ -31,7 +30,9 @@ import {
 	updateContextFooterConfig,
 } from "../lib/thinking-colors.ts";
 import {
+	DEFAULT_FOOTER_COLORS,
 	DEFAULT_HOSTNAME_SETTINGS,
+	type FooterColors,
 	DEFAULT_LAYOUT,
 	type HostnameSettings,
 	type Layout,
@@ -91,10 +92,10 @@ function isRuleRow(line: string, width: number): boolean {
 }
 
 /** Pull `↑ 3 more` out of a scroll marker so the frame can carry it as an item. */
-function scrollNotice(theme: Theme, line: string): ShownItem | null {
+function scrollNotice(theme: Theme, colors: FooterColors, line: string): ShownItem | null {
 	const match = /([↑↓])\s+(\d+)\s+more/.exec(stripAnsi(line));
 	if (!match) return null;
-	return { id: "scroll-notice", text: theme.fg("dim", `${match[1]} ${match[2]} more`) };
+	return { id: "scroll-notice", text: paintInk(theme, colors.notice, `${match[1]} ${match[2]} more`) };
 }
 
 /**
@@ -115,6 +116,7 @@ function frameEditor(
 	baseRender: (width: number) => string[],
 	width: number,
 	theme: Theme,
+	colors: FooterColors,
 	paint: Paint,
 	padding: Padding,
 	regions: Regions,
@@ -136,7 +138,7 @@ function frameEditor(
 	const markVisible = (ids: string[]) => ids.forEach((id) => visible.add(id));
 
 	// The upper rule: top-right is anchored, top-left takes what is left.
-	const upperNotice = hasUpperRule ? scrollNotice(theme, lines[0]!) : null;
+	const upperNotice = hasUpperRule ? scrollNotice(theme, colors, lines[0]!) : null;
 	const top = fitFramedRow(width, regions.topRight, [...(upperNotice ? [upperNotice] : []), ...regions.topLeft]);
 	markVisible([...top.anchor.visible, ...top.body.visible]);
 	framed.push(frameRuleRow(width, paint, CORNER_TOP_LEFT, CORNER_TOP_RIGHT, "left", top.body.texts, top.anchor.texts));
@@ -147,7 +149,7 @@ function frameEditor(
 	}
 	if (padding === "full") framed.push(gutter);
 
-	const lowerNotice = scrollNotice(theme, lines[lowerRuleIndex]!);
+	const lowerNotice = scrollNotice(theme, colors, lines[lowerRuleIndex]!);
 	const trailing = lines.slice(lowerRuleIndex + 1);
 	if (trailing.length > 0) {
 		// Keep the completion list inside the frame: the lower rule becomes a
@@ -164,23 +166,12 @@ function frameEditor(
 	markVisible([...bottom.anchor.visible, ...bottom.body.visible]);
 	framed.push(frameRuleRow(width, paint, CORNER_BOTTOM_LEFT, CORNER_BOTTOM_RIGHT, "right", bottom.body.texts, [], bottom.anchor.texts));
 
-	// The prompt box sits on the same dark ground as the recap and
-	// user-message boxes (userMessageBg), so all three read as one family.
-	// groundRow re-asserts the ground after the full resets inside the row —
-	// the badge's rainbow close, the editor's cursor styling — which a plain
-	// wrap cannot survive.
+	// The prompt box shares the recap and user-message boxes' ground. Above and
+	// below it, half blocks inked in the ground color fade it in and out
+	// against the terminal's own background.
 	const ground = (row: string) => groundRow(row, theme.getBgAnsi("userMessageBg"));
-	// Breathing room above the widget rule: a row of lower-quarter blocks
-	// inked in the ground color, so the box fades in below the transcript
-	// instead of starting at a hard rule. NOT grounded — its air is the
-	// terminal's own background, only the ink carries the color.
-	// theme.fg only accepts foreground (ThemeColor) names and throws on a
-	// background-only one, so the ground's ANSI code is recolored by hand.
-	const softTop = `${fgFromBg(theme.getBgAnsi("userMessageBg"))}${"▂".repeat(width)}\x1b[39m`;
-	// The mirror at the bottom: upper blocks inked in the ground color, so
-	// the box fades out above whatever follows instead of ending at a hard
-	// rule. Also NOT grounded — same reasoning as the top.
-	const softBottom = `${fgFromBg(theme.getBgAnsi("userMessageBg"))}${"▔".repeat(width)}\x1b[39m`;
+	const softTop = paintInk(theme, theme.colors.userMessageBg, "▂".repeat(width));
+	const softBottom = paintInk(theme, theme.colors.userMessageBg, "▔".repeat(width));
 	return { lines: [softTop, ...framed.map(ground), softBottom], visible };
 }
 
@@ -189,8 +180,8 @@ function frameEditor(
  * frame. Replacing pi's footer and then declining to render is how the model
  * and context would vanish entirely on a narrow terminal.
  */
-function renderPlainFooter(theme: Theme, width: number, regions: Regions): string[] {
-	const separator = theme.fg("borderMuted", `  ${RULE.repeat(RULE_RUN)}  `);
+function renderPlainFooter(theme: Theme, colors: FooterColors, width: number, regions: Regions): string[] {
+	const separator = paintInk(theme, colors.separator, `  ${RULE.repeat(RULE_RUN)}  `);
 	return [
 		[...regions.topLeft, ...regions.topRight],
 		[...regions.bottomLeft, ...regions.bottomRight],
@@ -225,6 +216,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 	let animate = true;
 	let layout: Layout = DEFAULT_LAYOUT;
 	let hostnameSettings: HostnameSettings = DEFAULT_HOSTNAME_SETTINGS;
+	let colors: FooterColors = DEFAULT_FOOTER_COLORS;
 	let statusFormatters: StatusFormatters = new Map();
 	/** The machine's hostname, re-read with the configuration. */
 	let machineHostname = "";
@@ -282,6 +274,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 		const data: ItemData = {
 			ctx,
 			theme,
+			colors,
 			branch,
 			pullRequest: branch ? pullRequests.get(cwd, branch) : null,
 			repository: repositories.get(cwd),
@@ -331,7 +324,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 					// The frame carries the layout itself, unless it is not drawing.
 					if (width >= MIN_FRAMED_WIDTH) return [];
 					// No repaint ticker drives the plain rows, so the gloss never animates here.
-					return renderPlainFooter(ctx.ui.theme, width, resolveRegions(ctx, ctx.ui.theme, false));
+					return renderPlainFooter(ctx.ui.theme, colors, width, resolveRegions(ctx, ctx.ui.theme, false));
 				},
 			};
 		};
@@ -369,20 +362,13 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 				const animating = animate && !!ctx.model?.reasoning && ctx.thinkingLevel === "max";
 
 				const theme = ctx.ui.theme;
-				// The frame is chrome, not signal: it paints the theme's border
-				// colour and does not follow pi's thinking-level tint, which can be
-				// near-invisible where a theme maps thinkingOff to a rule shade —
-				// the thinking item carries the thinking state. Bash mode is the one
-				// exception: it keeps pi's tint, detected with the same predicate pi
-				// applies on every text change ("!" at the head of the input),
-				// because "you are about to run a shell command" is a frame-level
-				// cue pi's own editor still has.
+				// The frame ignores pi's thinking-level tint, which the thinking item
+				// carries, but keeps its bash-mode tint, a cue pi's own editor gives.
 				const bashMode = editor.getText().trimStart().startsWith("!");
-				const paint: Paint = bashMode
-					? (editor.borderColor ?? ((text: string) => theme.fg("syntaxType", text)))
-					: (text: string) => theme.fg("syntaxType", text);
+				const frame = (text: string) => paintInk(theme, colors.frame, text);
+				const paint: Paint = bashMode ? (editor.borderColor ?? frame) : frame;
 
-				const framed = frameEditor(baseRender, width, theme, paint, padding, resolveRegions(ctx, theme, animating));
+				const framed = frameEditor(baseRender, width, theme, colors, paint, padding, resolveRegions(ctx, theme, animating));
 				// The ticker runs only while the thinking item is actually on screen.
 				syncSheenTicker(animating && framed.visible.has("thinking"));
 				return framed.lines;
@@ -390,16 +376,6 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 
 			return editor as CustomEditorType;
 		});
-	}
-
-	/** Whether the current theme defines a color, for validating the layout's colors. */
-	function themeHasColor(ctx: ExtensionContext, name: string): boolean {
-		try {
-			ctx.ui.theme.fg(name as ThemeColor, "");
-			return true;
-		} catch {
-			return false;
-		}
 	}
 
 	/**
@@ -411,12 +387,14 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 		machineHostname = osHostname();
 		animate = loadThinkingAnimatePreference();
 		const file = contextFooterConfigFile();
-		const load = readFooterConfig(file, (name) => themeHasColor(ctx, name));
+		const load = readFooterConfig(file);
 		if (!reloading) statusFormatters = new Map();
 		if (load.layout) layout = load.layout;
 		else if (!reloading) layout = DEFAULT_LAYOUT;
 		if (load.hostname) hostnameSettings = load.hostname;
 		else if (!reloading) hostnameSettings = DEFAULT_HOSTNAME_SETTINGS;
+		if (load.colors) colors = load.colors;
+		else if (!reloading) colors = DEFAULT_FOOTER_COLORS;
 		if (load.statusFormatters !== undefined) {
 			try {
 				statusFormatters = await loadStatusFormatters(load.statusFormatters, file);

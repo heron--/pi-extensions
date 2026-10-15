@@ -1,13 +1,33 @@
 /**
- * The owner configuration in `<agent dir>/pi-context-footer/config.json`:
- * the layout, hostname settings and status-formatter path. Parsing is pure so it can be tested
- * without pi; reading the file is the one side effect, in readFooterConfig.
- *
- * The animate preference shares the file but is read through
- * lib/thinking-colors.ts, because the model picker reads it too.
+ * The owner configuration in `<agent dir>/pi-context-footer/config.json`.
+ * Parsing is pure; readFooterConfig is the one side effect. The animate
+ * preference shares the file but is read through lib/thinking-colors.ts,
+ * because the model picker reads it too.
  */
 
 import { readFileSync } from "node:fs";
+import { type Ink, INK_FORMS, loadPalette, type Palette, parseInk, type Roles } from "../lib/colors.ts";
+
+/** Every color the footer paints, by role. Status items set their own. */
+export const FOOTER_COLOR_ROLES = {
+	frame: "syntaxType",
+	separator: "borderMuted",
+	notice: "dim",
+	model: "syntaxType",
+	thinkingOff: "dim",
+	directory: "syntaxFunction",
+	repo: "syntaxKeyword",
+	context: { ok: "success", warning: "warning", critical: "error", empty: "dim", text: "text" },
+	sessionName: "accent",
+	hostname: "accent",
+	branch: "success",
+	pullRequest: "mdLink",
+	tokens: "syntaxNumber",
+} as const satisfies Roles;
+
+export type FooterColors = Palette<typeof FOOTER_COLOR_ROLES>;
+
+export const DEFAULT_FOOTER_COLORS: FooterColors = loadPalette(FOOTER_COLOR_ROLES, undefined).palette;
 
 /** The four fixed places items can sit, in the frame's two rules. */
 export const REGIONS = ["topLeft", "topRight", "bottomLeft", "bottomRight"] as const;
@@ -37,8 +57,8 @@ export type Presentation = "normalized" | "producer";
 /** How status text is drawn: shared by status items and the remaining-statuses item. */
 export interface StatusPresentation {
 	presentation: Presentation;
-	/** Theme color normalized text is repainted in; unused in producer mode. */
-	color: string;
+	/** Normalized text's color; unused in producer mode. */
+	color: Ink;
 	/** Most visible columns the item may take. */
 	maxWidth?: number;
 }
@@ -78,14 +98,11 @@ const PRESENTATION_KEYS = ["presentation", "color", "maxWidth"];
 const STATUS_ITEM_KEYS = new Set(["status", ...PRESENTATION_KEYS]);
 const REMAINING_ITEM_KEYS = new Set(["remainingStatuses", ...PRESENTATION_KEYS]);
 
-/** Whether a theme defines a color; injected so parsing does not need a live theme. */
-export type ColorCheck = (name: string) => boolean;
-
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function parseItem(value: unknown, where: string, isColor: ColorCheck, problems: string[]): LayoutItem | null {
+function parseItem(value: unknown, where: string, problems: string[]): LayoutItem | null {
 	if (typeof value === "string") {
 		if ((BUILTIN_ITEMS as readonly string[]).includes(value)) return { kind: "builtin", id: value as BuiltinItemId };
 		problems.push(`${where}: unknown built-in item "${value}"`);
@@ -107,7 +124,7 @@ function parseItem(value: unknown, where: string, isColor: ColorCheck, problems:
 		return null;
 	}
 
-	const presentation = parsePresentation(value, where, isColor, problems, remaining);
+	const presentation = parsePresentation(value, where, problems, remaining);
 	if (!presentation) return null;
 	if (remaining) {
 		if (value.remainingStatuses !== true) {
@@ -127,7 +144,6 @@ function parseItem(value: unknown, where: string, isColor: ColorCheck, problems:
 function parsePresentation(
 	value: Record<string, unknown>,
 	where: string,
-	isColor: ColorCheck,
 	problems: string[],
 	remaining: boolean,
 ): StatusPresentation | null {
@@ -136,13 +152,14 @@ function parsePresentation(
 		problems.push(`${where}: "presentation" must be "normalized" or "producer"`);
 		return null;
 	}
+	const ink = color === undefined ? undefined : parseInk(color);
 	if (color !== undefined) {
 		if (presentation === "producer") {
 			problems.push(`${where}: "color" applies only to the normalized presentation`);
 			return null;
 		}
-		if (typeof color !== "string" || !isColor(color)) {
-			problems.push(`${where}: "color" must be a theme color name`);
+		if (ink === undefined) {
+			problems.push(`${where}: "color" must be ${INK_FORMS}`);
 			return null;
 		}
 	}
@@ -152,7 +169,7 @@ function parsePresentation(
 	}
 	return {
 		presentation,
-		color: color ?? (remaining ? DEFAULT_REMAINING_COLOR : DEFAULT_STATUS_COLOR),
+		color: ink ?? (remaining ? DEFAULT_REMAINING_COLOR : DEFAULT_STATUS_COLOR),
 		...(maxWidth !== undefined ? { maxWidth } : remaining ? { maxWidth: DEFAULT_REMAINING_MAX_WIDTH } : {}),
 	};
 }
@@ -167,7 +184,7 @@ function parsePresentation(
  * (its border stays). A layout that gives all four regions therefore pins
  * what is selected and in what order.
  */
-export function parseLayout(value: unknown, isColor: ColorCheck = () => true): { layout: Layout | null; problems: string[] } {
+export function parseLayout(value: unknown): { layout: Layout | null; problems: string[] } {
 	if (value === undefined) value = {};
 	const problems: string[] = [];
 	if (!isRecord(value)) return { layout: null, problems: ["\"layout\" must be an object"] };
@@ -189,7 +206,7 @@ export function parseLayout(value: unknown, isColor: ColorCheck = () => true): {
 		layout[region] = [];
 		raw.forEach((entry, index) => {
 			const where = `"layout.${region}[${index}]"`;
-			const item = parseItem(entry, where, isColor, problems);
+			const item = parseItem(entry, where, problems);
 			if (!item) return;
 			if (item.kind === "remaining-statuses") {
 				if (remainingSelected) problems.push(`${where}: only one remaining-statuses item is allowed`);
@@ -293,6 +310,8 @@ export interface FooterConfigLoad {
 	layout: Layout | null;
 	/** The hostname settings, or null when the file itself is unusable. */
 	hostname: HostnameSettings | null;
+	/** The colors, or null when the file itself is unusable. */
+	colors: FooterColors | null;
 	/** Module path, null when disabled, or undefined when the setting is invalid. */
 	statusFormatters: string | null | undefined;
 	/** Everything wrong with the file, for one warning. */
@@ -300,28 +319,30 @@ export interface FooterConfigLoad {
 }
 
 /** Read and validate the config file. A missing file is the defaults, silently. */
-export function readFooterConfig(file: string, isColor?: ColorCheck): FooterConfigLoad {
+export function readFooterConfig(file: string): FooterConfigLoad {
 	let raw: string;
 	try {
 		raw = readFileSync(file, "utf8");
 	} catch {
-		return { layout: DEFAULT_LAYOUT, hostname: DEFAULT_HOSTNAME_SETTINGS, statusFormatters: null, problems: [] };
+		return { layout: DEFAULT_LAYOUT, hostname: DEFAULT_HOSTNAME_SETTINGS, colors: DEFAULT_FOOTER_COLORS, statusFormatters: null, problems: [] };
 	}
 
+	const unusable = (problem: string): FooterConfigLoad => ({ layout: null, hostname: null, colors: null, statusFormatters: undefined, problems: [problem] });
 	let stored: unknown;
 	try {
 		stored = JSON.parse(raw);
 	} catch {
-		return { layout: null, hostname: null, statusFormatters: undefined, problems: ["config.json is not valid JSON"] };
+		return unusable("config.json is not valid JSON");
 	}
-	if (!isRecord(stored)) return { layout: null, hostname: null, statusFormatters: undefined, problems: ["config.json must hold an object"] };
+	if (!isRecord(stored)) return unusable("config.json must hold an object");
 
-	const layout = parseLayout(stored.layout, isColor);
+	const layout = parseLayout(stored.layout);
 	const hostname = parseHostnameSettings(stored.hostname);
-	const problems = [...layout.problems, ...hostname.problems];
+	const colors = loadPalette(FOOTER_COLOR_ROLES, stored.colors);
+	const problems = [...layout.problems, ...hostname.problems, ...colors.problems];
 	let statusFormatters: string | null | undefined;
 	if (stored.statusFormatters === undefined || stored.statusFormatters === null) statusFormatters = null;
 	else if (typeof stored.statusFormatters === "string" && stored.statusFormatters.trim()) statusFormatters = stored.statusFormatters;
 	else problems.push('"statusFormatters" must be a non-empty path string or null');
-	return { layout: layout.layout, hostname: hostname.settings, statusFormatters, problems };
+	return { layout: layout.layout, hostname: hostname.settings, colors: colors.palette, statusFormatters, problems };
 }

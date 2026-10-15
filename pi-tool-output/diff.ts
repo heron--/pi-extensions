@@ -21,7 +21,8 @@
 
 import { getLanguageFromPath, highlightCode, type Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, type Component } from "@earendil-works/pi-tui";
-import { diffTint, paint, TOOL_OUTPUT_COLORS, type ColorSpec } from "./colors.ts";
+import { type Ink, paint } from "../lib/colors.ts";
+import { diffTint, TOOL_OUTPUT_COLORS } from "./colors.ts";
 import type { DiffIndicatorMode, DiffViewMode, ToolOutputConfig } from "./config.ts";
 import { sanitizeAnsiForToolOutput } from "./rendering.ts";
 
@@ -257,7 +258,7 @@ function displayText(text: string): string {
 /** Highlighted lines, per theme and language, so laying a diff out again does not highlight it again. */
 const highlightCache = new WeakMap<Theme, Map<string, string>>();
 
-function codeColor(kind: LineKind): ColorSpec {
+function codeColor(kind: LineKind): Ink {
 	const { added, removed, context } = TOOL_OUTPUT_COLORS.diff;
 	return kind === "add" ? added : kind === "remove" ? removed : context;
 }

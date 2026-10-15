@@ -47,6 +47,21 @@ test("saveToolOutputConfig writes through a symlinked config file", () => {
 	}
 });
 
+test("a save keeps the valid color overrides", () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-tool-output-config-colors-test-"));
+	try {
+		const file = join(root, "config.json");
+		const colors = { call: { argumentValue: "#5ec8f0" }, group: { name: 42 } };
+		writeFileSync(file, JSON.stringify({ colors: { ...colors, box: { frame: "nope" } } }));
+		const loaded = loadToolOutputConfig(file);
+		assert.deepEqual(loaded.problems, ['"colors.box.frame" must be a theme color name, #rgb, #rrggbb, oklch(…), okhsl(…), or 0–255']);
+		assert.deepEqual(saveToolOutputConfig({ ...loaded.config, enabled: false }, file), { success: true });
+		assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).colors, colors);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("the settings install.sh offers match the configuration defaults", () => {
 	const { settings } = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
 	for (const setting of settings) {

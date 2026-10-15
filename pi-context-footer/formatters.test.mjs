@@ -5,7 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { formatStatus, loadStatusFormatters } from "./formatters.ts";
-import { fakeTheme, plain, scratch, startFooter } from "./harness.mjs";
+import { testTheme } from "../lib/test-theme.mjs";
+import { plain, scratch, startFooter } from "./harness.mjs";
 
 let loads = 0;
 const start = (options) => startFooter(new URL(`./index.ts?formatters=${loads++}`, import.meta.url).href, options);
@@ -76,7 +77,7 @@ test("the footer formats only selected display text, then applies color and widt
 	const dirs = scratch({ config: { statusFormatters: "./formatters.mjs", layout: PINNED } });
 	t.after(() => rmSync(dirs.root, { recursive: true, force: true }));
 	writeFileSync(join(dirs.agentDir, "pi-context-footer", "formatters.mjs"), 'export default { "example-work": text => text === "a verbose label" ? "short label" : undefined };');
-	const theme = fakeTheme();
+	const theme = testTheme();
 	const host = await start({ dirs, theme, statuses: { "example-work": "a verbose label" } });
 	try {
 		assert.match(bottom(host), /── short label ──╯$/);
