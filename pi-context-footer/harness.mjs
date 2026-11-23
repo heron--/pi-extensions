@@ -5,6 +5,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { testTheme } from "../lib/test-theme.mjs";
 
@@ -85,9 +86,12 @@ export async function startFooter(modulePath, options = {}) {
 
 	const handlers = new Map();
 	const commands = new Map();
+	// pi's own bus, so subscriptions and delivery behave as they do in pi.
+	const events = createEventBus();
 	const pi = {
 		on: (event, handler) => handlers.set(event, [...(handlers.get(event) ?? []), handler]),
 		registerCommand: (name, command) => commands.set(name, command),
+		events,
 	};
 
 	const state = {
@@ -160,6 +164,11 @@ export async function startFooter(modulePath, options = {}) {
 		state,
 		ctx,
 		emit,
+		/** Emit on pi's event bus and let its async listeners run. */
+		async publish(channel, data) {
+			events.emit(channel, data);
+			await new Promise((resolve) => setImmediate(resolve));
+		},
 		/** The framed editor at `width`. */
 		renderEditor: (width) => editor.render(width),
 		/** The footer at `width`: empty while the frame carries the layout. */

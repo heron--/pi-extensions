@@ -12,7 +12,7 @@ import { paintThinkingLevel } from "../lib/thinking-colors.ts";
 import type { BuiltinItemId, FooterColors, HostnameSettings, LayoutItem, StatusPresentation } from "./config.ts";
 import type { PullRequest } from "./pull-request.ts";
 import type { Repository } from "./repository.ts";
-import { formatStatus, type StatusFormatters } from "./formatters.ts";
+import { type FooterModules, type ModuleContext, statusText } from "./modules.ts";
 import { clipToWidth } from "./status.ts";
 
 const ICON_MODEL = String.fromCodePoint(0xf068c);
@@ -46,7 +46,8 @@ export interface ItemData {
 	hostnameSettings: HostnameSettings;
 	tokens: TokenTotals;
 	statuses: ReadonlyMap<string, string>;
-	statusFormatters: StatusFormatters;
+	modules: FooterModules;
+	moduleContext: ModuleContext;
 	/** Keys named by the layout's status items, which the remaining-statuses item skips. */
 	selectedStatusKeys: { has(key: string): boolean };
 	/** Whether the thinking gloss is being driven by a repaint ticker. */
@@ -253,8 +254,7 @@ export function renderItem(item: LayoutItem, data: ItemData): string | null {
 	if (item.kind === "builtin") return renderBuiltin(item.id, data);
 
 	if (item.kind === "status") {
-		const published = data.statuses.get(item.key);
-		const text = published === undefined ? "" : formatStatus(item.key, published, item.presentation, data.statusFormatters);
+		const text = statusText(item.key, data.statuses.get(item.key), item.presentation, data.modules, data.moduleContext);
 		if (!text) return null;
 		return present(text, item, data.theme);
 	}
@@ -263,7 +263,7 @@ export function renderItem(item: LayoutItem, data: ItemData): string | null {
 	const texts = [...data.statuses]
 		.filter(([key]) => !data.selectedStatusKeys.has(key))
 		.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-		.map(([key, published]) => formatStatus(key, published, item.presentation, data.statusFormatters))
+		.map(([key, published]) => statusText(key, published, item.presentation, data.modules, data.moduleContext))
 		.filter((text) => text.length > 0);
 	if (texts.length === 0) return null;
 	return present(texts.join(" "), item, data.theme);

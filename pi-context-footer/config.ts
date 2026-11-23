@@ -312,8 +312,8 @@ export interface FooterConfigLoad {
 	hostname: HostnameSettings | null;
 	/** The colors, or null when the file itself is unusable. */
 	colors: FooterColors | null;
-	/** Module path, null when disabled, or undefined when the setting is invalid. */
-	statusFormatters: string | null | undefined;
+	/** Footer module paths in load order, or undefined when the setting is invalid. */
+	modules: string[] | undefined;
 	/** Everything wrong with the file, for one warning. */
 	problems: string[];
 }
@@ -324,10 +324,10 @@ export function readFooterConfig(file: string): FooterConfigLoad {
 	try {
 		raw = readFileSync(file, "utf8");
 	} catch {
-		return { layout: DEFAULT_LAYOUT, hostname: DEFAULT_HOSTNAME_SETTINGS, colors: DEFAULT_FOOTER_COLORS, statusFormatters: null, problems: [] };
+		return { layout: DEFAULT_LAYOUT, hostname: DEFAULT_HOSTNAME_SETTINGS, colors: DEFAULT_FOOTER_COLORS, modules: [], problems: [] };
 	}
 
-	const unusable = (problem: string): FooterConfigLoad => ({ layout: null, hostname: null, colors: null, statusFormatters: undefined, problems: [problem] });
+	const unusable = (problem: string): FooterConfigLoad => ({ layout: null, hostname: null, colors: null, modules: undefined, problems: [problem] });
 	let stored: unknown;
 	try {
 		stored = JSON.parse(raw);
@@ -340,9 +340,19 @@ export function readFooterConfig(file: string): FooterConfigLoad {
 	const hostname = parseHostnameSettings(stored.hostname);
 	const colors = loadPalette(FOOTER_COLOR_ROLES, stored.colors);
 	const problems = [...layout.problems, ...hostname.problems, ...colors.problems];
-	let statusFormatters: string | null | undefined;
-	if (stored.statusFormatters === undefined || stored.statusFormatters === null) statusFormatters = null;
-	else if (typeof stored.statusFormatters === "string" && stored.statusFormatters.trim()) statusFormatters = stored.statusFormatters;
-	else problems.push('"statusFormatters" must be a non-empty path string or null');
-	return { layout: layout.layout, hostname: hostname.settings, colors: colors.palette, statusFormatters, problems };
+	const modules = parseModules(stored.modules, problems);
+	if (stored.statusFormatters !== undefined) {
+		problems.push('"statusFormatters" is no longer read; list footer modules under "modules"');
+	}
+	return { layout: layout.layout, hostname: hostname.settings, colors: colors.palette, modules, problems };
+}
+
+/** The `modules` key: a list of module paths. Absent or null is no modules. */
+function parseModules(value: unknown, problems: string[]): string[] | undefined {
+	if (value === undefined || value === null) return [];
+	if (Array.isArray(value) && value.every((path) => typeof path === "string" && path.trim().length > 0)) {
+		return value as string[];
+	}
+	problems.push('"modules" must be a list of non-empty path strings');
+	return undefined;
 }

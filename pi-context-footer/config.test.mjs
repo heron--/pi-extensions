@@ -105,23 +105,27 @@ test("a status color is a theme color name or a color value", () => {
 	}
 });
 
-test("statusFormatters is an optional module path; invalid values do not discard the layout", () => {
+test("modules is an optional list of module paths; invalid values do not discard the layout", () => {
 	const dir = mkdtempSync(join(tmpdir(), "pi-context-footer-config-test-"));
 	try {
 		const file = join(dir, "config.json");
-		for (const value of [undefined, null, "./formatters.mjs", "/tmp/formatters.mjs", "~/formatters.mjs"]) {
-			writeFileSync(file, JSON.stringify({ statusFormatters: value }));
+		for (const value of [undefined, null, [], ["./module.mjs"], ["/tmp/a.mjs", "~/b.mjs"]]) {
+			writeFileSync(file, JSON.stringify({ modules: value }));
 			const load = readFooterConfig(file);
-			assert.equal(load.statusFormatters, value ?? null);
+			assert.deepEqual(load.modules, value ?? []);
 			assert.deepEqual(load.problems, []);
 		}
-		for (const value of ["", "  ", false, 42, {}, []]) {
-			writeFileSync(file, JSON.stringify({ statusFormatters: value }));
+		for (const value of ["./module.mjs", "", false, 42, {}, [""], ["  "], [42]]) {
+			writeFileSync(file, JSON.stringify({ modules: value }));
 			const load = readFooterConfig(file);
-			assert.equal(load.statusFormatters, undefined);
+			assert.equal(load.modules, undefined);
 			assert.ok(load.layout);
-			assert.match(load.problems[0], /"statusFormatters" must be/);
+			assert.match(load.problems[0], /"modules" must be a list/);
 		}
+		writeFileSync(file, JSON.stringify({ statusFormatters: "./formatters.mjs" }));
+		const load = readFooterConfig(file);
+		assert.deepEqual(load.modules, []);
+		assert.match(load.problems[0], /"statusFormatters" is no longer read/);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -142,7 +146,7 @@ test("readFooterConfig: missing, malformed and partial files", () => {
 		assert.equal(readFooterConfig(file).layout, DEFAULT_LAYOUT);
 
 		writeFileSync(file, "{ not json");
-		assert.deepEqual(readFooterConfig(file), { layout: null, hostname: null, colors: null, statusFormatters: undefined, problems: ["config.json is not valid JSON"] });
+		assert.deepEqual(readFooterConfig(file), { layout: null, hostname: null, colors: null, modules: undefined, problems: ["config.json is not valid JSON"] });
 
 		writeFileSync(file, JSON.stringify({ animate: false, layout: { topLeft: ["nope"] }, hostname: { show: true } }));
 		const load = readFooterConfig(file);
