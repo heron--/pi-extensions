@@ -120,20 +120,46 @@ theme may make pi's own `thinkingOff` nearly invisible.
 
 `/context-footer host` re-reads these settings and reports what is shown and why.
 
-### Status formatters
+### Modules
 
-`statusFormatters` names a trusted JavaScript module, resolved beside
-`config.json`, that rewrites selected statuses before they are drawn:
+A module is trusted JavaScript that decides what a status item draws. It
+groups what one concern needs: the pi events it listens to, the statuses it
+draws, and whatever state it keeps between them. That lets a status show data
+its producer only sends as an event. `modules` lists them, each path resolved
+beside `config.json`:
+
+```json
+{ "modules": ["./modules/work.mjs"] }
+```
 
 ```js
+let finished = 0;
+
 export default {
-  "example-work": (text) => text === "work ready" ? "ready" : undefined,
+  events: {
+    "example:job-done": (data, { sessionId }) => {
+      if (data.sessionId === sessionId) finished++;
+    },
+  },
+  statuses: {
+    "example-work": (text) => (text === "work ready" ? `ready · ${finished} done` : undefined),
+  },
 };
 ```
 
-A formatter receives the sanitized text and returns a replacement, `""` to hide
-it, or `undefined` to keep it. Published statuses and their other consumers are
-untouched. The module runs with pi's permissions.
+- **`statuses`** maps a status key to a function of the published text, or of
+  `undefined` while nothing is published, so a module can draw a key from its
+  events alone. It returns the text to draw, `""` to hide the status, or
+  anything else to keep the published text. It runs on every redraw, so keep
+  it cheap. Only one module may draw a key.
+- **`events`** maps a `pi.events` channel, the bus extensions share, to a
+  handler of its payload. The footer redraws after each one.
+
+Every handler is also given `{ sessionId }`. The footer sanitizes what a
+module draws, then applies the layout's color and width. A handler that
+throws keeps the published text; published statuses and their other consumers
+are untouched. Modules start fresh each session and on
+`/context-footer reload`, and run with pi's permissions.
 
 ## Showing your extension's status
 
@@ -146,7 +172,7 @@ shown on one line as published, so put any icon or freshness in it yourself.
 ```text
 /context-footer                    toggle the decoration
 /context-footer on|off             enable or disable it
-/context-footer reload             re-read config.json and the status formatters
+/context-footer reload             re-read config.json and the modules
 /context-footer statuses           list the statuses that can be selected
 /context-footer pad [full|none]    report or set a blank row above and below the input
 /context-footer animate [on|off]   report or set the max thinking level's moving sheen

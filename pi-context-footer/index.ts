@@ -41,7 +41,7 @@ import {
 	readFooterConfig,
 } from "./config.ts";
 import { createTokenTotalsCache, hostnameLabel, hostnameShown, type ItemData, itemId, renderItem } from "./items.ts";
-import { loadStatusFormatters, type StatusFormatters } from "./formatters.ts";
+import { type FooterModules, loadModules, type ModuleContext, NO_MODULES, subscribeModules } from "./modules.ts";
 import { fitFramedRow, fitPlainRow, type ShownItem } from "./layout.ts";
 import { sanitizeStatus } from "./status.ts";
 import { PullRequestTracker } from "./pull-request.ts";
@@ -217,7 +217,11 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 	let layout: Layout = DEFAULT_LAYOUT;
 	let hostnameSettings: HostnameSettings = DEFAULT_HOSTNAME_SETTINGS;
 	let colors: FooterColors = DEFAULT_FOOTER_COLORS;
-	let statusFormatters: StatusFormatters = new Map();
+	let modules: FooterModules = NO_MODULES;
+	/** Removes the loaded modules' event subscriptions. */
+	let unsubscribeModules = () => {};
+	/** The session the modules' handlers are told they run in. */
+	let moduleContext: () => ModuleContext = () => ({ sessionId: "" });
 	/** The machine's hostname, re-read with the configuration. */
 	let machineHostname = "";
 
@@ -282,7 +286,8 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 			hostnameSettings,
 			tokens: tokenTotals(ctx.sessionManager),
 			statuses: provider?.getExtensionStatuses() ?? new Map(),
-			statusFormatters,
+			modules,
+			moduleContext: moduleContext(),
 			selectedStatusKeys,
 			animated,
 		};
@@ -388,18 +393,19 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 		animate = loadThinkingAnimatePreference();
 		const file = contextFooterConfigFile();
 		const load = readFooterConfig(file);
-		if (!reloading) statusFormatters = new Map();
+		moduleContext = () => ({ sessionId: ctx.sessionManager.getSessionId() });
+		if (!reloading) useModules(NO_MODULES);
 		if (load.layout) layout = load.layout;
 		else if (!reloading) layout = DEFAULT_LAYOUT;
 		if (load.hostname) hostnameSettings = load.hostname;
 		else if (!reloading) hostnameSettings = DEFAULT_HOSTNAME_SETTINGS;
 		if (load.colors) colors = load.colors;
 		else if (!reloading) colors = DEFAULT_FOOTER_COLORS;
-		if (load.statusFormatters !== undefined) {
+		if (load.modules !== undefined) {
 			try {
-				statusFormatters = await loadStatusFormatters(load.statusFormatters, file);
+				useModules(await loadModules(load.modules, file));
 			} catch (error) {
-				load.problems.push(`${error instanceof Error ? error.message : String(error)}; ${reloading ? "kept the previous status formatters" : "using unformatted statuses"}`);
+				load.problems.push(`${error instanceof Error ? error.message : String(error)}; ${reloading ? "kept the previous modules" : "running without modules"}`);
 			}
 		}
 		syncPullRequestWatch();
@@ -408,6 +414,13 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 			const fallback = load.layout ? "" : reloading ? " Kept the previous layout." : " Using the default layout.";
 			ctx.ui.notify(`context-footer config: ${load.problems.join("; ")}.${fallback}`, "warning");
 		}
+	}
+
+	/** Replace the loaded modules, moving the event subscriptions to the new set. */
+	function useModules(next: FooterModules): void {
+		unsubscribeModules();
+		modules = next;
+		unsubscribeModules = subscribeModules(next, pi.events, () => moduleContext(), () => (tickerTui ?? footer?.tui)?.requestRender());
 	}
 
 	/** Re-read only the hostname settings, for `/context-footer host`. */
@@ -430,17 +443,21 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 		const remaining = REGIONS.find((region) => layout[region].some((item) => item.kind === "remaining-statuses"));
 		// Keys are opaque producer strings; keep them to one safe line.
 		const show = (key: string) => JSON.stringify(sanitizeStatus(key, "normalized"));
+		const drawnBy = (key: string) => {
+			const owner = modules.statuses.get(key);
+			return owner ? `, drawn by module ${owner.module}` : "";
+		};
 		const lines = ["Published statuses:"];
 		if (statuses.size === 0) lines.push("  none");
 		for (const key of [...statuses.keys()].sort()) {
 			const region = selected.get(key);
 			const by = region ? `status item in ${region}` : remaining ? `remaining statuses in ${remaining}` : "not selected";
-			lines.push(`  ${show(key)} — ${by}`);
+			lines.push(`  ${show(key)} — ${by}${drawnBy(key)}`);
 		}
 		const unpublished = [...selected].filter(([key]) => !statuses.has(key));
 		if (unpublished.length > 0) {
 			lines.push("Selected but not published:");
-			for (const [key, region] of unpublished) lines.push(`  ${show(key)} — status item in ${region}`);
+			for (const [key, region] of unpublished) lines.push(`  ${show(key)} — status item in ${region}${drawnBy(key)}`);
 		}
 		if (!footer) lines.push("(The footer is off; statuses are read while it is on.)");
 		return lines.join("\n");
@@ -469,6 +486,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 		syncSheenTicker(false);
 		footer = null;
 		pullRequests.watch(null);
+		useModules(NO_MODULES);
 	});
 
 	pi.registerCommand("context-footer", {

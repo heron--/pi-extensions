@@ -5,7 +5,8 @@ Run: python3 pi-context-footer/tui.test.py [--output-dir DIR] [--only NAME]
 
 Each case launches the pi on PATH in a pseudo-terminal with scratch settings, a
 seeded synthetic session, this checkout's footer, and a synthetic status
-producer (an `/fx` command that publishes, clears or delays Pi statuses). It
+producer (an `/fx` command that publishes, clears or delays Pi statuses, or
+emits a pi event). It
 drives pi with real keystrokes and asserts on the decoded screen, in both
 fullscreen and regular TUI mode. Final screens are saved to the output
 directory as text and raw ANSI.
@@ -55,6 +56,7 @@ export default function (pi) {
       if (verb === "clear") ctx.ui.setStatus(key, undefined);
       if (verb === "later") setTimeout(() => ctx.ui.setStatus(key, text), 1000);
       if (verb === "theme") ctx.ui.setTheme(key);
+      if (verb === "emit") pi.events.emit(key, rest.length > 0 ? JSON.parse(rest.join(" ")) : undefined);
     },
   });
 }
@@ -379,22 +381,39 @@ def status_items(scratch, mode):
 
 
 @case
-def custom_status_formatters(scratch, mode):
-    """Owner modules format safely, reload at the same path, and keep layout colors."""
-    module = scratch / "formatters.mjs"
-    module.write_text('export default { "fx-work": text => text === "work ready" ? "✓ready" : undefined };')
+def footer_modules(scratch, mode):
+    """Owner modules draw statuses from events and state, reload, and keep layout colors."""
+    module = scratch / "modules" / "work.mjs"
+    module.parent.mkdir()
+    module.write_text("""
+let total = null;
+export default {
+  events: { "fx:total": (data) => { total = data.total; } },
+  statuses: {
+    "fx-work": (text) => text === "work ready" ? "✓ready" : undefined,
+    "fx-total": (text) => total === null ? undefined : `${text ?? "no status"} · total ${total}`,
+  },
+};""")
     layout = {"topLeft": ["model"], "topRight": [], "bottomLeft": [],
               "bottomRight": [{"status": "fx-blue", "color": "syntaxFunction"},
-                              {"status": "fx-work", "color": "syntaxFunction"}]}
-    config = {"statusFormatters": "../../formatters.mjs"}
+                              {"status": "fx-work", "color": "syntaxFunction"},
+                              {"status": "fx-total", "color": "syntaxFunction"}]}
+    config = {"modules": ["../../modules/work.mjs"]}
     pi = started(Pi(scratch, 100, layout=layout, config=config, tui_mode=mode))
     try:
         pi.command("/fx set fx-blue blue")
         pi.command("/fx set fx-work \\e[31mwork ready\\e[0m")
         assert "blue ── ✓ready" in pi.frame()[1], pi.text()
-        assert pi.fg_at("blue") == pi.fg_at("✓ready"), "the layout owns the formatter's color"
+        assert pi.fg_at("blue") == pi.fg_at("✓ready"), "the layout owns the module's color"
         color = pi.fg_at("✓ready")
-        (OUTPUT / f"custom-formatters-{mode}-compact.txt").write_text(pi.text() + "\n")
+        assert "total" not in pi.frame()[1], "nothing is drawn before the event"
+
+        # An event alone draws an unpublished key; a later status joins it.
+        pi.command('/fx emit fx:total {"total":7}')
+        pi.wait(lambda text: "no status · total 7" in text, "the event-drawn status")
+        pi.command("/fx set fx-total $1")
+        assert "$1 · total 7" in pi.frame()[1], pi.text()
+        (OUTPUT / f"footer-modules-{mode}-compact.txt").write_text(pi.text() + "\n")
         for width in [100, 80, 40, 24, 23, 100]:
             pi.set_size(width)
             pi.pump(0.6)
@@ -402,21 +421,28 @@ def custom_status_formatters(scratch, mode):
             if width >= 24:
                 pi.frame()
         pi.command("/fx theme light", 1.0)
-        assert pi.fg_at("blue") == pi.fg_at("✓ready") != color, "theme changes repaint formatted text"
+        assert pi.fg_at("blue") == pi.fg_at("✓ready") != color, "theme changes repaint module text"
         pi.command("/fx set fx-work unknown label")
         assert "unknown label" in pi.frame()[1], pi.text()
         pi.command("/fx set fx-work work ready")
 
-        # A same-path edit is evaluated by /context-footer reload. Control
-        # sequences and newlines from a formatter cannot damage the screen.
-        module.write_text('export default { "fx-work": () => "\\x1b[2Jshort\\ntext" };')
+        # A same-path edit is evaluated by /context-footer reload, with fresh
+        # state. Control sequences and newlines cannot damage the screen, and
+        # a throwing event handler prints nothing.
+        module.write_text("""export default {
+  events: { "fx:total": () => { throw new Error("bad handler"); } },
+  statuses: { "fx-work": () => "\\x1b[2Jshort\\ntext" },
+};""")
         pi.command("/context-footer reload", 1.0)
         assert "short text" in pi.frame()[1], pi.text()
-        assert "answer to" in pi.text(), "formatter output cleared the transcript"
-        module.write_text('export default { "fx-work": () => { throw new Error("bad rule"); } };')
+        assert "answer to" in pi.text(), "module output cleared the transcript"
+        assert "total 7" not in pi.frame()[1], "a reload starts the module fresh"
+        pi.command('/fx emit fx:total {"total":8}', 1.0)
+        assert "Event handler error" not in pi.text(), pi.text()
+        module.write_text('export default { statuses: { "fx-work": () => { throw new Error("bad rule"); } } };')
         pi.command("/context-footer reload", 1.0)
-        assert "work ready" in pi.frame()[1], "failed callback must retain the status"
-        pi.write_config({"animate": False, "layout": layout, "statusFormatters": None})
+        assert "work ready" in pi.frame()[1], "a failed handler must retain the status"
+        pi.write_config({"animate": False, "layout": layout, "modules": None})
         pi.command("/context-footer reload")
         assert "work ready" in pi.frame()[1], pi.text()
         pi.command("/fx clear fx-work")
@@ -424,7 +450,7 @@ def custom_status_formatters(scratch, mode):
         pi.check_no_errors()
         return pi
     except BaseException:
-        pi.close(OUTPUT, f"custom_status_formatters-{mode}-FAILED")
+        pi.close(OUTPUT, f"footer_modules-{mode}-FAILED")
         raise
 
 
