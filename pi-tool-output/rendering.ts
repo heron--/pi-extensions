@@ -11,6 +11,10 @@ interface ToolResultLike {
 	content?: unknown;
 }
 
+/**
+ * Display names for tools whose registered label is missing or unhelpful.
+ * Any other tool shows its label, or its name in title case.
+ */
 const TOOL_DISPLAY_NAMES: Readonly<Record<string, string>> = {
 	read: "Read File",
 	grep: "Search Files",
@@ -43,6 +47,7 @@ const TOOL_DISPLAY_NAMES: Readonly<Record<string, string>> = {
 	fusion_research: "Fusion Research",
 	fusion_validate: "Fusion Validation",
 	"multi_tool_use.parallel": "Parallel Tools",
+	get_session_trajectory: "Session Trajectory",
 };
 
 /**
@@ -82,6 +87,12 @@ const TOOL_ICONS: Readonly<Record<string, string>> = {
 	fusion_research: "\uf0eb",
 	fusion_validate: "\uf0eb",
 	"multi_tool_use.parallel": "\uf0e8", // nf-fa-sitemap
+	trajectory_search: "\uf1da", // nf-fa-history
+	trajectory_query: "\uf1c0", // nf-fa-database
+	trajectory_schema: "\uf1c0",
+	trajectory_status: "\uf1da",
+	trajectory_incognito: "\uf21b", // nf-fa-user_secret
+	get_session_trajectory: "\uf1da",
 };
 
 export function toolIcon(name: string): string {
@@ -140,10 +151,6 @@ export function displayToolName(name: string, label?: string): string {
 			.join(" ");
 	}
 	return stripTerminalSequences(displayName).replace(/\s+/g, " ").trim() || "Tool";
-}
-
-export function isKnownToolName(name: string): boolean {
-	return name in TOOL_DISPLAY_NAMES || name.startsWith("mcp__");
 }
 
 export { formatToolArguments } from "./arguments.ts";

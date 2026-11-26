@@ -51,7 +51,8 @@ def seed(cwd, name, args, result=None):
 
 
 DISPLAY_NAMES = {"bash": "Run Command", "subagent": "Subagent", "mcp": "MCP Gateway",
-                 "unknown_fixture": "Unknown Fixture", "codemode": "Code Mode"}
+                 "unknown_fixture": "Unknown Fixture", "codemode": "Code Mode",
+                 "trajectory_search": "Trajectory Search"}
 
 
 def run_case(name, args, summary, width, output_dir, result=None):
@@ -61,12 +62,8 @@ def run_case(name, args, summary, width, output_dir, result=None):
         agent = cwd / "agent"
         agent.mkdir()
         (agent / "settings.json").write_text(json.dumps({"theme": "dark", "quietStartup": True}))
-        (agent / "pi-tool-output").mkdir()
-        (agent / "pi-tool-output" / "config.json").write_text(json.dumps({
-            "customToolOverrides": {"unknown_fixture": {"enabled": True, "outputMode": "preview"}}}))
-        # Pi intentionally uses raw fallback rendering for historical tool names
-        # with no installed definition. Register inert definitions to exercise
-        # the late-render adapter seam without loading/executing those tools.
+        # Inert definitions with their own renderers: the late-render seam must
+        # draw them in the house view all the same, without executing them.
         fixtures = cwd / "fixtures.ts"
         fixtures.write_text('''
 import { Type } from "typebox";
@@ -175,6 +172,8 @@ if __name__ == "__main__":
         run_case("subagent", {"workflowScript": body, "async": True}, "Scripted workflow", columns, output)
         run_case("mcp", {"server": "linear", "args": {"query": body}}, "server: linear", columns, output)
         run_case("unknown_fixture", {"prompt": body}, "prompt:", columns, output)
+        # No definition at all: a resumed call to a tool that is not installed.
+        run_case("trajectory_search", {"query": "renderShell", "notes": body}, "renderShell", columns, output)
         run_case("codemode", {"code": 'const r = await Promise.allSettled([tools.bash({command:"git status --short"}), tools.read({path:"missing.ts"})]); text(r);\n' + "// BODY_MARKER\n" * 1000},
                  "JavaScript", columns, output, {
                      "content": [{"type": "text", "text": "Script completed\nWall time 0.2 seconds\nOutput:\n"},

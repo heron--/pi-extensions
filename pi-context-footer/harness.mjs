@@ -50,28 +50,19 @@ export function assistantEntry(id, usage) {
 
 /**
  * A scratch agent directory and a `demo-repo` working directory, so the
- * directory item and the config file are the same on every machine. The
- * optional fake `gh` records each lookup and answers with `pullRequest`.
+ * directory item and the config file are the same on every machine.
+ * `pullRequest` is what the stand-in for `gh` answers (see `startFooter`).
  */
 export function scratch({ config, pullRequest } = {}) {
 	const root = mkdtempSync(join(tmpdir(), "pi-context-footer-test-"));
 	const agentDir = join(root, "agent");
 	const cwd = join(root, "demo-repo");
-	const bin = join(root, "bin");
 	mkdirSync(join(agentDir, "pi-context-footer"), { recursive: true });
 	mkdirSync(cwd);
-	mkdirSync(bin);
 	if (config !== undefined) {
 		writeFileSync(join(agentDir, "pi-context-footer", "config.json"), typeof config === "string" ? config : JSON.stringify(config));
 	}
-	const ghLog = join(root, "gh.log");
-	const answer = pullRequest ? JSON.stringify(pullRequest) : "";
-	writeFileSync(
-		join(bin, "gh"),
-		`#!/bin/sh\necho "$PWD $*" >> '${ghLog}'\n${answer ? `echo '${answer}'` : "exit 1"}\n`,
-		{ mode: 0o755 },
-	);
-	return { root, agentDir, cwd, bin, ghLog, configFile: join(agentDir, "pi-context-footer", "config.json") };
+	return { root, agentDir, cwd, pullRequest, configFile: join(agentDir, "pi-context-footer", "config.json") };
 }
 
 /**
@@ -82,7 +73,14 @@ export function scratch({ config, pullRequest } = {}) {
 export async function startFooter(modulePath, options = {}) {
 	const dirs = options.dirs ?? scratch(options);
 	process.env.PI_CODING_AGENT_DIR = dirs.agentDir;
-	process.env.PATH = `${dirs.bin}:${process.env.PATH}`;
+	// The pull-request lookup, in process instead of `gh`: it records each
+	// lookup as the `gh` arguments it stands for and answers on a later tick,
+	// as a child process would, with `pullRequest` or no pull request.
+	const ghCalls = [];
+	const runPullRequest = (cwd, branch, done) => {
+		ghCalls.push(`${cwd} pr view ${branch} --json number,url`);
+		setImmediate(() => done(dirs.pullRequest ?? null));
+	};
 
 	const handlers = new Map();
 	const commands = new Map();
@@ -152,8 +150,8 @@ export async function startFooter(modulePath, options = {}) {
 		ui,
 	};
 
-	const { default: extension } = await import(modulePath);
-	extension(pi);
+	const { createContextFooter } = await import(modulePath);
+	createContextFooter(runPullRequest)(pi);
 	const emit = async (event, payload = {}) => {
 		for (const handler of handlers.get(event) ?? []) await handler({ type: event, ...payload }, ctx);
 	};
@@ -161,6 +159,8 @@ export async function startFooter(modulePath, options = {}) {
 
 	return {
 		dirs,
+		/** Every pull-request lookup so far, as `<cwd> <gh arguments>`; clear it to start over. */
+		ghCalls,
 		state,
 		ctx,
 		emit,

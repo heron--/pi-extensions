@@ -33,10 +33,10 @@ Certainly some extensions had more intellectual engagement from me than others.
   blocks in the transcript using the shared level colors while stripping those
   presentation labels before the next model turn.
 - **[pi-tool-output](pi-tool-output/README.md)** — I wanted tool output to be concise
-  and consistent with the design of my other extensions. This frames built-in and known
-  extension tools in the shared dark house box, with readable names, a semantic
-  one-line summary of each call, dimmed expandable output, and side-by-side or
-  one-column diffs for edits and writes.
+  and consistent with the design of my other extensions. This frames every tool call
+  in the shared dark house box, with readable names, a semantic one-line summary of
+  each call, dimmed expandable output, and side-by-side or one-column diffs for edits
+  and writes.
 - **[pi-transcript-digest](pi-transcript-digest/README.md)** — I really struggled to keep up
   with an Astra conversation with all of it's tool calls. I wanted a more compact view where I
   could just see our conversation. This exists in pi with the `/tree` command.

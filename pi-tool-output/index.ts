@@ -2,6 +2,7 @@ import type {
 	AgentToolResult,
 	ExtensionAPI,
 	Theme,
+	ToolRenderers,
 	ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -20,26 +21,18 @@ import type { Component, KeyId, TuiMouseEvent, TuiMouseEventResult } from "@eare
 import { Container, Text } from "@earendil-works/pi-tui";
 import {
 	BUILTIN_TOOL_NAMES,
+	drawsTool,
 	loadToolOutputConfig,
 	saveToolOutputConfig,
-	type CustomToolOverride,
 	type OutputMode,
 	type ToolOutputConfig,
 } from "./config.ts";
-import {
-	TOOL_OUTPUT_API_KEY,
-	TOOL_OUTPUT_PENDING_KEY,
-	type RuntimeToolDefinition,
-	type ToolOutputAdapter,
-	type ToolOutputApi,
-} from "./decorate.ts";
 import { type Ink, paint } from "../lib/colors.ts";
 import { loadToolOutputColors, TOOL_OUTPUT_COLORS, useToolOutputColors } from "./colors.ts";
 import {
 	countNonEmptyLines,
 	displayToolName,
 	extractTextOutput,
-	isKnownToolName,
 	isLikelyQuietCommand,
 	outputLines,
 	pluralize,
@@ -57,8 +50,8 @@ import { readBeforeWrite, writeDetails } from "./file-changes.ts";
 import { fileCallComponent } from "./file-view.ts";
 
 type ResultLike = AgentToolResult<unknown>;
-type DecoratedProperty = "renderCall" | "renderResult" | "renderShell";
-type RuntimeCallRenderer = (args: unknown, theme: Theme, context: ToolRenderContextLike) => unknown;
+/** The runtime shape of a tool definition: whatever the registering extension put on it. */
+type RuntimeToolDefinition = Record<string, unknown> & { name?: string };
 type RuntimeResultRenderer = (
 	result: ResultLike,
 	options: ToolRenderResultOptions,
@@ -74,22 +67,6 @@ interface ToolRenderContextLike {
 	cwd?: string;
 }
 
-interface StoredDescriptors {
-	renderCall?: PropertyDescriptor;
-	renderResult?: PropertyDescriptor;
-	renderShell?: PropertyDescriptor;
-}
-
-interface DecorationDescriptors {
-	original: StoredDescriptors;
-	installed: StoredDescriptors;
-}
-
-interface PendingDecoration {
-	tool: RuntimeToolDefinition;
-	adapter?: ToolOutputAdapter;
-}
-
 interface ToolExecutionInstanceLike {
 	toolName?: string;
 	toolDefinition?: RuntimeToolDefinition;
@@ -100,23 +77,12 @@ type RenderMethod = (this: ToolExecutionInstanceLike, width: number) => string[]
 type MouseMethod = (this: ToolExecutionInstanceLike, event: TuiMouseEvent) => TuiMouseEventResult | undefined;
 
 interface PatchedToolExecutionPrototype {
-	getCallRenderer(this: ToolExecutionInstanceLike): RuntimeCallRenderer | undefined;
-	getResultRenderer(this: ToolExecutionInstanceLike): RuntimeResultRenderer | undefined;
-	getRenderShell(this: ToolExecutionInstanceLike): "default" | "self";
 	render: RenderMethod;
 	handleMouse: MouseMethod;
-	__toolOutputOriginalGetCallRenderer?: PatchedToolExecutionPrototype["getCallRenderer"];
-	__toolOutputOriginalGetResultRenderer?: PatchedToolExecutionPrototype["getResultRenderer"];
-	__toolOutputOriginalGetRenderShell?: PatchedToolExecutionPrototype["getRenderShell"];
 	__toolOutputOriginalRender?: RenderMethod;
 	__toolOutputOriginalHandleMouse?: MouseMethod;
 	__toolOutputPatchedBy?: symbol;
 }
-
-type ToolOutputGlobal = typeof globalThis & {
-	[TOOL_OUTPUT_API_KEY]?: ToolOutputApi;
-	[TOOL_OUTPUT_PENDING_KEY]?: PendingDecoration[];
-};
 
 interface BuiltinTools {
 	read: ReturnType<typeof createReadToolDefinition>;
@@ -129,19 +95,6 @@ interface BuiltinTools {
 }
 
 const builtinsByCwd = new Map<string, BuiltinTools>();
-const DECORATED_PROPERTIES: DecoratedProperty[] = ["renderCall", "renderResult", "renderShell"];
-
-function samePropertyDescriptor(left: PropertyDescriptor | undefined, right: PropertyDescriptor): boolean {
-	return (
-		left !== undefined &&
-		left.configurable === right.configurable &&
-		left.enumerable === right.enumerable &&
-		left.writable === right.writable &&
-		left.value === right.value &&
-		left.get === right.get &&
-		left.set === right.set
-	);
-}
 
 function toRecord(value: unknown): Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -386,6 +339,7 @@ function adapterCall(
 	theme: Theme,
 	context: ToolRenderContextLike,
 ): ReturnType<typeof toolCallBox> {
+	groupTheme = theme;
 	const name = stringField(tool, "name") ?? "tool";
 	const label = stringField(tool, "label");
 	return toolCallBox(
@@ -405,114 +359,35 @@ function isMcpTool(tool: RuntimeToolDefinition): boolean {
 	return name === "mcp" || /^mcp[_:-]/i.test(name) || /^MCP\b/.test(label) || /\bMCP\b/.test(description);
 }
 
-function configuredCustomOverride(tool: RuntimeToolDefinition, config: ToolOutputConfig): CustomToolOverride | undefined {
-	const name = stringField(tool, "name");
-	return name ? config.customToolOverrides[name] : undefined;
+function isBuiltinTool(name: string): boolean {
+	return (BUILTIN_TOOL_NAMES as readonly string[]).includes(name);
 }
 
-function installDecorationApi(getConfig: () => ToolOutputConfig): () => void {
-	const target = globalThis as ToolOutputGlobal;
-	const descriptorSnapshots = new Map<RuntimeToolDefinition, DecorationDescriptors>();
-
-	const api: ToolOutputApi = {
-		version: 1,
-		decorateTool<T extends object>(tool: T, adapter: ToolOutputAdapter = {}): T {
-			const runtimeTool = tool as RuntimeToolDefinition;
-			const config = getConfig();
-			const custom = configuredCustomOverride(runtimeTool, config);
-			if (custom?.enabled === false) return tool;
-
-			const kind = custom?.kind ?? adapter.kind ?? (isMcpTool(runtimeTool) ? "mcp" : "generic");
-			const mode = custom?.outputMode ?? adapter.outputMode ?? (kind === "mcp" ? config.mcpOutputMode : runtimeTool.name === "codemode" ? "preview" : "summary");
-			const overrideExisting = custom?.enabled === true || adapter.overrideExistingRenderers === true;
-			const hasExistingRenderer =
-				typeof runtimeTool.renderCall === "function" || typeof runtimeTool.renderResult === "function";
-			if (hasExistingRenderer && !overrideExisting) return tool;
-
-			const decorated: RuntimeToolDefinition = { ...runtimeTool };
-			decorated.renderCall = (args: unknown, theme: Theme, context: ToolRenderContextLike) =>
-				adapterCall(decorated, args, theme, context);
-			decorated.renderResult = (
-				result: ResultLike,
-				options: ToolRenderResultOptions,
-				theme: Theme,
-				context: ToolRenderContextLike,
-			) =>
-				adapterResult(decorated, result, options, theme, context, getConfig(), mode);
-			decorated.renderShell = "self";
-			markHouseRenderer(decorated.renderCall);
-			return decorated as T;
-		},
+/**
+ * The renderers a call to `toolName` is drawn with. `base` is what pi would
+ * use otherwise: the tool's own renderers, pi's built-in ones, or nothing for
+ * a tool that is not registered (a resumed session's call to a tool that is
+ * gone). Every tool gets the house view, unless its `tools` entry is `false`.
+ * A built-in tool drawn here is the one registered here, which already has it.
+ * The rest of the definition is kept, so the group still reads the tool's label.
+ */
+function houseRenderers(toolName: string, base: ToolRenderers | undefined, config: ToolOutputConfig): ToolRenderers | undefined {
+	if (!drawsTool(config, toolName) || isBuiltinTool(toolName)) return base;
+	const tool: RuntimeToolDefinition = { ...(base as RuntimeToolDefinition | undefined), name: toolName };
+	const setting = config.tools[toolName] || {};
+	const mode = setting.outputMode ?? (isMcpTool(tool) ? config.mcpOutputMode : "preview");
+	const native = setting.expanded === "native" ? (base?.renderResult as RuntimeResultRenderer | undefined) : undefined;
+	return {
+		...base,
+		renderShell: "self",
+		renderCall: (args, theme, context) => adapterCall(tool, args, theme, context as ToolRenderContextLike),
+		renderResult: (result, options, theme, context) =>
+			(native?.(result, options, theme, context as ToolRenderContextLike) as Component | undefined) ??
+			adapterResult(tool, result, options, theme, context as ToolRenderContextLike, config, mode),
 	};
-
-	target[TOOL_OUTPUT_API_KEY] = api;
-	const pending = target[TOOL_OUTPUT_PENDING_KEY];
-	if (Array.isArray(pending)) {
-		for (const entry of pending.splice(0)) {
-			if (!entry?.tool || typeof entry.tool !== "object") continue;
-			const decorated = api.decorateTool(entry.tool, entry.adapter);
-			if (decorated === entry.tool) continue;
-			const existing = descriptorSnapshots.get(entry.tool);
-			const original: StoredDescriptors = existing?.original ?? {};
-			if (!existing) {
-				for (const property of DECORATED_PROPERTIES) {
-					const descriptor = Object.getOwnPropertyDescriptor(entry.tool, property);
-					if (descriptor) original[property] = descriptor;
-				}
-			}
-			Object.assign(entry.tool, decorated);
-			const installed: StoredDescriptors = {};
-			for (const property of DECORATED_PROPERTIES) {
-				const descriptor = Object.getOwnPropertyDescriptor(entry.tool, property);
-				if (descriptor) installed[property] = descriptor;
-			}
-			descriptorSnapshots.set(entry.tool, { original, installed });
-		}
-	}
-
-	return () => {
-		if (target[TOOL_OUTPUT_API_KEY] === api) delete target[TOOL_OUTPUT_API_KEY];
-		for (const [tool, snapshot] of descriptorSnapshots) {
-			for (const property of DECORATED_PROPERTIES) {
-				const current = Object.getOwnPropertyDescriptor(tool, property);
-				const installed = snapshot.installed[property];
-				if (!installed || !samePropertyDescriptor(current, installed)) continue;
-				const original = snapshot.original[property];
-				if (original) Object.defineProperty(tool, property, original);
-				else delete tool[property];
-			}
-		}
-	};
-}
-
-interface RuntimeRenderingTarget {
-	tool: RuntimeToolDefinition;
-	kind: "generic" | "mcp";
-	mode: OutputMode;
-}
-
-function resolveRuntimeRenderingTarget(
-	instance: ToolExecutionInstanceLike,
-	config: ToolOutputConfig,
-): RuntimeRenderingTarget | undefined {
-	const definition = instance.toolDefinition ?? {};
-	const name = instance.toolName ?? stringField(definition, "name");
-	const tool = name && !stringField(definition, "name") ? { ...definition, name } : definition;
-	const custom = name ? config.customToolOverrides[name] : undefined;
-	if (custom) {
-		return custom.enabled ? { tool, kind: custom.kind, mode: custom.outputMode } : undefined;
-	}
-	if (isMcpTool(tool)) return { tool, kind: "mcp", mode: config.mcpOutputMode };
-	if (name && !(BUILTIN_TOOL_NAMES as readonly string[]).includes(name) && isKnownToolName(name)) {
-		return { tool, kind: "generic", mode: "preview" };
-	}
-	return undefined;
 }
 
 const TOOL_EXECUTION_PATCH_OWNER = Symbol.for("pi-tool-output.tool-execution-patch.v1");
-let installedCallRendererWrapper: PatchedToolExecutionPrototype["getCallRenderer"] | undefined;
-let installedResultRendererWrapper: PatchedToolExecutionPrototype["getResultRenderer"] | undefined;
-let installedRenderShellWrapper: PatchedToolExecutionPrototype["getRenderShell"] | undefined;
 let installedRenderWrapper: RenderMethod | undefined;
 let installedHandleMouseWrapper: MouseMethod | undefined;
 let installedPatchState: { active: boolean } | undefined;
@@ -521,45 +396,42 @@ let installedPatchState: { active: boolean } | undefined;
 /* Grouped layout state                                                        */
 /* -------------------------------------------------------------------------- */
 
-const HOUSE_RENDERER = Symbol.for("pi-tool-output.house-renderer.v1");
-
-/** Tag a renderCall this extension installed, so the component holding it joins groups. */
-function markHouseRenderer(renderer: unknown): void {
-	if (typeof renderer === "function") (renderer as unknown as Record<symbol, boolean>)[HOUSE_RENDERER] = true;
-}
-
-/** Pi does not export its live theme; every member's call renderer runs before it draws, so record it there. */
+/**
+ * Pi does not export its live theme. Every house call renderer runs before its
+ * component draws, so `adapterCall` records it.
+ */
 let groupTheme: Theme | undefined;
-/** The most recently created member: the expand-last shortcut's target, and the only row with the hint. */
+/**
+ * The newest call decides the expand-last target. Pi asks the tool-renderer
+ * resolvers for a call's renderers once, as it creates the call, and calls are
+ * created in transcript order, so `stampCreation` numbers each call's
+ * renderers there. The newest call, if it is a group member, carries the hint
+ * and is the shortcut's target; a newer call outside the groups (a tool that
+ * keeps its own renderer) leaves neither pointing past it.
+ */
+const CREATED = Symbol.for("pi-tool-output.created.v1");
+let createdCalls = 0;
+/** The shortcut's target, once the newest call has drawn and turned out to be a member. */
 let lastMember: WeakRef<GroupMember> | undefined;
-const seenTools = new WeakSet<object>();
 /** Row owners from each leader's last render, for click routing. */
 const groupRowOwners = new WeakMap<object, (GroupMember | undefined)[]>();
 
 /**
- * Whether a tool component draws in the house box — and so joins a group.
- * pi's builtins always do (edit/write keep their own renderer for the
- * expanded view), as do adapted tools; any other tool keeps its own output and
- * ends the run.
+ * Whether a tool component joins a group: every tool does, unless its `tools`
+ * entry is `false`. Such a tool keeps its own output and ends the run.
  */
 function isGroupMember(instance: ToolExecutionInstanceLike, config: ToolOutputConfig): boolean {
-	const name = instance.toolName;
-	if (name && (BUILTIN_TOOL_NAMES as readonly string[]).includes(name)) return true;
-	const renderCall = instance.toolDefinition?.renderCall as Record<symbol, unknown> | undefined;
-	if (typeof renderCall === "function" && renderCall[HOUSE_RENDERER] === true) return true;
-	return resolveRuntimeRenderingTarget(instance, config) !== undefined;
+	return instance.toolName === undefined || drawsTool(config, instance.toolName);
 }
 
-/**
- * Record a tool call the first time it is seen. Calls are created in
- * transcript order, so the newest one decides the expand-last target: a group
- * member becomes it, and a call outside the groups (a tool that keeps its own
- * renderer) clears it, so the hint and the shortcut never point past it.
- */
-function noteTool(instance: ToolExecutionInstanceLike, member: boolean): void {
-	if (seenTools.has(instance)) return;
-	seenTools.add(instance);
-	lastMember = member ? new WeakRef(instance as unknown as GroupMember) : undefined;
+function stampCreation(renderers: ToolRenderers | undefined): ToolRenderers | undefined {
+	createdCalls++;
+	lastMember = undefined;
+	return renderers && ({ ...renderers, [CREATED]: createdCalls } as ToolRenderers);
+}
+
+function isNewestCall(instance: { toolDefinition?: Record<PropertyKey, unknown> }): boolean {
+	return createdCalls > 0 && instance.toolDefinition?.[CREATED] === createdCalls;
 }
 
 /** Expand or collapse only the most recent call. */
@@ -571,67 +443,27 @@ function toggleLastMember(): void {
 }
 
 /**
- * Pi exposes tool metadata, not registered definitions, through getAllTools().
- * The exported TUI component is therefore the only safe late seam for tools
- * that cannot import the decorator helper (notably installed MCP adapters).
+ * Pi has no API for laying several calls out together, so the group layout
+ * replaces the exported TUI component's own drawing and click handling. The
+ * renderers each call is drawn with come from `houseRenderers`, through pi's
+ * tool-renderer API.
  */
 function patchToolExecutionRendering(getConfig: () => ToolOutputConfig): void {
 	const prototype = ToolExecutionComponent.prototype as unknown as PatchedToolExecutionPrototype;
-	if (
-		typeof prototype.getCallRenderer !== "function" ||
-		typeof prototype.getResultRenderer !== "function" ||
-		typeof prototype.getRenderShell !== "function" ||
-		prototype.__toolOutputPatchedBy === TOOL_EXECUTION_PATCH_OWNER
-	) {
-		return;
-	}
+	if (typeof prototype.render !== "function" || prototype.__toolOutputPatchedBy === TOOL_EXECUTION_PATCH_OWNER) return;
 
-	prototype.__toolOutputOriginalGetCallRenderer ??= prototype.getCallRenderer;
-	prototype.__toolOutputOriginalGetResultRenderer ??= prototype.getResultRenderer;
-	prototype.__toolOutputOriginalGetRenderShell ??= prototype.getRenderShell;
 	prototype.__toolOutputOriginalRender ??= prototype.render;
 	prototype.__toolOutputOriginalHandleMouse ??= prototype.handleMouse;
-	const originalCall = prototype.__toolOutputOriginalGetCallRenderer;
-	const originalResult = prototype.__toolOutputOriginalGetResultRenderer;
-	const originalShell = prototype.__toolOutputOriginalGetRenderShell;
 	const originalRender = prototype.__toolOutputOriginalRender;
 	const originalHandleMouse = prototype.__toolOutputOriginalHandleMouse;
 	const patchState = { active: true };
 	installedPatchState = patchState;
 
-	installedCallRendererWrapper = function (this: ToolExecutionInstanceLike): RuntimeCallRenderer | undefined {
-		if (!patchState.active) return originalCall.call(this);
-		const config = getConfig();
-		const target = resolveRuntimeRenderingTarget(this, config);
-		const renderer: RuntimeCallRenderer | undefined = target
-			? (args, theme, context) => adapterCall(target.tool, args, theme, context)
-			: originalCall.call(this);
-		const member = renderer !== undefined && isGroupMember(this, config);
-		noteTool(this, member);
-		if (!member) return renderer;
-		return (args, theme, context) => {
-			groupTheme = theme;
-			return renderer(args, theme, context);
-		};
-	};
-	installedResultRendererWrapper = function (this: ToolExecutionInstanceLike): RuntimeResultRenderer | undefined {
-		if (!patchState.active) return originalResult.call(this);
-		const target = resolveRuntimeRenderingTarget(this, getConfig());
-		if (!target) return originalResult.call(this);
-		return (result, options, theme, context) =>
-			adapterResult(target.tool, result, options, theme, context, getConfig(), target.mode);
-	};
-	installedRenderShellWrapper = function (this: ToolExecutionInstanceLike): "default" | "self" {
-		if (!patchState.active) return originalShell.call(this);
-		return resolveRuntimeRenderingTarget(this, getConfig()) ? "self" : originalShell.call(this);
-	};
-
 	installedRenderWrapper = function (this: ToolExecutionInstanceLike, width: number): string[] {
 		const config = getConfig();
 		if (!patchState.active) return originalRender.call(this, width);
 		const joins = isGroupMember(this, config);
-		// Calls with no definition never reach the call-renderer wrapper; note them here.
-		noteTool(this, joins);
+		if (joins && isNewestCall(this)) lastMember = new WeakRef(this as unknown as GroupMember);
 		if (!groupTheme || !joins) return originalRender.call(this, width);
 		const member = this as unknown as GroupMember;
 		const role = resolveGroup(member, this.ui, width, (component): component is GroupMember =>
@@ -643,7 +475,7 @@ function patchToolExecutionRendering(getConfig: () => ToolOutputConfig): void {
 		}
 		const group = renderGroup(role.members, width, {
 			theme: groupTheme,
-			lastMember: lastMember?.deref(),
+			lastMember: role.members.find(isNewestCall),
 			expandLastKey: config.expandLastKey,
 			diff: diffOptions(config),
 		});
@@ -660,9 +492,6 @@ function patchToolExecutionRendering(getConfig: () => ToolOutputConfig): void {
 		return { handled: true };
 	};
 
-	prototype.getCallRenderer = installedCallRendererWrapper;
-	prototype.getResultRenderer = installedResultRendererWrapper;
-	prototype.getRenderShell = installedRenderShellWrapper;
 	prototype.render = installedRenderWrapper;
 	prototype.handleMouse = installedHandleMouseWrapper;
 	prototype.__toolOutputPatchedBy = TOOL_EXECUTION_PATCH_OWNER;
@@ -671,27 +500,6 @@ function patchToolExecutionRendering(getConfig: () => ToolOutputConfig): void {
 function unpatchToolExecutionRendering(): void {
 	const prototype = ToolExecutionComponent.prototype as unknown as PatchedToolExecutionPrototype;
 	if (installedPatchState) installedPatchState.active = false;
-	if (
-		installedCallRendererWrapper !== undefined &&
-		prototype.getCallRenderer === installedCallRendererWrapper &&
-		prototype.__toolOutputOriginalGetCallRenderer
-	) {
-		prototype.getCallRenderer = prototype.__toolOutputOriginalGetCallRenderer;
-	}
-	if (
-		installedResultRendererWrapper !== undefined &&
-		prototype.getResultRenderer === installedResultRendererWrapper &&
-		prototype.__toolOutputOriginalGetResultRenderer
-	) {
-		prototype.getResultRenderer = prototype.__toolOutputOriginalGetResultRenderer;
-	}
-	if (
-		installedRenderShellWrapper !== undefined &&
-		prototype.getRenderShell === installedRenderShellWrapper &&
-		prototype.__toolOutputOriginalGetRenderShell
-	) {
-		prototype.getRenderShell = prototype.__toolOutputOriginalGetRenderShell;
-	}
 	if (
 		installedRenderWrapper !== undefined &&
 		prototype.render === installedRenderWrapper &&
@@ -707,16 +515,10 @@ function unpatchToolExecutionRendering(): void {
 		prototype.handleMouse = prototype.__toolOutputOriginalHandleMouse;
 	}
 	if (prototype.__toolOutputPatchedBy === TOOL_EXECUTION_PATCH_OWNER) {
-		delete prototype.__toolOutputOriginalGetCallRenderer;
-		delete prototype.__toolOutputOriginalGetResultRenderer;
-		delete prototype.__toolOutputOriginalGetRenderShell;
 		delete prototype.__toolOutputOriginalRender;
 		delete prototype.__toolOutputOriginalHandleMouse;
 		delete prototype.__toolOutputPatchedBy;
 	}
-	installedCallRendererWrapper = undefined;
-	installedResultRendererWrapper = undefined;
-	installedRenderShellWrapper = undefined;
 	installedRenderWrapper = undefined;
 	installedHandleMouseWrapper = undefined;
 	installedPatchState = undefined;
@@ -726,7 +528,7 @@ function unpatchToolExecutionRendering(): void {
 
 function registerBuiltinOverrides(pi: ExtensionAPI, config: ToolOutputConfig): void {
 	const bootstrap = getBuiltinTools(process.cwd());
-	if (config.registerToolOverrides.read) {
+	if (drawsTool(config, "read")) {
 		pi.registerTool({
 			...bootstrap.read,
 			renderShell: "self",
@@ -755,7 +557,7 @@ function registerBuiltinOverrides(pi: ExtensionAPI, config: ToolOutputConfig): v
 		return `↳ ${count} ${pluralize(count, singular, plural)} returned`;
 	};
 
-	if (config.registerToolOverrides.grep) {
+	if (drawsTool(config, "grep")) {
 		pi.registerTool({
 			...bootstrap.grep,
 			renderShell: "self",
@@ -773,7 +575,7 @@ function registerBuiltinOverrides(pi: ExtensionAPI, config: ToolOutputConfig): v
 		});
 	}
 
-	if (config.registerToolOverrides.find) {
+	if (drawsTool(config, "find")) {
 		pi.registerTool({
 			...bootstrap.find,
 			renderShell: "self",
@@ -791,7 +593,7 @@ function registerBuiltinOverrides(pi: ExtensionAPI, config: ToolOutputConfig): v
 		});
 	}
 
-	if (config.registerToolOverrides.ls) {
+	if (drawsTool(config, "ls")) {
 		pi.registerTool({
 			...bootstrap.ls,
 			renderShell: "self",
@@ -809,7 +611,7 @@ function registerBuiltinOverrides(pi: ExtensionAPI, config: ToolOutputConfig): v
 		});
 	}
 
-	if (config.registerToolOverrides.bash) {
+	if (drawsTool(config, "bash")) {
 		pi.registerTool({
 			...bootstrap.bash,
 			renderShell: "self",
@@ -825,7 +627,7 @@ function registerBuiltinOverrides(pi: ExtensionAPI, config: ToolOutputConfig): v
 		});
 	}
 
-	if (config.registerToolOverrides.edit) {
+	if (drawsTool(config, "edit")) {
 		pi.registerTool({
 			...bootstrap.edit,
 			renderShell: "self",
@@ -840,7 +642,7 @@ function registerBuiltinOverrides(pi: ExtensionAPI, config: ToolOutputConfig): v
 			},
 		});
 	}
-	if (config.registerToolOverrides.write) {
+	if (drawsTool(config, "write")) {
 		pi.registerTool({
 			...bootstrap.write,
 			renderShell: "self",
@@ -905,8 +707,8 @@ function fileResult(
 }
 
 function configSummary(config: ToolOutputConfig): string {
-	const owned = Object.entries(config.registerToolOverrides)
-		.filter(([, enabled]) => enabled)
+	const native = Object.entries(config.tools)
+		.filter(([, setting]) => setting === false)
 		.map(([name]) => name)
 		.join(", ");
 	return [
@@ -915,7 +717,7 @@ function configSummary(config: ToolOutputConfig): string {
 		`search=${config.searchOutputMode}`,
 		`mcp=${config.mcpOutputMode}`,
 		`bash=${config.bashOutputMode}/${config.bashCollapsedLines}`,
-		`owns=${owned || "none"}`,
+		`native=${native || "none"}`,
 	].join(" · ");
 }
 
@@ -923,23 +725,27 @@ export default function toolOutputExtension(pi: ExtensionAPI): void {
 	const loaded = loadToolOutputConfig();
 	let config = loaded.config;
 	useToolOutputColors(loadToolOutputColors(config.colors).palette);
-	let cleanupDecorationApi: (() => void) | undefined;
-
+	// Renderers are swapped only in a TUI session, while the group layout is installed.
+	let rendering = false;
 	if (config.enabled) {
-		cleanupDecorationApi = installDecorationApi(() => config);
 		registerBuiltinOverrides(pi, config);
+		pi.registerToolRenderer((toolName, next) =>
+			rendering ? stampCreation(houseRenderers(toolName, next(), config)) : next(),
+		);
 	}
 
 	pi.on("session_start", (_event, ctx) => {
 		if (loaded.error) ctx.ui.notify(loaded.error, "warning");
 		if (loaded.problems.length > 0) ctx.ui.notify(`tool-output config: ${loaded.problems.join("; ")}.`, "warning");
-		if (config.enabled && ctx.mode === "tui") patchToolExecutionRendering(() => config);
+		if (config.enabled && ctx.mode === "tui") {
+			rendering = true;
+			patchToolExecutionRendering(() => config);
+		}
 	});
 
 	pi.on("session_shutdown", () => {
+		rendering = false;
 		unpatchToolExecutionRendering();
-		cleanupDecorationApi?.();
-		cleanupDecorationApi = undefined;
 		builtinsByCwd.clear();
 	});
 

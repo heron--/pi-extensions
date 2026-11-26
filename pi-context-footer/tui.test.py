@@ -116,6 +116,12 @@ class Pi:
             {"theme": "dark", "quietStartup": True, "tuiMode": tui_mode}))
         self.config_file = agent / "pi-context-footer" / "config.json"
         self.write_config({"animate": False, **({"layout": layout} if layout else {}), **(config or {})})
+        # A stand-in for `gh` that never finds a pull request, so the
+        # pull-request item never runs the real one.
+        bin_dir = scratch / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "gh").write_text("#!/bin/sh\nexit 1\n")
+        (bin_dir / "gh").chmod(0o755)
         producer = scratch / "producer.ts"
         producer.write_text(PRODUCER)
         session = scratch / "session.jsonl"
@@ -129,7 +135,7 @@ class Pi:
         if self.pid == 0:
             os.chdir(cwd)
             os.environ.update({"PI_CODING_AGENT_DIR": str(agent), "TERM": "xterm-256color",
-                               "COLORTERM": "truecolor"})
+                               "COLORTERM": "truecolor", "PATH": f"{bin_dir}:{os.environ['PATH']}"})
             os.execvp("pi", args)
         self.screen = pyte.Screen(width, height)
         self.stream = pyte.Stream(self.screen)

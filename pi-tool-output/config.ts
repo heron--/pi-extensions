@@ -5,40 +5,34 @@ import { loadToolOutputColors } from "./colors.ts";
 
 export const OUTPUT_MODES = ["hidden", "summary", "preview"] as const;
 export const BASH_OUTPUT_MODES = ["opencode", "summary", "preview"] as const;
-export const CUSTOM_TOOL_KINDS = ["generic", "mcp"] as const;
 export const BUILTIN_TOOL_NAMES = ["read", "grep", "find", "ls", "bash", "edit", "write"] as const;
 export const DIFF_VIEW_MODES = ["auto", "split", "unified"] as const;
 export const DIFF_INDICATOR_MODES = ["bars", "classic", "none"] as const;
 
 export type OutputMode = (typeof OUTPUT_MODES)[number];
 export type BashOutputMode = (typeof BASH_OUTPUT_MODES)[number];
-export type CustomToolKind = (typeof CUSTOM_TOOL_KINDS)[number];
 export type BuiltinToolName = (typeof BUILTIN_TOOL_NAMES)[number];
 export type DiffViewMode = (typeof DIFF_VIEW_MODES)[number];
 export type DiffIndicatorMode = (typeof DIFF_INDICATOR_MODES)[number];
 
-export interface ToolOwnership {
-	read: boolean;
-	grep: boolean;
-	find: boolean;
-	ls: boolean;
-	bash: boolean;
-	edit: boolean;
-	write: boolean;
-}
-
-export interface CustomToolOverride {
-	enabled: boolean;
-	kind: CustomToolKind;
-	outputMode: OutputMode;
-}
+/**
+ * One tool's entry in `tools`. Every tool is drawn here unless its entry is
+ * `false`, which leaves it to its own renderer, outside the groups. An object
+ * tunes a tool that is not built in (a built-in tool's mode is its
+ * `*OutputMode` setting):
+ *
+ * - `outputMode` sets how its expanded output is drawn;
+ * - `expanded: "native"` keeps its row in the group but draws its expanded
+ *   output with the tool's own result renderer, where it has one.
+ */
+export type ToolSetting = false | { outputMode?: OutputMode; expanded?: "native" };
 
 export interface ToolOutputConfig {
 	enabled: boolean;
 	/** Key that expands or collapses only the most recent tool call. */
 	expandLastKey: string;
-	registerToolOverrides: ToolOwnership;
-	customToolOverrides: Record<string, CustomToolOverride>;
+	/** Per-tool settings by exact tool name; see `ToolSetting`. */
+	tools: Record<string, ToolSetting>;
 	readOutputMode: OutputMode;
 	searchOutputMode: OutputMode;
 	mcpOutputMode: OutputMode;
@@ -61,16 +55,7 @@ export interface ToolOutputConfig {
 export const DEFAULT_TOOL_OUTPUT_CONFIG: ToolOutputConfig = {
 	enabled: true,
 	expandLastKey: "alt+o",
-	registerToolOverrides: {
-		read: true,
-		grep: true,
-		find: true,
-		ls: true,
-		bash: true,
-		edit: true,
-		write: true,
-	},
-	customToolOverrides: {},
+	tools: {},
 	readOutputMode: "preview",
 	searchOutputMode: "preview",
 	mcpOutputMode: "preview",
@@ -152,46 +137,30 @@ function asChoice<T extends string>(choices: readonly T[], value: unknown, fallb
 	return choices.includes(value as T) ? (value as T) : fallback;
 }
 
-function asCustomToolKind(value: unknown): CustomToolKind {
-	return CUSTOM_TOOL_KINDS.includes(value as CustomToolKind) ? (value as CustomToolKind) : "generic";
-}
-
-function normalizeOwnership(value: unknown): ToolOwnership {
-	const source = isRecord(value) ? value : {};
-	const defaults = DEFAULT_TOOL_OUTPUT_CONFIG.registerToolOverrides;
-	return {
-		read: asBoolean(source.read, defaults.read),
-		grep: asBoolean(source.grep, defaults.grep),
-		find: asBoolean(source.find, defaults.find),
-		ls: asBoolean(source.ls, defaults.ls),
-		bash: asBoolean(source.bash, defaults.bash),
-		edit: asBoolean(source.edit, defaults.edit),
-		write: asBoolean(source.write, defaults.write),
-	};
-}
-
-function normalizeCustomToolOverride(value: unknown): CustomToolOverride | undefined {
-	if (typeof value === "boolean") {
-		return { enabled: value, kind: "generic", outputMode: "summary" };
-	}
+function normalizeToolSetting(value: unknown): ToolSetting | undefined {
+	if (value === false) return false;
+	if (value === true) return {};
 	if (!isRecord(value)) return undefined;
-	return {
-		enabled: asBoolean(value.enabled, true),
-		kind: asCustomToolKind(value.kind),
-		outputMode: asOutputMode(value.outputMode, "summary"),
-	};
+	const setting: Exclude<ToolSetting, false> = {};
+	if (OUTPUT_MODES.includes(value.outputMode as OutputMode)) setting.outputMode = value.outputMode as OutputMode;
+	if (value.expanded === "native") setting.expanded = "native";
+	return setting;
 }
 
-function normalizeCustomToolOverrides(value: unknown): Record<string, CustomToolOverride> {
+function normalizeToolSettings(value: unknown): Record<string, ToolSetting> {
 	if (!isRecord(value)) return {};
-	const overrides: Record<string, CustomToolOverride> = {};
-	for (const [rawName, rawOverride] of Object.entries(value)) {
+	const tools: Record<string, ToolSetting> = {};
+	for (const [rawName, rawSetting] of Object.entries(value)) {
 		const name = rawName.trim();
-		if (!name || (BUILTIN_TOOL_NAMES as readonly string[]).includes(name)) continue;
-		const override = normalizeCustomToolOverride(rawOverride);
-		if (override) overrides[name] = override;
+		const setting = normalizeToolSetting(rawSetting);
+		if (name && setting !== undefined) tools[name] = setting;
 	}
-	return overrides;
+	return tools;
+}
+
+/** Whether this extension draws the named tool, rather than leaving it to its own renderer. */
+export function drawsTool(config: ToolOutputConfig, name: string): boolean {
+	return config.tools[name] !== false;
 }
 
 export function normalizeToolOutputConfig(value: unknown): ToolOutputConfig {
@@ -199,8 +168,7 @@ export function normalizeToolOutputConfig(value: unknown): ToolOutputConfig {
 	return {
 		enabled: asBoolean(source.enabled, DEFAULT_TOOL_OUTPUT_CONFIG.enabled),
 		expandLastKey: asKey(source.expandLastKey, DEFAULT_TOOL_OUTPUT_CONFIG.expandLastKey),
-		registerToolOverrides: normalizeOwnership(source.registerToolOverrides),
-		customToolOverrides: normalizeCustomToolOverrides(source.customToolOverrides),
+		tools: normalizeToolSettings(source.tools),
 		readOutputMode: asOutputMode(source.readOutputMode, DEFAULT_TOOL_OUTPUT_CONFIG.readOutputMode),
 		searchOutputMode: asOutputMode(source.searchOutputMode, DEFAULT_TOOL_OUTPUT_CONFIG.searchOutputMode),
 		mcpOutputMode: asOutputMode(source.mcpOutputMode, DEFAULT_TOOL_OUTPUT_CONFIG.mcpOutputMode),
