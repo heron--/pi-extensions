@@ -9,6 +9,7 @@ import {
 	DIFF_INDICATOR_MODES,
 	DIFF_VIEW_MODES,
 	OUTPUT_MODES,
+	drawsTool,
 	loadToolOutputConfig,
 	normalizeKeyId,
 	normalizeToolOutputConfig,
@@ -87,8 +88,15 @@ test("the diff settings fall back to their defaults when invalid", () => {
 		{ diffViewMode: "auto", diffIndicatorMode: "bars", diffSplitMinWidth: 51, diffWordWrap: true },
 		"a width too narrow for two columns rises to the narrowest that fits",
 	);
-	assert.equal(normalizeToolOutputConfig({}).registerToolOverrides.edit, true, "edits and writes are drawn here by default");
-	assert.equal(normalizeToolOutputConfig({}).registerToolOverrides.write, true);
+});
+
+test("every tool is drawn here unless its tools entry is false", () => {
+	const config = normalizeToolOutputConfig({ tools: { edit: false, trajectory_search: {} } });
+	assert.deepEqual(normalizeToolOutputConfig({}).tools, {}, "no tool is left to its own renderer by default");
+	assert.equal(drawsTool(config, "edit"), false);
+	assert.equal(drawsTool(config, "write"), true);
+	assert.equal(drawsTool(config, "trajectory_search"), true);
+	assert.equal(drawsTool(config, "anything_else"), true);
 });
 
 function pick({ diffViewMode, diffIndicatorMode, diffSplitMinWidth, diffWordWrap }) {

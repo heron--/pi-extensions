@@ -1,13 +1,19 @@
 // Grouped layout, driven through pi's real ToolExecutionComponent inside a real
 // pi-tui Container — the same seam pi's chat uses. Loaded through jiti, like pi.
 const assert = require("node:assert/strict");
-const { mkdtempSync, readFileSync, writeFileSync } = require("node:fs");
+const { mkdirSync, mkdtempSync, readFileSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
 const { createRequire } = require("node:module");
 
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = mkdtempSync(path.join(tmpdir(), "pi-tool-output-group-"));
+// One tool left to its own renderer, outside the groups.
+mkdirSync(path.join(process.env.PI_CODING_AGENT_DIR, "pi-tool-output"));
+writeFileSync(
+	path.join(process.env.PI_CODING_AGENT_DIR, "pi-tool-output", "config.json"),
+	JSON.stringify({ tools: { custom_unmapped: false } }),
+);
 
 void (async () => {
 	const paths = JSON.parse(readFileSync(path.resolve("tsconfig.paths.json"), "utf8")).compilerOptions.paths;
@@ -37,6 +43,14 @@ void (async () => {
 	assert.equal(group.sizeText({ lines: 1, bytes: 12 }), "1 line, 12 B");
 	assert.equal(group.sizeText({ lines: 0, bytes: 0 }), "no output");
 
+	// Pi builds each call from what the tool-renderer resolvers return for its
+	// definition; this subclass does the same for the calls built here.
+	let toolRenderer;
+	class ToolExecution extends codingAgent.ToolExecutionComponent {
+		constructor(name, id, args, options, definition, ...rest) {
+			super(name, id, args, options, toolRenderer(name, () => definition), ...rest);
+		}
+	}
 	const factory = await jiti.import(path.resolve("pi-tool-output/index.ts"), { default: true });
 	const tools = new Map();
 	const shortcuts = new Map();
@@ -45,6 +59,7 @@ void (async () => {
 		registerTool(tool) { tools.set(tool.name, tool); },
 		registerCommand() {},
 		registerShortcut(key, shortcut) { shortcuts.set(key, shortcut); },
+		registerToolRenderer(resolver) { toolRenderer = resolver; },
 		on(name, handler) { handlers.set(name, handler); },
 	});
 	assert.ok(shortcuts.has("alt+o"), "the expand-last shortcut is registered");
@@ -55,7 +70,7 @@ void (async () => {
 	const ui = { children: [chat], requestRender() { renders++; } };
 	const screen = (width = 100) => piTui.stripTerminalSequences(chat.render(width).join("\n"));
 	const addTool = (name, id, args, output, isError = false) => {
-		const component = new codingAgent.ToolExecutionComponent(
+		const component = new ToolExecution(
 			name, id, args, { showImages: false },
 			tools.get(name) ??
 				(name === "edit" ? codingAgent.createEditToolDefinition(process.cwd())
@@ -208,7 +223,7 @@ void (async () => {
 	const workspace = mkdtempSync(path.join(tmpdir(), "pi-tool-output-preview-"));
 	writeFileSync(path.join(workspace, "a.ts"), "one\ntwo\nthree\n");
 	const call = (name, id, args, complete = true) => {
-		const component = new codingAgent.ToolExecutionComponent(
+		const component = new ToolExecution(
 			name, id, args, { showImages: false }, tools.get(name), ui, workspace,
 		);
 		chat.addChild(new piTui.Text(`${id} prose`, 0, 0));
@@ -265,7 +280,7 @@ void (async () => {
 		renderCall: () => new piTui.Text("THIRD_PARTY_DIFF_VIEW", 0, 0),
 		renderResult: () => new piTui.Text("", 0, 0),
 	};
-	const thirdParty = new codingAgent.ToolExecutionComponent(
+	const thirdParty = new ToolExecution(
 		"edit", "e3", { path: "c.ts", edits: [{ oldText: "a", newText: "b" }] }, { showImages: false }, elsewhere, ui, process.cwd(),
 	);
 	chat.addChild(thirdParty);
@@ -292,9 +307,60 @@ void (async () => {
 	grep.setExpanded(false);
 	bash.setExpanded(false);
 
+	// A tool registered with no renderers, as trajectory's are, joins the group
+	// and says what its result amounts to; so does a call whose tool is gone.
+	chat.addChild(new piTui.Text("trajectory prose", 0, 0));
+	const search = new ToolExecution(
+		"trajectory_search", "t1", { query: "renderShell self", target: "turns" }, { showImages: false },
+		{ name: "trajectory_search", label: "Trajectory Search" }, ui, process.cwd(),
+	);
+	chat.addChild(search);
+	search.setArgsComplete();
+	search.markExecutionStarted();
+	const searchOutput = JSON.stringify({ ok: true, rows: [{}, {}, {}], meta: { returned: 3, truncated: true } }, null, 2);
+	search.updateResult({ content: [{ type: "text", text: searchOutput }], details: {} });
+	const gone = new ToolExecution(
+		"get_session_trajectory", "t2", { session_id: "abc123" }, { showImages: false }, undefined, ui, process.cwd(),
+	);
+	chat.addChild(gone);
+	gone.updateResult({ content: [{ type: "text", text: JSON.stringify({ turns: 7, duration_minutes: 166.2 }) }], details: {} });
+	assert.match(screen(), /Ran 2 tools/);
+	assert.match(screen(), /Trajectory Search\s+renderShell self · turns  3 matches, more not shown · \d+ lines/);
+	assert.match(screen(), /Session Trajectory\s+session: abc123  7 turns over 2 h 46 min · 1 line/);
+
+	// A Datadog chart lives in the result's details: counted on the row, drawn under the box when expanded.
+	const capabilities = piTui.getCapabilities();
+	piTui.setCapabilities({ ...capabilities, images: "iterm2" });
+	try {
+		chat.addChild(new piTui.Text("datadog prose", 0, 0));
+		const pixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+		const chart = new ToolExecution(
+			"datadog", "d1", { tool: "get_widget", args: { query: "avg:system.cpu.user{*}" } }, { showImages: true },
+			{ name: "datadog", label: "Datadog", renderShell: "self", renderResult: () => new piTui.Text("PROXY_RESULT", 0, 0) },
+			ui, process.cwd(),
+		);
+		chat.addChild(chart);
+		chart.setArgsComplete();
+		chart.markExecutionStarted();
+		chart.updateResult({ content: [], details: { state: "called", tool: "get_widget", isError: false, subtoolData: { phase: "fetching" } } }, true);
+		assert.match(screen(), /Datadog\s+get_widget · avg:system\.cpu\.user\{\*\}  running…/);
+		chart.updateResult({
+			content: [{ type: "text", text: "widget rendered" }],
+			details: { state: "called", tool: "get_widget", isError: false, subtoolData: { screenshot: { data: pixel, mimeType: "image/png" } } },
+		});
+		assert.match(screen(), /1 line, 15 B · 1 image/);
+		assert.doesNotMatch(chart.render(100).join("\n"), /1337;File=/);
+		chart.setExpanded(true);
+		assert.match(chart.render(100).join("\n"), /1337;File=/, "the expanded call draws its chart");
+		assert.doesNotMatch(screen(), /PROXY_RESULT/);
+		chart.setExpanded(false);
+	} finally {
+		piTui.setCapabilities(capabilities);
+	}
+
 	// A call outside the groups (a tool that keeps its own renderer) takes the
 	// "most recent" role away from the last grouped call: no stale hint or target.
-	const ownRenderer = new codingAgent.ToolExecutionComponent(
+	const ownRenderer = new ToolExecution(
 		"custom_unmapped", "u1", {}, { showImages: false },
 		{ name: "custom_unmapped", renderCall: () => new piTui.Text("CUSTOM_ROW", 0, 0) }, ui, process.cwd(),
 	);
@@ -306,11 +372,9 @@ void (async () => {
 	assert.equal(chat.children.filter((c) => c.expanded).length, expandedBefore, "Alt+O does not reach past it");
 
 	// A long display name is cut to the name column, never the sizes after it.
-	const houseCall = () => new piTui.Text("", 0, 0);
-	houseCall[Symbol.for("pi-tool-output.house-renderer.v1")] = true;
-	const longName = new codingAgent.ToolExecutionComponent(
+	const longName = new ToolExecution(
 		"custom_long", "long", {}, { showImages: false },
-		{ name: "custom_long", label: "An Extremely Long Display Name That Would Crowd Out Everything Else", renderCall: houseCall },
+		{ name: "custom_long", label: "An Extremely Long Display Name That Would Crowd Out Everything Else" },
 		ui, process.cwd(),
 	);
 	chat.addChild(new piTui.Text("long-name prose", 0, 0));

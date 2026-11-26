@@ -39,12 +39,21 @@ the wrench. Expanding a call shows the arguments its row does not (`timeout:
 only measures), a blank row, and its output. An expanded edit or write shows
 its diff instead (see [Edits and writes](#edits-and-writes)).
 
-Sizes count raw output lines and bytes, not wrapped rows. Any assistant text or
-thinking between two calls starts a new box; an empty tool-only assistant turn
-does not. pi's built-in tools (including `edit`/`write`, whose expanded view
-keeps their own diff renderer), MCP tools, the tools in the display-name map, and
-decorated or configured custom tools all join a group. Any other tool keeps its
-own renderer and ends the run.
+Sizes count raw output lines and bytes, not wrapped rows. A tool whose result
+says more than its size leads with that: a trajectory search's `12 matches`, a
+schema's `9 tables`, a session's `7 turns over 2 h 46 min`, Datadog's `5 of 57
+tools` (`result-summaries.ts`). Any assistant text or thinking between two
+calls starts a new box; an empty tool-only assistant turn does not.
+
+Every tool call joins a group: pi's built-in tools, every extension's tools
+whatever renderers they bring, and calls to a tool that is no longer installed,
+as in a resumed session. A tool whose [`tools`](#per-tool-settings) entry is
+`false` keeps its own renderer and ends the run.
+
+Images in a result are counted on its row (`1 image`) and drawn under the box
+when the call is expanded. That includes the chart a Datadog visualization
+draws, which the datadog tool keeps in its result details rather than its
+content.
 
 Expansion is per call:
 
@@ -83,9 +92,8 @@ descriptors as the call rows' sizes:
 - Compaction is presentation-only: execution inputs, saved calls, and model
   context are unchanged. Full inputs remain in the session transcript.
 
-Unknown opted-in tools and unexpected/partial argument shapes use the generic
-compact preview. Existing tool-ownership rules still apply: this does not take
-ownership of every installed tool or replace preserved third-party renderers.
+Tools without a summarizer and unexpected/partial argument shapes use the
+generic compact preview.
 
 ### Call summaries
 
@@ -200,9 +208,9 @@ still shows the compact source label and ordinary script output. This changes
 presentation only: it does not execute source, replace codemode's definition,
 change tool exposure, or alter saved calls and model context.
 
-Codemode defaults to preview mode independently of `mcpOutputMode`. An exact
-`customToolOverrides.codemode` entry can change its output mode; setting that
-entry to `false` preserves Pi's own renderers.
+Codemode defaults to preview mode independently of `mcpOutputMode`. A
+`tools.codemode` entry can change its output mode; setting that entry to
+`false` preserves Pi's own renderers.
 
 #### Adding a summarizer
 
@@ -281,10 +289,9 @@ the change, so a reloaded session still shows what an overwrite replaced; a new
 file's contents are the call's own arguments, so it records nothing more. A
 failed call shows its error.
 
-This applies while this extension draws `edit` and `write`
-(`registerToolOverrides`, on by default). With either turned off, pi's own tool
-runs in its place: an edit still shows its diff here, and a write shows its
-result. When another extension draws them, an expanded call keeps that
+This applies while this extension draws `edit` and `write` (the default). With
+either set to `false` in `tools`, pi's own tool runs in its place, outside the
+groups. When another extension draws them, an expanded call keeps that
 extension's view.
 
 ## Usage
@@ -303,16 +310,7 @@ Missing values use these defaults:
 {
   "enabled": true,
   "expandLastKey": "alt+o",
-  "registerToolOverrides": {
-    "read": true,
-    "grep": true,
-    "find": true,
-    "ls": true,
-    "bash": true,
-    "edit": true,
-    "write": true
-  },
-  "customToolOverrides": {},
+  "tools": {},
   "readOutputMode": "preview",
   "searchOutputMode": "preview",
   "mcpOutputMode": "preview",
@@ -339,77 +337,56 @@ the old one-box-per-call layout and no longer change anything.
 `hidden` intentionally suppresses it. `diffViewMode` accepts `auto`, `split`,
 or `unified`, `diffIndicatorMode` accepts `bars`, `classic`, or `none`, and
 `diffSplitMinWidth` is at least 51, the narrowest that fits two columns.
-Ownership, mode, diff, and [color](#colors) edits take effect after `/reload`.
+`tools`, mode, diff, and [color](#colors) edits take effect after `/reload`.
+
+### Per-tool settings
+
+`tools` maps an exact tool name to how it is drawn. Every tool not listed is
+drawn here.
+
+```json
+{
+  "tools": {
+    "bash": false,
+    "ask_user_question": { "expanded": "native" },
+    "ide_find_symbol": { "outputMode": "summary" }
+  }
+}
+```
+
+- `false` leaves the tool to its own renderer, outside the groups. For a
+  built-in tool, it also leaves the tool itself to pi.
+- `expanded: "native"` keeps the tool's row in the group but shows its own
+  result renderer when the call is expanded, for a tool whose own view is worth
+  keeping. Where that renderer draws nothing, the house view is shown.
+- `outputMode` (`hidden`, `summary`, or `preview`) sets how an expanded call
+  shows its output. It defaults to `mcpOutputMode` for MCP tools and to
+  `preview` for the rest. A built-in tool takes its mode from its own setting.
 
 ### With another tool renderer installed
 
 Pi rejects two tools of the same name. Another extension that overrides the
 built-in tools, such as `pi-tool-display`, must leave the ones this extension
-draws (every built-in, by default) to it, or this extension's
-`registerToolOverrides` must leave them to the other.
+draws (every built-in, by default) to it, or `tools` must set them to `false`.
 
-## Decorator API
+## How every tool is reached
 
-Extension tools can opt into the same rendering without depending on load
-order:
+Pi asks extensions how to draw each call through its tool-renderer resolvers,
+which see every tool name, registered or not. This extension answers with the
+house renderers for every tool not set to `false`, keeping the rest of the
+tool's definition. The built-in tools are registered here instead, so their
+execution can record what a write replaced.
 
-```ts
-// Sibling extension in this checkout. The shared discovery directories link
-// pi-tool-output alongside the consumer, so this path works there too.
-import { decorateMcpToolOutput, decorateToolOutput } from "../pi-tool-output/decorate.ts";
+Pi has no API for drawing several calls as one, so the group layout replaces
+the drawing and click handling of pi's exported `ToolExecutionComponent`. Both
+are restored on shutdown, and renderers are swapped only in a TUI session,
+while the layout is installed.
 
-pi.registerTool(decorateMcpToolOutput(mcpTool));
-pi.registerTool(decorateToolOutput(noisyTool, { kind: "generic", outputMode: "summary" }));
-```
-
-Installed package consumers can use the exported
-`pi-tool-output/decorate` subpath instead. When `pi-tool-output` has not loaded
-yet, the helper queues the tool object and
-the renderer decorates it in place when its API becomes available. Existing
-renderers are preserved as a set by default: if either call or result rendering
-already exists, neither is changed. `decorateMcpToolOutput()` intentionally
-hands the full renderer set over. Exact tool names can be configured without
-changing the consumer:
-
-```json
-{
-  "customToolOverrides": {
-    "ide_find_symbol": {
-      "enabled": true,
-      "kind": "generic",
-      "outputMode": "summary"
-    },
-    "custom_mcp_gateway": {
-      "enabled": true,
-      "kind": "mcp",
-      "outputMode": "preview"
-    }
-  }
-}
-```
-
-Configured overrides take ownership of existing renderers. A `false` shorthand
-disables decoration for that exact name; `true` enables generic summary mode.
-
-Known runtime tool names are mapped to readable labels—for example `read` →
-`Read File`, `grep` → `Search Files`, `web_search` → `Web Search`, and
-`multi_tool_use.parallel` → `Parallel Tools`. MCP namespace names such as
-`mcp__atlassian` become `Atlassian`; unknown opted-in tools fall back to their
-registered label or title-cased name.
-
-Pi exposes metadata, not executable definitions, through `pi.getAllTools()`.
-For installed adapters that cannot import the decorator, TUI sessions therefore
-use a narrow late-render fallback: the extension wraps the exported
-`ToolExecutionComponent` renderer-selection methods, recognizes MCP definitions
-by name/label/description plus the explicit known-tool display-name map, and
-swaps only their presentation. The patch restores all three methods on shutdown
-and leaves unknown non-MCP tools untouched. An exact custom override also
-selects a late-registered tool by name; set its `enabled` to `false` to opt an
-auto-detected MCP or known tool out.
-
-The decorator remains the preferred definition-level integration for
-first-party tools: it also works before the TUI exists, avoids recognition
-heuristics, and preserves load-order independence.
+Display names come from `TOOL_DISPLAY_NAMES` in `rendering.ts` where a tool's
+registered label is missing or unhelpful — `read` → `Read File`,
+`multi_tool_use.parallel` → `Parallel Tools` — and MCP namespace names such as
+`mcp__atlassian` become `Atlassian`. Any other tool shows its label, or its
+name in title case.
 
 ## Development
 

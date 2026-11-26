@@ -27,7 +27,9 @@ import { callArgumentsComponent, paintMeasure, paintSummary } from "./call-rende
 import { paint } from "../lib/colors.ts";
 import { TOOL_OUTPUT_COLORS } from "./colors.ts";
 import type { DiffViewOptions } from "./diff.ts";
+import { chartComponent, datadogChart } from "./datadog.ts";
 import { writeChanges } from "./file-changes.ts";
+import { summarizeToolResult } from "./result-summaries.ts";
 import { fileCallComponent, isFileTool } from "./file-view.ts";
 import { displayToolName, extractTextOutput, pluralize, toolIcon } from "./rendering.ts";
 import { summarizeToolCall } from "./summaries.ts";
@@ -46,6 +48,8 @@ export interface GroupMember {
 	callRendererComponent?: Component;
 	resultRendererComponent?: Component;
 	imageComponents?: Component[];
+	/** Pi's image setting; it builds `imageComponents` only when it is on. */
+	showImages?: boolean;
 	toolDefinition?: Record<string, unknown>;
 	setExpanded(expanded: boolean): void;
 	render(width: number): string[];
@@ -170,12 +174,15 @@ function memberMeta(member: GroupMember): string {
 	if (!member.result) text = "running…";
 	else {
 		const content = Array.isArray(member.result.content) ? member.result.content : [];
-		const images = content.filter((block) => record(block)?.type === "image").length;
+		const images =
+			content.filter((block) => record(block)?.type === "image").length + (datadogChart(member.result.details) ? 1 : 0);
 		const textSize = sizeText(outputSize(extractTextOutput(member.result)));
 		const imageText = `${images} ${pluralize(images, "image")}`;
 		const size = images === 0 ? textSize : textSize === "no output" ? imageText : `${textSize}${DOT}${imageText}`;
+		const described = member.isPartial ? undefined : summarizeToolResult(member.toolName, member.result);
 		if (member.isPartial) text = size === "no output" ? "running…" : `running · ${size}`;
-		else text = member.result.isError ? `failed · ${size}` : size;
+		else if (member.result.isError) text = `failed · ${size}`;
+		else text = described ? `${described}${DOT}${size}` : size;
 	}
 	metaCache.set(member, { result: member.result, partial: member.isPartial, text });
 	return text;
@@ -532,6 +539,17 @@ export function groupLabel(members: readonly GroupMember[]): string {
 
 const groupCache = new WeakMap<GroupMember, { key: unknown[]; render: GroupRender }>();
 
+/**
+ * The images an expanded member draws under the box: pi's, from the result
+ * content, and a Datadog chart, which the result keeps in its details.
+ */
+function memberImages(member: GroupMember): Component[] {
+	const images = member.imageComponents ?? [];
+	if (member.toolName !== "datadog" || member.showImages === false || member.isPartial) return images;
+	const chart = chartComponent(member, member.result?.details);
+	return chart ? [...images, chart] : images;
+}
+
 export function renderGroup(members: readonly GroupMember[], width: number, options: GroupRenderOptions): GroupRender {
 	const { theme } = options;
 	const contentWidth = boxContentWidth(width);
@@ -540,7 +558,7 @@ export function renderGroup(members: readonly GroupMember[], width: number, opti
 	const nameWidth = Math.min(longest, Math.max(0, Math.floor(contentWidth / 3)));
 	const blocks = members.map((member) => memberRows(member, contentWidth, nameWidth, options));
 	const images = members.map((member) =>
-		member.expanded ? (member.imageComponents ?? []).map((image) => image.render(width)) : [],
+		member.expanded ? memberImages(member).map((image) => image.render(width)) : [],
 	);
 	const key = [width, theme, ...members, ...blocks, ...images.flat()];
 	const leader = members[0]!;

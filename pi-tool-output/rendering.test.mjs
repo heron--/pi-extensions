@@ -6,7 +6,6 @@ import {
 	displayToolName,
 	extractTextOutput,
 	formatToolArguments,
-	isKnownToolName,
 	isLikelyQuietCommand,
 	outputLines,
 	previewSlice,
@@ -14,17 +13,16 @@ import {
 	shortenPath,
 } from "./rendering.ts";
 
-test("known tool names map to readable house-box labels", () => {
+test("tool names map to readable house-box labels", () => {
 	assert.equal(displayToolName("read"), "Read File");
 	assert.equal(displayToolName("codemode"), "Code Mode");
-	assert.equal(isKnownToolName("codemode"), true);
 	assert.equal(displayToolName("multi_tool_use.parallel"), "Parallel Tools");
 	assert.equal(displayToolName("mcp__atlassian"), "Atlassian");
 	assert.equal(displayToolName("custom_report_tool"), "Custom Report Tool");
 	assert.equal(displayToolName("custom", "Unsafe\nLabel\x1b]52;c;Y2xpcGJvYXJk\x07"), "Unsafe Label");
 	assert.equal(displayToolName("\x1b[2J"), "Tool");
-	assert.equal(isKnownToolName("web_search"), true);
-	assert.equal(isKnownToolName("custom_report_tool"), false);
+	assert.equal(displayToolName("trajectory_search", "Trajectory Search"), "Trajectory Search");
+	assert.equal(displayToolName("get_session_trajectory"), "Session Trajectory", "a resumed call keeps its name without a definition");
 });
 
 test("tool arguments stay on one compact logical line", () => {

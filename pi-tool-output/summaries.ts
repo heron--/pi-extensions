@@ -347,6 +347,51 @@ export function summarizeMcp(args: Args): CallSummary | undefined {
 	return args.list === true ? summary("List available tools", "list") : undefined;
 }
 
+/** `datadog` — an MCP call, plus the query it runs when it has one. */
+export function summarizeDatadog(args: Args): CallSummary | undefined {
+	const call = summarizeMcp(args);
+	const query = str(record(args.args), "query");
+	return call && str(args, "tool") && query ? { ...call, text: `${call.text} · ${query}` } : call;
+}
+
+/** `trajectory_search` — the search text, the index it searches, and a tool filter. */
+export function summarizeTrajectorySearch(args: Args): CallSummary | undefined {
+	const query = str(args, "query");
+	if (!query) return undefined;
+	const target = str(args, "target");
+	const tool = str(args, "tool_name");
+	return summary(
+		`${query}${target ? ` · ${target}` : ""}${tool ? ` · tool: ${tool}` : ""}`,
+		"query", "target", "tool_name",
+	);
+}
+
+/** `trajectory_query` — the SQL on one line. */
+export function summarizeTrajectoryQuery(args: Args): CallSummary | undefined {
+	const query = str(args, "query");
+	return query ? summary(query, "query") : undefined;
+}
+
+/** `trajectory_schema` — only whether it counts rows. */
+export function summarizeTrajectorySchema(args: Args): CallSummary | undefined {
+	return args.include_row_counts === true ? summary("with row counts", "include_row_counts") : undefined;
+}
+
+/** `get_session_trajectory` — the session and the depth asked for. */
+export function summarizeSessionTrajectory(args: Args): CallSummary | undefined {
+	const session = str(args, "session_id");
+	if (!session) return undefined;
+	const depth = str(args, "depth");
+	return summary(`session: ${session}${depth ? ` · ${depth}` : ""}`, "session_id", "depth");
+}
+
+/** `trajectory_incognito` — on or off, and whether for every session. */
+export function summarizeIncognito(args: Args): CallSummary | undefined {
+	if (typeof args.enable !== "boolean") return undefined;
+	const scope = args.persistent === true ? " for all sessions" : "";
+	return summary(`${args.enable ? "on" : "off"}${scope}`, "enable", "persistent");
+}
+
 /** `codemode` — label the source; executed calls come from result.details.calls. */
 export function summarizeCodemode(args: Args): CallSummary | undefined {
 	return typeof args.code === "string" ? { ...summary("JavaScript", "code"), hidden: true } : undefined;
@@ -402,7 +447,8 @@ function summarize(name: string, args: Args): CallSummary | undefined {
 	if (name === "edit" || name === "write") return summarizeFileWrite(args);
 	if (name === "web_search") return summarizeWebSearch(args);
 	if (name === "subagent") return summarizeSubagent(args);
-	if (name === "mcp" || name === "datadog" || name.startsWith("mcp__")) return summarizeMcp(args);
+	if (name === "mcp" || name.startsWith("mcp__")) return summarizeMcp(args);
+	if (name === "datadog") return summarizeDatadog(args);
 	if (name === "mcpScript") return typeof args.code === "string" ? summary("MCP script", "code") : undefined;
 	if (name === "codemode") return summarizeCodemode(args);
 	if (name === "multi_tool_use.parallel") return summarizeParallelTools(args);
@@ -412,6 +458,11 @@ function summarize(name: string, args: Args): CallSummary | undefined {
 	if (BACKGROUND_TASK_TOOLS.includes(name)) return summarizeBackgroundTask(args);
 	if (name === "preview_export") return summarizePreviewExport(args);
 	if (name === "ask_user_question") return summarizeAskUserQuestion(args);
+	if (name === "trajectory_search") return summarizeTrajectorySearch(args);
+	if (name === "trajectory_query") return summarizeTrajectoryQuery(args);
+	if (name === "trajectory_schema") return summarizeTrajectorySchema(args);
+	if (name === "get_session_trajectory") return summarizeSessionTrajectory(args);
+	if (name === "trajectory_incognito") return summarizeIncognito(args);
 	return undefined;
 }
 
@@ -423,7 +474,10 @@ function summarize(name: string, args: Args): CallSummary | undefined {
 function consumedFields(result: CallSummary, args: Args): string[] {
 	return result.fields.filter((key) => {
 		if (key === "offset" || key === "limit") return number(args, key) !== undefined;
-		if (key === "async" || key === "worktree" || key === "list") return args[key] === true;
+		if (key === "async" || key === "worktree" || key === "list" || key === "include_row_counts" || key === "persistent") {
+			return args[key] === true;
+		}
+		if (key === "enable") return typeof args[key] === "boolean";
 		return typeof args[key] === "string";
 	});
 }

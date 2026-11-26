@@ -25,9 +25,14 @@ void (async () => {
 	const piTui = await jiti.import(fromPi.resolve("@earendil-works/pi-tui"));
 	codingAgent.initTheme(undefined, false);
 	const toolExecutionPrototype = codingAgent.ToolExecutionComponent.prototype;
-	const originalGetCallRenderer = toolExecutionPrototype.getCallRenderer;
-	const originalGetResultRenderer = toolExecutionPrototype.getResultRenderer;
-	const originalGetRenderShell = toolExecutionPrototype.getRenderShell;
+	const originalRender = toolExecutionPrototype.render;
+	const originalHandleMouse = toolExecutionPrototype.handleMouse;
+	// Pi asks the most recently loaded extension's tool-renderer resolver how a
+	// call is drawn; `next()` yields the call's own definition.
+	let toolRenderer;
+	const registerToolRenderer = (resolver) => { toolRenderer = resolver; };
+	const renderersFor = (instance) => toolRenderer(instance.toolName, () => instance.toolDefinition);
+	const shellOf = (instance) => renderersFor(instance)?.renderShell ?? "default";
 
 	const configModule = await jiti.import(path.resolve("pi-tool-output/config.ts"));
 	const normalized = configModule.normalizeToolOutputConfig({
@@ -35,53 +40,39 @@ void (async () => {
 		expandedPreviewMaxLines: -10,
 		bashCollapsedLines: 4.8,
 		readOutputMode: "invalid",
-		registerToolOverrides: { bash: false },
-		customToolOverrides: {
-			ide_find_symbol: { enabled: true, kind: "generic", outputMode: "preview" },
+		tools: {
+			bash: false,
+			ide_find_symbol: { outputMode: "preview" },
 			custom_mcp: true,
-			read: { enabled: true, kind: "mcp", outputMode: "preview" },
+			native_tool: { expanded: "native", outputMode: "sideways" },
+			"  ": false,
+			broken: 3,
 		},
 	});
 	assert.equal(normalized.previewLines, 80);
 	assert.equal(normalized.expandedPreviewMaxLines, 0);
 	assert.equal(normalized.bashCollapsedLines, 4);
 	assert.equal(normalized.readOutputMode, "preview");
-	assert.equal(normalized.registerToolOverrides.read, true);
-	assert.equal(normalized.registerToolOverrides.bash, false);
-	assert.deepEqual(normalized.customToolOverrides.ide_find_symbol, {
-		enabled: true,
-		kind: "generic",
-		outputMode: "preview",
+	assert.deepEqual(normalized.tools, {
+		bash: false,
+		ide_find_symbol: { outputMode: "preview" },
+		custom_mcp: {},
+		native_tool: { expanded: "native" },
 	});
-	assert.deepEqual(normalized.customToolOverrides.custom_mcp, {
-		enabled: true,
-		kind: "generic",
-		outputMode: "summary",
-	});
-	assert.equal(normalized.customToolOverrides.read, undefined);
+	assert.equal(configModule.drawsTool(normalized, "read"), true);
+	assert.equal(configModule.drawsTool(normalized, "bash"), false);
 	assert.equal(
 		configModule.saveToolOutputConfig({
 			...configModule.DEFAULT_TOOL_OUTPUT_CONFIG,
 			expandedPreviewMaxLines: 2,
-			customToolOverrides: {
-				late_generic: { enabled: true, kind: "generic", outputMode: "summary" },
-				mcp_passthrough: { enabled: false, kind: "mcp", outputMode: "hidden" },
+			tools: {
+				late_generic: { outputMode: "summary" },
+				mcp_passthrough: false,
+				native_result: { expanded: "native" },
 			},
 		}).success,
 		true,
 	);
-
-	const decorator = await jiti.import(path.resolve("pi-tool-output/decorate.ts"));
-	const earlyMcp = {
-		name: "early_mcp",
-		label: "Early MCP",
-		description: "MCP tool registered before the renderer",
-		parameters: {},
-		execute: async () => ({ content: [] }),
-	};
-	assert.equal(decorator.decorateMcpToolOutput(earlyMcp), earlyMcp);
-	assert.equal(decorator.decorateMcpToolOutput(earlyMcp), earlyMcp);
-	assert.equal(earlyMcp.renderResult, undefined);
 
 	const factory = await jiti.import(path.resolve("pi-tool-output/index.ts"), { default: true });
 	const tools = new Map();
@@ -92,6 +83,7 @@ void (async () => {
 		registerShortcut(key, shortcut) {
 			shortcuts.set(key, shortcut);
 		},
+		registerToolRenderer,
 		registerTool(tool) {
 			tools.set(tool.name, tool);
 		},
@@ -181,9 +173,8 @@ void (async () => {
 			{ mode: "tui", ui: { theme, notify() {} } },
 		);
 	}
-	assert.notEqual(toolExecutionPrototype.getCallRenderer, originalGetCallRenderer);
-	assert.notEqual(toolExecutionPrototype.getResultRenderer, originalGetResultRenderer);
-	assert.notEqual(toolExecutionPrototype.getRenderShell, originalGetRenderShell);
+	assert.notEqual(toolExecutionPrototype.render, originalRender);
+	assert.notEqual(toolExecutionPrototype.handleMouse, originalHandleMouse);
 
 	const adapterCallRenderer = () => ({ render: () => ["adapter call"] });
 	const adapterResultRenderer = () => ({ render: () => ["adapter result"] });
@@ -196,11 +187,11 @@ void (async () => {
 		renderShell: "default",
 	};
 	const lateMcpInstance = { toolName: "mcp", toolDefinition: lateMcpDefinition };
-	const runtimeMcpCall = toolExecutionPrototype.getCallRenderer.call(lateMcpInstance);
-	const runtimeMcpResult = toolExecutionPrototype.getResultRenderer.call(lateMcpInstance);
+	const runtimeMcpCall = renderersFor(lateMcpInstance)?.renderCall;
+	const runtimeMcpResult = renderersFor(lateMcpInstance)?.renderResult;
 	assert.notEqual(runtimeMcpCall, adapterCallRenderer);
 	assert.notEqual(runtimeMcpResult, adapterResultRenderer);
-	assert.equal(toolExecutionPrototype.getRenderShell.call(lateMcpInstance), "self");
+	assert.equal(shellOf(lateMcpInstance), "self");
 	const runtimeMcpContext = { args: { server: "linear" }, isError: false, state: {} };
 	const runtimeMcpCallComponent = runtimeMcpCall({ server: "linear" }, theme, runtimeMcpContext);
 	assert.match(runtimeMcpCallComponent.render(100)[0], /\uf0ad MCP Gateway/);
@@ -233,36 +224,49 @@ void (async () => {
 	).render(100);
 	assert.match(errorLines[0], /MCP failed/);
 	assert.match(errorLines.at(-1), /╰─+╯/);
+	// Every tool is drawn here, whatever renderer it brings, unless its `tools` entry is false.
 	const ordinaryCallRenderer = () => ({ render: () => ["ordinary"] });
+	const ordinaryResultRenderer = () => ({ render: () => ["ordinary result"] });
 	const ordinaryInstance = {
 		toolName: "ordinary_tool",
-		toolDefinition: { name: "ordinary_tool", label: "Ordinary", renderCall: ordinaryCallRenderer },
+		toolDefinition: { name: "ordinary_tool", label: "Ordinary", renderCall: ordinaryCallRenderer, renderShell: "default" },
 	};
-	assert.equal(toolExecutionPrototype.getCallRenderer.call(ordinaryInstance), ordinaryCallRenderer);
-	assert.equal(toolExecutionPrototype.getRenderShell.call(ordinaryInstance), "default");
-	const configuredGenericInstance = {
-		toolName: "late_generic",
-		toolDefinition: { name: "late_generic", label: "Late generic", renderCall: ordinaryCallRenderer },
-	};
-	assert.notEqual(toolExecutionPrototype.getCallRenderer.call(configuredGenericInstance), ordinaryCallRenderer);
-	assert.equal(toolExecutionPrototype.getRenderShell.call(configuredGenericInstance), "self");
-	const knownCustomInstance = {
-		toolName: "web_search",
-		toolDefinition: { name: "web_search", label: "web_search", renderCall: ordinaryCallRenderer },
-	};
-	assert.notEqual(toolExecutionPrototype.getCallRenderer.call(knownCustomInstance), ordinaryCallRenderer);
-	assert.equal(toolExecutionPrototype.getRenderShell.call(knownCustomInstance), "self");
-	const optedOutMcpInstance = {
+	assert.notEqual(renderersFor(ordinaryInstance)?.renderCall, ordinaryCallRenderer);
+	assert.equal(shellOf(ordinaryInstance), "self");
+	const plainInstance = { toolName: "trajectory_search", toolDefinition: { name: "trajectory_search", label: "Trajectory Search" } };
+	assert.equal(typeof renderersFor(plainInstance)?.renderCall, "function");
+	assert.equal(shellOf(plainInstance), "self");
+	const goneInstance = { toolName: "removed_tool", toolDefinition: undefined };
+	assert.equal(typeof renderersFor(goneInstance)?.renderCall, "function", "a call to a tool that is gone is still drawn");
+	const optedOutInstance = {
 		toolName: "mcp_passthrough",
 		toolDefinition: {
 			name: "mcp_passthrough",
 			label: "MCP passthrough",
 			renderCall: ordinaryCallRenderer,
+			renderResult: ordinaryResultRenderer,
 			renderShell: "default",
 		},
 	};
-	assert.equal(toolExecutionPrototype.getCallRenderer.call(optedOutMcpInstance), ordinaryCallRenderer);
-	assert.equal(toolExecutionPrototype.getRenderShell.call(optedOutMcpInstance), "default");
+	assert.equal(renderersFor(optedOutInstance)?.renderCall, ordinaryCallRenderer);
+	assert.equal(renderersFor(optedOutInstance)?.renderResult, ordinaryResultRenderer);
+	assert.equal(shellOf(optedOutInstance), "default");
+	// `expanded: "native"` keeps the house row but the tool's own result view, unless that draws nothing.
+	let nativeDraws = true;
+	const nativeInstance = {
+		toolName: "native_result",
+		toolDefinition: {
+			name: "native_result",
+			renderCall: ordinaryCallRenderer,
+			renderResult: () => (nativeDraws ? ordinaryResultRenderer() : undefined),
+		},
+	};
+	assert.notEqual(renderersFor(nativeInstance)?.renderCall, ordinaryCallRenderer);
+	const nativeResult = renderersFor(nativeInstance)?.renderResult;
+	const nativeArgs = [{ content: [{ type: "text", text: "house payload" }] }, { expanded: true, isPartial: false }, theme, { args: {}, state: {} }];
+	assert.deepEqual(nativeResult(...nativeArgs).render(100), ["ordinary result"]);
+	nativeDraws = false;
+	assert.match(nativeResult(...nativeArgs).render(100).join("\n"), /house payload/);
 
 	const context = {
 		args: {},
@@ -286,13 +290,13 @@ void (async () => {
 	const codemodeDefinition = nativeCodemode.createCodemodeToolDefinition();
 	const originalCodemodeExecute = codemodeDefinition.execute;
 	const codemodeInstance = { toolName: "codemode", toolDefinition: codemodeDefinition };
-	const runtimeCodemodeResult = toolExecutionPrototype.getResultRenderer.call(codemodeInstance);
-	assert.notEqual(toolExecutionPrototype.getCallRenderer.call(codemodeInstance), codemodeDefinition.renderCall);
+	const runtimeCodemodeResult = renderersFor(codemodeInstance)?.renderResult;
+	assert.notEqual(renderersFor(codemodeInstance)?.renderCall, codemodeDefinition.renderCall);
 	assert.notEqual(runtimeCodemodeResult, codemodeDefinition.renderResult);
-	assert.equal(toolExecutionPrototype.getRenderShell.call(codemodeInstance), "self");
+	assert.equal(shellOf(codemodeInstance), "self");
 	const codemodeArgs = { code: 'const files = ["one.ts", "missing.ts"]; const results = await Promise.allSettled(files.map(path => tools.read({ path }))); text(results.map(r => r.status));' };
 	const codemodeComponent = new codingAgent.ToolExecutionComponent(
-		"codemode", "code-call", codemodeArgs, { showImages: false }, codemodeDefinition,
+		"codemode", "code-call", codemodeArgs, { showImages: false }, renderersFor(codemodeInstance),
 		{ requestRender() {} }, process.cwd(),
 	);
 	codemodeComponent.setArgsComplete();
@@ -321,7 +325,8 @@ void (async () => {
 	assert.ok(updates.some((update) => update.details.calls.some((call) => call.status === "running")));
 	assert.equal(codemodeResult.isError, undefined); // allSettled handles the failed nested call.
 	const savedCodemodeResult = structuredClone(codemodeResult);
-	for (const update of updates) {
+	// Its first update comes before any call starts and lists none.
+	for (const update of updates.filter((update) => update.details.calls.length > 0)) {
 		const partial = runtimeCodemodeResult(update, { ...options, isPartial: true }, theme, { ...context, state: {} }).render(100).join("\n");
 		assert.match(partial, /Read File/);
 	}
@@ -364,7 +369,7 @@ void (async () => {
 		["web_search", { query: "界🙂".repeat(1000) }],
 	];
 	for (const [name, args] of argumentFixtures) {
-		const renderer = tools.get(name)?.renderCall ?? toolExecutionPrototype.getCallRenderer.call({ toolName: name, toolDefinition: { name } });
+		const renderer = tools.get(name)?.renderCall ?? renderersFor({ toolName: name, toolDefinition: { name } })?.renderCall;
 		for (const expanded of [false, true]) {
 			const component = renderer(args, theme, { ...context, args, state: {}, expanded });
 			for (const width of [1, 2, 8, 12, 22, 26, 40, 60, 100, 200]) {
@@ -411,7 +416,8 @@ void (async () => {
 
 	const actualTool = new codingAgent.ToolExecutionComponent(
 		"subagent", "large-call", { workflowScript: largeScript, async: true },
-		{ showImages: false }, { name: "subagent" }, { requestRender() {} }, process.cwd(),
+		{ showImages: false }, renderersFor({ toolName: "subagent", toolDefinition: { name: "subagent" } }),
+		{ requestRender() {} }, process.cwd(),
 	);
 	actualTool.setArgsComplete();
 	actualTool.markExecutionStarted();
@@ -480,7 +486,7 @@ void (async () => {
 		imageReadComponent.setExpanded(true);
 		assert.match(imageReadComponent.render(100).join("\n"), /1337;File=/);
 		const imageCodemodeComponent = new codingAgent.ToolExecutionComponent(
-			"codemode", "image-code", { code: "image(pixel)" }, { showImages: true }, codemodeDefinition,
+			"codemode", "image-code", { code: "image(pixel)" }, { showImages: true }, renderersFor(codemodeInstance),
 			{ requestRender() {} }, process.cwd(),
 		);
 		imageCodemodeComponent.setArgsComplete();
@@ -632,68 +638,15 @@ void (async () => {
 	assert.match(edited.details.diff, /^-2 TWO\n\+2 2$/m);
 	assert.ok(Array.isArray(tools.get("bash").promptGuidelines));
 
-	const apiKey = Symbol.for("pi-tool-output.api.v1");
-	const api = globalThis[apiKey];
-	assert.equal(api.version, 1);
-	const decoratedCodemode = api.decorateTool(codemodeDefinition, { overrideExistingRenderers: true });
-	assert.equal(decoratedCodemode.execute, originalCodemodeExecute);
-	assert.equal(decoratedCodemode.prepareLoadout, codemodeDefinition.prepareLoadout);
-	assert.equal(decoratedCodemode.parameters, codemodeDefinition.parameters);
-	assert.match(decoratedCodemode.renderResult(codemodeResult, options, theme, { ...context, state: {} }).render(100).join("\n"), /NESTED_FAILURE/);
-	const unknownTool = api.decorateTool({ name: "unknown_tool" });
+	// A tool with no renderers of its own gets the house call view, with large arguments measured.
+	const unknownCall = renderersFor({ toolName: "unknown_tool", toolDefinition: { name: "unknown_tool" } })?.renderCall;
 	const unknownArgs = { prompt: largeScript, data: { payload: largeScript } };
-	const compactUnknown = unknownTool.renderCall(unknownArgs, theme, { ...context, state: {} }).render(100).join("\n");
+	const compactUnknown = unknownCall(unknownArgs, theme, { ...context, state: {} }).render(100).join("\n");
 	assert.match(compactUnknown, /prompt: [\d.]+ KB/);
 	assert.doesNotMatch(compactUnknown, /ARGUMENT_BODY_MARKER/);
-	const expandedUnknown = unknownTool.renderCall(unknownArgs, theme, { ...context, state: {}, expanded: true }).render(100).join("\n");
+	const expandedUnknown = unknownCall(unknownArgs, theme, { ...context, state: {}, expanded: true }).render(100).join("\n");
 	assert.match(expandedUnknown, /ARGUMENT_BODY_MARKER/);
 	assert.match(expandedUnknown, /arguments capped/);
-
-	const partialCallTool = {
-		name: "partial_call_tool",
-		renderCall: ordinaryCallRenderer,
-		renderShell: "default",
-	};
-	assert.equal(api.decorateTool(partialCallTool), partialCallTool);
-	assert.equal(partialCallTool.renderCall, ordinaryCallRenderer);
-	assert.equal(partialCallTool.renderResult, undefined);
-	assert.equal(partialCallTool.renderShell, "default");
-	const ordinaryResultRenderer = () => ({ render: () => ["ordinary result"] });
-	const partialResultTool = { name: "partial_result_tool", renderResult: ordinaryResultRenderer };
-	assert.equal(api.decorateTool(partialResultTool), partialResultTool);
-	assert.equal(partialResultTool.renderCall, undefined);
-	assert.equal(partialResultTool.renderResult, ordinaryResultRenderer);
-	assert.equal(partialResultTool.renderShell, undefined);
-	assert.equal(typeof earlyMcp.renderResult, "function");
-	const earlyMcpResult = earlyMcp.renderResult(
-		{ content: [{ type: "text", text: "queued payload" }], details: {} },
-		options,
-		theme,
-		context,
-	);
-	assert.match(earlyMcpResult.render(100)[0], /queued payload/);
-	const mcp = api.decorateTool(
-		{
-			name: "mcp",
-			label: "MCP",
-			description: "MCP proxy",
-			parameters: {},
-			execute: async () => ({ content: [] }),
-		},
-		{ kind: "mcp", overrideExistingRenderers: true },
-	);
-	const mcpResult = mcp.renderResult(
-		{ content: [{ type: "text", text: "large payload" }], details: {} },
-		options,
-		theme,
-		context,
-	);
-	assert.match(mcpResult.render(100)[0], /large payload/);
-
-	// A later composer owns its replacement; queued-decoration cleanup must not
-	// clobber it while restoring the properties still installed here.
-	const postDecorationCallRenderer = () => ({ render: () => ["post-decoration call"] });
-	earlyMcp.renderCall = postDecorationCallRenderer;
 
 	let reloads = 0;
 	await commands.get("tool-output").handler("off", {
@@ -706,33 +659,23 @@ void (async () => {
 	assert.equal(configModule.loadToolOutputConfig().config.enabled, false);
 
 	// Simulate an extension loaded after pi-tool-output composing one method.
-	// Shutdown must restore the other methods and leave the retained wrapper inert.
-	const installedGetCallRenderer = toolExecutionPrototype.getCallRenderer;
-	const composedGetCallRenderer = function () {
-		return installedGetCallRenderer.call(this);
+	// Shutdown must restore the other method and leave the retained wrapper inert.
+	const installedRender = toolExecutionPrototype.render;
+	const composedRender = function (width) {
+		return installedRender.call(this, width);
 	};
-	toolExecutionPrototype.getCallRenderer = composedGetCallRenderer;
+	toolExecutionPrototype.render = composedRender;
 
 	for (const handler of handlers.get("session_shutdown") ?? []) {
 		await handler({ type: "session_shutdown", reason: "quit" }, {});
 	}
-	assert.equal(globalThis[apiKey], undefined);
-	assert.equal(toolExecutionPrototype.getCallRenderer, composedGetCallRenderer);
-	assert.equal(toolExecutionPrototype.getCallRenderer.call(lateMcpInstance), adapterCallRenderer);
-	assert.equal(toolExecutionPrototype.getResultRenderer, originalGetResultRenderer);
-	assert.equal(toolExecutionPrototype.getRenderShell, originalGetRenderShell);
-	assert.equal(earlyMcp.renderResult, undefined);
-	assert.equal(earlyMcp.renderCall, postDecorationCallRenderer);
-	assert.equal(earlyMcp.renderShell, undefined);
+	assert.equal(toolExecutionPrototype.render, composedRender);
+	assert.equal(toolExecutionPrototype.handleMouse, originalHandleMouse);
+	assert.equal(renderersFor(lateMcpInstance).renderCall, adapterCallRenderer, "a shut-down session draws calls with their own renderers");
 
 	const optInConfig = {
 		...configModule.DEFAULT_TOOL_OUTPUT_CONFIG,
-		registerToolOverrides: {
-			...configModule.DEFAULT_TOOL_OUTPUT_CONFIG.registerToolOverrides,
-			edit: true,
-			write: true,
-		},
-		customToolOverrides: { codemode: { enabled: false, kind: "generic", outputMode: "preview" } },
+		tools: { codemode: false },
 	};
 	assert.equal(configModule.saveToolOutputConfig(optInConfig).success, true);
 	const optInTools = new Map();
@@ -743,6 +686,7 @@ void (async () => {
 		},
 		registerCommand() {},
 		registerShortcut() {},
+		registerToolRenderer,
 		on(name, handler) {
 			const list = optInHandlers.get(name) ?? [];
 			list.push(handler);
@@ -755,10 +699,10 @@ void (async () => {
 			{ mode: "tui", ui: { theme, notify() {} } },
 		);
 	}
-	assert.notEqual(toolExecutionPrototype.getCallRenderer, composedGetCallRenderer);
-	assert.equal(toolExecutionPrototype.getCallRenderer.call(codemodeInstance), codemodeDefinition.renderCall);
-	assert.equal(toolExecutionPrototype.getResultRenderer.call(codemodeInstance), codemodeDefinition.renderResult);
-	assert.equal(toolExecutionPrototype.getRenderShell.call(codemodeInstance), "default");
+	assert.notEqual(toolExecutionPrototype.render, composedRender);
+	assert.equal(renderersFor(codemodeInstance)?.renderCall, codemodeDefinition.renderCall);
+	assert.equal(renderersFor(codemodeInstance)?.renderResult, codemodeDefinition.renderResult);
+	assert.equal(shellOf(codemodeInstance), "default");
 	assert.deepEqual([...optInTools.keys()].sort(), ["bash", "edit", "find", "grep", "ls", "read", "write"]);
 	assert.equal(typeof optInTools.get("edit").renderCall, "function");
 	assert.equal(typeof optInTools.get("edit").renderResult, "function");
@@ -767,26 +711,24 @@ void (async () => {
 	for (const handler of optInHandlers.get("session_shutdown") ?? []) {
 		await handler({ type: "session_shutdown", reason: "quit" }, {});
 	}
-	assert.equal(globalThis[apiKey], undefined);
-	assert.equal(toolExecutionPrototype.getCallRenderer, composedGetCallRenderer);
-	assert.equal(toolExecutionPrototype.getCallRenderer.call(lateMcpInstance), adapterCallRenderer);
-	assert.equal(toolExecutionPrototype.getResultRenderer, originalGetResultRenderer);
-	assert.equal(toolExecutionPrototype.getRenderShell, originalGetRenderShell);
-	// Codemode is not governed by MCP output settings, but exact custom modes
-	// apply to its own output. Error output survives an explicit hidden mode.
+	assert.equal(toolExecutionPrototype.render, composedRender);
+	assert.equal(toolExecutionPrototype.handleMouse, originalHandleMouse);
+	assert.equal(renderersFor(lateMcpInstance).renderCall, adapterCallRenderer, "a shut-down session draws calls with their own renderers");
+	// Codemode is not governed by MCP output settings, but its own `tools`
+	// output mode applies. Error output survives an explicit hidden mode.
 	for (const mode of [undefined, "summary", "hidden"]) {
 		configModule.saveToolOutputConfig({
 			...configModule.DEFAULT_TOOL_OUTPUT_CONFIG,
 			mcpOutputMode: "hidden",
-			customToolOverrides: mode ? { codemode: { enabled: true, kind: "generic", outputMode: mode } } : {},
+			tools: mode ? { codemode: { outputMode: mode } } : {},
 		});
 		const modeHandlers = new Map();
 		factory({
-			registerTool() {}, registerCommand() {}, registerShortcut() {},
+			registerTool() {}, registerCommand() {}, registerShortcut() {}, registerToolRenderer,
 			on(name, handler) { modeHandlers.set(name, handler); },
 		});
 		await modeHandlers.get("session_start")({ type: "session_start" }, { mode: "tui", ui: { theme, notify() {} } });
-		const renderer = toolExecutionPrototype.getResultRenderer.call(codemodeInstance);
+		const renderer = renderersFor(codemodeInstance)?.renderResult;
 		const output = renderer(codemodeResult, options, theme, { ...context, state: {} }).render(100).join("\n");
 		if (mode === "hidden") {
 			assert.doesNotMatch(output, /Read File|Script completed|fulfilled/);
@@ -805,7 +747,7 @@ void (async () => {
 	const colorTools = new Map();
 	const colorHandlers = new Map();
 	factory({
-		registerTool(tool) { colorTools.set(tool.name, tool); }, registerCommand() {}, registerShortcut() {},
+		registerTool(tool) { colorTools.set(tool.name, tool); }, registerCommand() {}, registerShortcut() {}, registerToolRenderer,
 		on(name, handler) { colorHandlers.set(name, handler); },
 	});
 	const notices = [];
@@ -815,7 +757,7 @@ void (async () => {
 	colorTools.get("read").renderCall({ path: "file.ts" }, coloredTheme, { ...context, state: {} }).render(100);
 	assert.ok(tones.some(([color, text]) => color === "warning" && text === "file.ts"));
 	await colorHandlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, {});
-	toolExecutionPrototype.getCallRenderer = originalGetCallRenderer;
+	toolExecutionPrototype.render = originalRender;
 	console.log("tool-output integration fixture passed");
 })()
 	.catch((error) => {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import test from "node:test";
 import { compactArguments } from "./arguments.ts";
+import { summarizeToolResult } from "./result-summaries.ts";
 import {
 	summarizeAskUserQuestion,
 	summarizeBackgroundTask,
@@ -286,4 +287,43 @@ test("summarizeToolCall degrades to no summary on hostile or partial arguments",
 	assert.equal(summarizeToolCall("read", throwing), undefined);
 	const proxy = new Proxy({}, { get() { throw new Error("no access"); } });
 	assert.equal(summarizeToolCall("read", proxy), undefined);
+});
+
+test("trajectory calls summarize the search, the SQL, and the session", () => {
+	assert.deepEqual(summarizeToolCall("trajectory_search", { query: "renderShell", target: "turns", limit: 5 }), {
+		text: "renderShell · turns",
+		fields: ["query", "target"],
+		hidden: false,
+	});
+	assert.equal(summarizeToolCall("trajectory_search", { query: "x", tool_name: "bash" })?.text, "x · tool: bash");
+	assert.equal(summarizeToolCall("trajectory_search", {}), undefined);
+	assert.equal(summarizeToolCall("trajectory_query", { query: "SELECT *\n  FROM turns" })?.text, "SELECT * FROM turns");
+	assert.equal(summarizeToolCall("trajectory_schema", { include_row_counts: true })?.text, "with row counts");
+	assert.equal(summarizeToolCall("trajectory_schema", {}), undefined);
+	assert.equal(summarizeToolCall("get_session_trajectory", { session_id: "01a0", depth: "summary" })?.text, "session: 01a0 · summary");
+	assert.equal(summarizeToolCall("trajectory_incognito", { enable: true, persistent: true })?.text, "on for all sessions");
+	assert.equal(
+		summarizeToolCall("datadog", { tool: "get_widget", args: { query: "avg:cpu{*}" } })?.text,
+		"get_widget · avg:cpu{*}",
+	);
+});
+
+test("trajectory and datadog results say what they returned", () => {
+	const json = (value) => ({ content: [{ type: "text", text: JSON.stringify(value, null, 2) }] });
+	assert.equal(summarizeToolResult("trajectory_search", json({ ok: true, rows: [{}], meta: { truncated: false } })), "1 match");
+	assert.equal(summarizeToolResult("trajectory_search", json({ ok: true, rows: [] })), "no matches");
+	assert.equal(summarizeToolResult("trajectory_query", json({ ok: true, rows: [{}, {}], truncated: true })), "2 rows, more not shown");
+	assert.equal(summarizeToolResult("trajectory_schema", json({ ok: true, tables: [{}, {}, {}] })), "3 tables");
+	assert.equal(summarizeToolResult("trajectory_schema", json({ ok: false, tables: [], error: "busy" })), "failed");
+	assert.equal(summarizeToolResult("get_session_trajectory", json({ turns: 1, duration_minutes: 0.4 })), "1 turn over under a minute");
+	assert.equal(summarizeToolResult("get_session_trajectory", json({ turns: 3, duration_minutes: 45 })), "3 turns over 45 min");
+	assert.equal(
+		summarizeToolResult("trajectory_status", json({ status: "ok", sessions_active: 2, delivery: { fix: "retry" } })),
+		"ok, 2 active sessions, 1 notice",
+	);
+	assert.equal(summarizeToolResult("trajectory_search", { content: [{ type: "text", text: "SQLite search is busy; retry shortly" }] }), undefined);
+	assert.equal(summarizeToolResult("trajectory_search", { ...json({ ok: true, rows: [] }), isError: true }), undefined);
+	assert.equal(summarizeToolResult("datadog", { content: [], details: { state: "listed", count: 5, total: 57 } }), "5 of 57 tools");
+	assert.equal(summarizeToolResult("datadog", { content: [], details: { state: "not-setup" } }), "not signed in");
+	assert.equal(summarizeToolResult("unrelated", json({ ok: true, rows: [] })), undefined);
 });
