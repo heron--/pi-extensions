@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
@@ -19,7 +19,6 @@ async function waitFor(predicate, ms = 2_000) {
 	for (const end = Date.now() + ms; Date.now() < end; await delay(20)) if (predicate()) return true;
 	return predicate();
 }
-const ghCalls = (host) => (existsSync(host.dirs.ghLog) ? readFileSync(host.dirs.ghLog, "utf8").split("\n").filter(Boolean) : []);
 
 test("built-in items are selected, omitted and reordered by configuration alone", async () => {
 	const host = await start({
@@ -136,7 +135,7 @@ test("an unselected pull-request item never runs gh", async () => {
 		host.renderEditor(120);
 		host.changeBranch("other");
 		await delay(200);
-		assert.deepEqual(ghCalls(host), []);
+		assert.deepEqual(host.ghCalls, []);
 	} finally {
 		await host.shutdown();
 	}
@@ -147,18 +146,18 @@ test("a disabled footer never runs gh, and enabling it starts the lookup", async
 	// Disable before anything else: the first lookup has already started, so
 	// wait for it, clear the log and then check that nothing more runs.
 	const host = await start({ dirs });
-	await waitFor(() => ghCalls(host).length === 1);
-	writeFileSync(dirs.ghLog, "");
+	await waitFor(() => host.ghCalls.length === 1);
+	host.ghCalls.length = 0;
 	try {
 		await host.command("off");
 		assert.equal(host.hasFooter(), false);
 		host.changeBranch("other");
 		await delay(200);
-		assert.deepEqual(ghCalls(host), []);
+		assert.deepEqual(host.ghCalls, []);
 
 		await host.command("on");
-		assert.ok(await waitFor(() => ghCalls(host).length === 1));
-		assert.match(ghCalls(host)[0], /pr view other --json number,url$/);
+		assert.ok(await waitFor(() => host.ghCalls.length === 1));
+		assert.match(host.ghCalls[0], /pr view other --json number,url$/);
 	} finally {
 		await host.shutdown();
 	}
@@ -169,7 +168,7 @@ test("a selected pull-request item is looked up even while clipped, and shown wh
 	try {
 		host.renderEditor(26);
 		assert.ok(await waitFor(() => host.state.renderRequests > 0));
-		assert.deepEqual(ghCalls(host), [`${host.dirs.cwd} pr view feature/demo --json number,url`]);
+		assert.deepEqual(host.ghCalls, [`${host.dirs.cwd} pr view feature/demo --json number,url`]);
 		assert.doesNotMatch(bottomRule(host.renderEditor(26)), /#4/);
 		const wide = host.renderEditor(120);
 		assert.match(bottomRule(wide), /feature\/demo ── #4 ──/);

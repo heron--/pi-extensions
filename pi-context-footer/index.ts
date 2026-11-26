@@ -44,7 +44,7 @@ import { createTokenTotalsCache, hostnameLabel, hostnameShown, type ItemData, it
 import { type FooterModules, loadModules, type ModuleContext, NO_MODULES, subscribeModules } from "./modules.ts";
 import { fitFramedRow, fitPlainRow, type ShownItem } from "./layout.ts";
 import { sanitizeStatus } from "./status.ts";
-import { PullRequestTracker } from "./pull-request.ts";
+import { ghPullRequest, PullRequestTracker, type PullRequestRunner } from "./pull-request.ts";
 import { RepositoryTracker } from "./repository.ts";
 
 /** The plain footer's item separator; the framed runs use lib/box.ts. */
@@ -201,7 +201,17 @@ function layoutSelects(layout: Layout, id: string): boolean {
 	return REGIONS.some((region) => layout[region].some((item) => itemId(item) === id));
 }
 
-export default function contextFooterExtension(pi: ExtensionAPI): void {
+/**
+ * The extension, looking pull requests up with `runPullRequest`: `gh` in pi,
+ * an in-process stand-in in the tests, which never run `gh`.
+ */
+export function createContextFooter(runPullRequest: PullRequestRunner = ghPullRequest): (pi: ExtensionAPI) => void {
+	return (pi) => contextFooterExtension(pi, runPullRequest);
+}
+
+export default createContextFooter();
+
+function contextFooterExtension(pi: ExtensionAPI, runPullRequest: PullRequestRunner): void {
 	// Every piece of state lives here, not at module level: pi recreates the
 	// extension on new/resume/fork and /reload, and a module can outlive that.
 	let enabled = true;
@@ -227,7 +237,7 @@ export default function contextFooterExtension(pi: ExtensionAPI): void {
 
 	/** The footer pi is currently showing, while this extension's footer is enabled. */
 	let footer: { tui: TUI; provider: ReadonlyFooterDataProvider; cwd: string } | null = null;
-	const pullRequests = new PullRequestTracker();
+	const pullRequests = new PullRequestTracker(runPullRequest);
 	const repositories = new RepositoryTracker();
 	const tokenTotals = createTokenTotalsCache();
 
